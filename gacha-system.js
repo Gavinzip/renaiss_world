@@ -1,0 +1,281 @@
+/**
+ * 🎰 招式扭蛋系統 v2
+ * - 移除保底
+ * - 升級點數 = 開包次數（每包1點）
+ * - 每點 = 0.2 HP，可分配給不同寵物
+ */
+
+const PET = require('./pet-system');
+const CORE = require('./game-core');
+
+// ============== 扭蛋配置 ==============
+const GACHA_CONFIG = {
+  singleCost: 100,      // 單抽 100 Rns = 1包
+  tenPullCost: 900,     // 十連抽 900 Rns = 10包 (9折)
+  
+  // 每包 = 1 升級點數
+  pointsPerPack: 1,
+  hpPerPoint: 0.2   // 每點 = 0.2 HP
+};
+
+// ============== 扭蛋抽招 ==============
+function drawMove(player, count = 1) {
+  const cost = count === 10 ? GACHA_CONFIG.tenPullCost : GACHA_CONFIG.singleCost;
+  
+  // 檢查金錢
+  if (player.stats.財富 < cost) {
+    return { success: false, reason: `Rns不足！需要 ${cost} Rns，你只有 ${player.stats.財富} Rns` };
+  }
+  
+  // 扣錢
+  player.stats.財富 -= cost;
+  
+  // 記錄開包次數（升級點數 = 開包次數）
+  player.totalDraws = (player.totalDraws || 0) + count;
+  
+  // 獲得升級點數（每包1點）
+  const earnedPoints = count * GACHA_CONFIG.pointsPerPack;
+  player.upgradePoints = (player.upgradePoints || 0) + earnedPoints;
+  
+  // 抽卡結果
+  const results = [];
+  for (let i = 0; i < count; i++) {
+    results.push(drawSingleMove(player));
+  }
+  
+  // 計算總價值
+  const totalValue = results.reduce((sum, r) => sum + getMoveValue(r.move), 0);
+  
+  CORE.savePlayer(player);
+  
+  return {
+    success: true,
+    draws: results,
+    cost,
+    totalValue,
+    earnedPoints,
+    currentPoints: player.upgradePoints,
+    totalDraws: player.totalDraws
+  };
+}
+
+// 單抽（無保底）
+function drawSingleMove(player) {
+  const allMoves = [...PET.POSITIVE_MOVES, ...PET.NEGATIVE_MOVES];
+  
+  const roll = Math.random();
+  
+  let tier;
+  if (roll < 0.05) {
+    tier = 3; // 史詩 5%
+  } else if (roll < 0.20) {
+    tier = 2; // 稀有 15%
+  } else {
+    tier = 1; // 普通 80%
+  }
+  
+  // 從對應 tier 選擇招式
+  const tierMoves = allMoves.filter(m => m.tier === tier);
+  const move = tierMoves[Math.floor(Math.random() * tierMoves.length)];
+  
+  return {
+    move: {
+      id: move.id,
+      name: move.name,
+      element: move.element,
+      tier: move.tier,
+      baseDamage: move.baseDamage,
+      effect: move.effect,
+      desc: move.desc
+    },
+    tier,
+    tierName: tier === 3 ? '史詩' : tier === 2 ? '稀有' : '普通',
+    tierEmoji: tier === 3 ? '🔮' : tier === 2 ? '💠' : '⚪'
+  };
+}
+
+// 取得招式價值
+function getMoveValue(move) {
+  if (move.tier === 3) return 500;
+  if (move.tier === 2) return 100;
+  return 10;
+}
+
+// ============== 分配升級點數 ==============
+// playerId: 玩家ID
+// petId: 寵物ID（用於多寵物）
+// amount: 點數（預設1點 = 0.2 HP）
+function allocateUpgradePoint(playerId, petId, amount = 1) {
+  const player = CORE.loadPlayer(playerId);
+  if (!player) return { success: false, reason: '找不到玩家！' };
+  
+  if (!player.upgradePoints || player.upgradePoints < amount) {
+    return { success: false, reason: `升級點數不足！需要 ${amount} 點，你只有 ${player.upgradePoints || 0} 點` };
+  }
+  
+  // 讀取寵物
+  const pet = PET.getPetById(petId);
+  if (!pet) {
+    return { success: false, reason: '找不到寵物！' };
+  }
+  
+  // 扣點
+  player.upgradePoints -= amount;
+  CORE.savePlayer(player);
+  
+  // 給 HP（每點 0.2 HP）
+  const hpGain = amount * GACHA_CONFIG.hpPerPoint;
+  pet.maxHp += hpGain;
+  pet.hp = pet.maxHp; // 滿血
+  PET.savePet(pet);
+  
+  return { 
+    success: true, 
+    petName: pet.name,
+    hpGain, 
+    pointsUsed: amount,
+    remaining: player.upgradePoints 
+  };
+}
+
+// ============== 查看所有寵物（用於分配）=============
+function getPlayerPetsWithAllocation(playerId) {
+  const player = CORE.loadPlayer(playerId);
+  const pets = PET.loadAllPets();
+  const playerPets = Object.values(pets).filter(p => p.ownerId === playerId);
+  
+  return {
+    pets: playerPets.map(p => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      level: p.level,
+      hp: p.hp,
+      maxHp: p.maxHp,
+      attack: p.attack,
+      moves: p.moves.map(m => `${m.name}${m.tier === 3 ? '🔮' : m.tier === 2 ? '💠' : '⚪'}`)
+    })),
+    upgradePoints: player?.upgradePoints || 0
+  };
+}
+
+// ============== 計算玩家資產總值 ==============
+function calculateTotalAssets(player) {
+  let total = player.stats.財富 || 0;
+  
+  // 加上背包物品價值
+  if (player.inventory) {
+    total += player.inventory.length * 5;
+  }
+  
+  // 加上寵物價值
+  const pets = PET.loadAllPets();
+  const playerPets = Object.values(pets).filter(p => p.ownerId === player.id);
+  total += playerPets.length * 100;
+  
+  return total;
+}
+
+// ============== 顯示玩家檔案 ==============
+function getPlayerProfile(player) {
+  const assets = calculateTotalAssets(player);
+  const pets = PET.loadAllPets();
+  const playerPets = Object.values(pets).filter(p => p.ownerId === player.id);
+  
+  return {
+    name: player.name,
+    level: player.level,
+    rns: player.stats.財富,
+    totalAssets: assets,
+    upgradePoints: player.upgradePoints || 0,
+    totalDraws: player.totalDraws || 0,
+    pets: playerPets.map(p => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      level: p.level,
+      hp: p.hp,
+      maxHp: p.maxHp,
+      attack: p.attack,
+      moves: p.moves.map(m => `${m.name}${m.tier === 3 ? '🔮' : m.tier === 2 ? '💠' : '⚪'}`)
+    })),
+    currentPets: playerPets.length
+  };
+}
+
+// ============== 學習招式 ==============
+function learnDrawnMove(playerId, moveData) {
+  const pet = PET.loadPet(playerId);
+  if (!pet) {
+    return { success: false, reason: '沒有寵物！' };
+  }
+  
+  if (pet.moves.length >= 10) {
+    return { success: false, reason: '招式已滿！需要忘記一個招式才能學習新招' };
+  }
+  
+  if (pet.moves.find(m => m.id === moveData.id)) {
+    return { success: false, reason: '已經學過這個招式了！' };
+  }
+  
+  pet.moves.push({
+    ...moveData,
+    currentProficiency: 0
+  });
+  
+  PET.savePet(pet);
+  
+  return { success: true, move: moveData };
+}
+
+// ============== 忘記招式 ==============
+function forgetMove(playerId, moveId) {
+  const pet = PET.loadPet(playerId);
+  if (!pet) {
+    return { success: false, reason: '沒有寵物！' };
+  }
+  
+  const idx = pet.moves.findIndex(m => m.id === moveId);
+  if (idx === -1) {
+    return { success: false, reason: '沒有這個招式！' };
+  }
+  
+  if (idx < 2) {
+    return { success: false, reason: '不能忘記初始招式！' };
+  }
+  
+  pet.moves.splice(idx, 1);
+  PET.savePet(pet);
+  
+  return { success: true };
+}
+
+// ============== 初始化玩家美金轉換 ==============
+// USD -> RNS (假設 1 USD = 100 RNS)
+function convertUSDToRNS(player, usdAmount) {
+  const rate = 100; // 1 USD = 100 RNS
+  const gained = Math.floor(usdAmount * rate);
+  
+  player.stats.財富 = (player.stats.財富 || 0) + gained;
+  player.usdConverted = true; // 只轉換一次
+  CORE.savePlayer(player);
+  
+  return {
+    usdAmount,
+    rate,
+    gained,
+    newBalance: player.stats.財富
+  };
+}
+
+module.exports = {
+  GACHA_CONFIG,
+  drawMove,
+  allocateUpgradePoint,
+  getPlayerPetsWithAllocation,
+  calculateTotalAssets,
+  getPlayerProfile,
+  learnDrawnMove,
+  forgetMove,
+  convertUSDToRNS
+};
