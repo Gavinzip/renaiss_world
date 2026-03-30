@@ -99,6 +99,38 @@ let world = {
   npcStatus: {}    // NPC 生死狀態 { npcId: { alive: true, killedBy: null, killedAt: null } }
 };
 
+// ============== 玩家記憶系統 ==============
+function addPlayerMemory(playerId, memory) {
+  const player = loadPlayer(playerId);
+  if (!player) return;
+  
+  if (!player.memories) player.memories = [];
+  
+  // 加入新記憶（格式：類型:內容）
+  player.memories.unshift({
+    type: memory.type || 'action',
+    content: memory.content,
+    timestamp: Date.now()
+  });
+  
+  // 只保留最近 10 條
+  if (player.memories.length > 10) {
+    player.memories.pop();
+  }
+  
+  savePlayer(player);
+}
+
+function getPlayerMemoryContext(playerId) {
+  const player = loadPlayer(playerId);
+  if (!player || !player.memories || player.memories.length === 0) {
+    return '';
+  }
+  
+  const memories = player.memories.slice(0, 5); // 取最近 5 條
+  return memories.map(m => `[${m.type}] ${m.content}`).join('\n');
+}
+
 // ============== Agent 擴展數據 ==============
 let agentMemories = {}; // agentId -> [{day, event, type}]
 let agentInventories = {}; // agentId -> []
@@ -1223,7 +1255,11 @@ module.exports = {
   getPlayerWantedLevel,
   getWantedList,
   addWantedLevel,
-  reduceAllWantedLevels
+  reduceAllWantedLevels,
+  
+  // 玩家記憶系統
+  addPlayerMemory,
+  getPlayerMemoryContext
 };
 
 function getAgentFullInfo(agentId) {

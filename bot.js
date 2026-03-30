@@ -12,6 +12,18 @@ const {
 const fs = require('fs');
 const path = require('path');
 
+// 讀取 .env 檔案
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf-8');
+  envContent.split('\n').forEach(line => {
+    const [key, ...valueParts] = line.split('=');
+    if (key && valueParts.length > 0) {
+      process.env[key.trim()] = valueParts.join('=').trim();
+    }
+  });
+}
+
 // ============== 設定 ==============
 const CONFIG = {
   DISCORD_TOKEN: process.env.DISCORD_TOKEN || '',
@@ -187,7 +199,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
 // ============== 開始遊戲（統一入口）=============
 async function handleStart(interaction, user) {
-  // 先回覆用戶說正在準備
+  // 先回覆用戶說正在準備（ephemeral，不會出現在頻道）
   await interaction.reply({ 
     content: '🎮 正在開啟新討論串...', 
     ephemeral: true 
@@ -196,7 +208,6 @@ async function handleStart(interaction, user) {
   // 統一在頻道創建新 thread
   const channel = CLIENT.channels.cache.get(CONFIG.CHANNEL_ID);
   if (!channel) {
-    await interaction.editReply({ content: '❌ 找不到頻道' });
     return;
   }
   
@@ -213,7 +224,6 @@ async function handleStart(interaction, user) {
       content: `👋 <@${user.id}> 你回來了！繼續你的冒險吧！` 
     });
     await sendMainMenuToThread(thread, player, pet, null);
-    await interaction.editReply({ content: '✅ 已開啟新討論串！' });
     return;
   }
   
@@ -231,7 +241,6 @@ async function handleStart(interaction, user) {
     // 保存 thread ID 到內存，这样按钮回调可以发送到同一个 thread
     setPlayerThread(user.id, thread.id);
     await thread.send({ embeds: [embed], components: [row] });
-    await interaction.editReply({ content: '✅ 已開啟新討論串！' });
     return;
   }
   
@@ -250,7 +259,6 @@ async function handleStart(interaction, user) {
     
     setPlayerThread(user.id, thread.id);
     await thread.send({ embeds: [embed], components: [row] });
-    await interaction.editReply({ content: '✅ 已開啟新討論串！' });
     return;
   }
   
@@ -275,15 +283,11 @@ async function handleStart(interaction, user) {
     
     setPlayerThread(user.id, thread.id);
     await thread.send({ embeds: [embed], components: [row] });
-    await interaction.editReply({ content: '✅ 已開啟新討論串！' });
     return;
   }
   
-  // 有錢包但還沒讀取資產 → 讀取並創建角色（不需新建 thread）
+  // 有錢包但還沒讀取資產 → 讀取並創建角色（使用已創建的 thread）
   const walletAssets = await WALLET.getPlayerWalletAssets(user.id);
-  
-  // 發送到當前 thread
-  const threadChannel = interaction.channel;
   
   try {
     const embed = new EmbedBuilder()
@@ -300,13 +304,15 @@ async function handleStart(interaction, user) {
       new ButtonBuilder().setCustomId('choose_negative').setLabel('🌙 選擇反派').setStyle(ButtonStyle.Danger)
     );
     
-    await threadChannel.send({ 
+    // 發送到已創建的 thread
+    await thread.send({ 
       content: `👋 <@${user.id}> 這是你的專屬討論串！開始你的Renaiss探險之旅！`,
       embeds: [embed], 
       components: [row] 
     });
     
-    await interaction.update({ content: '✅ 角色創建完成！', components: [] });
+    // 不需要在主頻道回覆，因為討論串已經在遊玩了
+    // await interaction.update({ content: '✅ 角色創建完成！', components: [] });
     
   } catch (err) {
     console.error('[錯誤] 創建討論串失敗:', err.message);
@@ -418,6 +424,15 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // ===== 錢包綁定 Modal =====
   if (customId === 'wallet_bind_modal') {
     await handleWalletBind(interaction, user);
+    return;
+  }
+  
+  // ===== 名字輸入 Modal =====
+  if (customId.startsWith('name_submit_')) {
+    const alignment = customId.replace('name_submit_', '');
+    const charName = interaction.fields.getTextInputValue('player_name').trim();
+    const finalName = charName || user.username;
+    await createCharacterWithName(interaction, user, alignment, finalName);
     return;
   }
   
@@ -658,7 +673,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
   
   // 繼續新角色流程（在當前 thread）
-  await interaction.update({ content: '正在創建角色...', components: [] });
+  await interaction.deferUpdate().catch(() => {});
   
   try {
     // 讀取錢包資產
@@ -686,22 +701,49 @@ CLIENT.on('interactionCreate', async (interaction) => {
       embeds: [embed], 
       components: [row] 
     });
-    
-    await interaction.update({ content: '✅ 角色創建完成！', components: [] });
   } catch (err) {
     console.error('[錯誤] 創建角色失敗:', err.message);
-    await interaction.update({ content: '❌ 創建失敗，請重試', components: [] });
   }
 });
 
 // ============== 選擇陣營 ==============
 async function handleChooseAlignment(interaction, user, customId) {
+  // 先確認按鈕，避免 Discord 顯示「交互失敗」
+  await interaction.deferUpdate().catch(() => {});
+  
   const alignment = customId === 'choose_positive' ? '正派' : '反派';
   
+  // 先確認按鈕
+  await interaction.deferUpdate().catch(() => {});
+  
+  // 顯示名字輸入 Modal
+  const modal = new ModalBuilder()
+    .setCustomId(`name_submit_${alignment}`)
+    .setTitle('📛 為你的角色取個名字');
+  
+  const nameInput = new TextInputBuilder()
+    .setCustomId('player_name')
+    .setLabel('角色名字')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('輸入你在Renaiss星球的名字')
+    .setRequired(true)
+    .setMaxLength(20);
+  
+  const row = new ActionRowBuilder().addComponents(nameInput);
+  modal.addComponents(row);
+  
+  await interaction.showModal(modal).catch(async () => {
+    // 如果 Modal 失敗，直接用 DC 名稱
+    await createCharacterWithName(interaction, user, alignment, user.username);
+  });
+}
+
+// 創建角色（名字輸入後調用）
+async function createCharacterWithName(interaction, user, alignment, charName) {
   // 使用暫時 RNS（背景掃描完成後會更新）
   const pendingRNS = WALLET.getPendingRNS(user.id);
   
-  const player = CORE.createPlayer(user.id, user.username, '男', '無門無派');
+  const player = CORE.createPlayer(user.id, charName, '男', '無門無派');
   player.alignment = alignment;
   player.wanted = 0;
   player.stats.財富 = pendingRNS; // 使用暫時 RNS（0 或上次保存的值）
@@ -724,7 +766,8 @@ async function handleChooseAlignment(interaction, user, customId) {
     new ButtonBuilder().setCustomId('hatch_egg').setLabel('🔨 敲開寵物蛋！').setStyle(ButtonStyle.Primary)
   );
   
-  await interaction.update({ embeds: [embed], components: [row] });
+  // 按鈕在 thread 裡，用 channel.send() 而不是 interaction.update()
+  await interaction.channel.send({ embeds: [embed], components: [row] });
 }
 
 // ============== 敲蛋孵化 - 動畫版 ==============
@@ -975,7 +1018,13 @@ CLIENT.on('interactionCreate', async (interaction) => {
 async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   // 如果沒有暂存的事件選項，才生成新的（防止刷選項）
   if (!player.eventChoices || player.eventChoices.length === 0) {
-    player.eventChoices = EVENTS.generateEventChoices(player, {});
+    // 用 AI 生成初始選項，失敗則顯示錯誤
+    const aiChoices = await STORY.generateInitialChoices(player, pet);
+    if (!aiChoices || aiChoices.length === 0) {
+      thread.send({ content: '❌ AI 選項生成失敗，請稍後再試 /start' }).catch(() => {});
+      return;
+    }
+    player.eventChoices = aiChoices;
     CORE.savePlayer(player);
   }
   
@@ -1002,9 +1051,10 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   
   // 構建按鈕
   const buttons = choices.slice(0, 7).map((choice, i) => {
+    const label = (choice.tag || '') + ' ' + (choice.name || `${i+1}`).substring(0, 15);
     return new ButtonBuilder()
       .setCustomId(`event_${i}`)
-      .setLabel(`${i+1}`)
+      .setLabel(label.trim())
       .setStyle(ButtonStyle.Primary);
   });
   buttons.push(
@@ -1028,18 +1078,68 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     await interaction.deferUpdate().catch(() => {});
   }
   
-  // 背景 AI 生成故事
+  // 背景 AI 生成故事和選項，完成後發送新訊息
   STORY.generateStory(null, player, pet, null).then(storyText => {
-    // 更新為 AI 生成的內容
-    const aiDesc = `**狀態：【${statusBar}】**\n\n${storyText}\n\n**選項：**${optionsText}\n\n_請選擇編號（1-7）_`;
+    if (!storyText) {
+      thread.send({ content: '❌ AI 故事生成失敗，請稍後再試' }).catch(() => {});
+      return;
+    }
+    console.log('[AI] 故事生成成功，長度:', storyText.length);
     
-    const aiEmbed = new EmbedBuilder()
-      .setTitle(`⚔️ ${player.name} - ${pet.name}`)
-      .setColor(0x00ff00)
-      .setDescription(aiDesc);
-    
-    loadingMsg.edit({ embeds: [aiEmbed], components }).catch(() => {});
-  }).catch(() => {});
+    // 根據故事生成新選項
+    return STORY.generateChoicesWithAI(player, pet, storyText, '').then(newChoices => {
+      if (!newChoices || newChoices.length === 0) {
+        console.log('[AI] 選項生成失敗');
+        thread.send({ content: '❌ AI 選項生成失敗，請稍後再試' }).catch(() => {});
+        return;
+      }
+      
+      player.eventChoices = newChoices;
+      CORE.savePlayer(player);
+      
+      // 構建新選項文字
+      let newOptionsText = '';
+      newChoices.slice(0, 7).forEach((c, i) => {
+        const tag = c.tag || '';
+        const text = c.choice || c.name || '';
+        newOptionsText += `\n${i+1}. ${tag} ${text}`;
+      });
+      
+      // 構建新按鈕
+      const newButtons = newChoices.slice(0, 7).map((c, i) => {
+        const label = ((c.tag || '') + ' ' + (c.name || `${i+1}`)).substring(0, 20).trim();
+        return new ButtonBuilder()
+          .setCustomId(`event_${i}`)
+          .setLabel(label)
+          .setStyle(ButtonStyle.Primary);
+      });
+      newButtons.push(
+        new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
+      );
+      
+      const newComponents = [];
+      for (let i = 0; i < newButtons.length; i += 5) {
+        newComponents.push(new ActionRowBuilder().addComponents(newButtons.slice(i, i + 5)));
+      }
+      
+      const aiDesc = `**狀態：【${statusBar}】**\n\n${storyText}\n\n**🆕 新選項：**${newOptionsText}\n\n_請選擇編號（1-7）_`;
+      
+      const aiEmbed = new EmbedBuilder()
+        .setTitle(`⚔️ ${player.name} - ${pet.name}`)
+        .setColor(0x00ff00)
+        .setDescription(aiDesc);
+      
+      // 發送新訊息到 thread
+      thread.send({ embeds: [aiEmbed], components: newComponents }).catch(e => console.log('[發送錯誤]', e.message));
+    });
+  }).catch(err => {
+    console.log('[AI] 故事生成失敗:', err.message);
+    thread.send({ content: `❌ AI 失敗：${err.message}` }).catch(() => {});
+  });
   
   return;
 }
@@ -1481,49 +1581,65 @@ async function handleEvent(interaction, user, eventIndex) {
   
   // 減少飽腹度
   player.stats.飽腹度 = Math.max(0, (player.stats.飽腹度 || 100) - Math.floor(Math.random() * 5 + 3));
+  
+  // 清除舊選項（必須重新生成）
+  player.eventChoices = [];
+  
+  // 加入記憶
+  const selectedChoice = event.choice || event.name || '未知選擇';
+  CORE.addPlayerMemory(user.id, {
+    type: event.tag ? '行動' : '選擇',
+    content: selectedChoice
+  });
+  
   CORE.savePlayer(player);
+  
+  // 取得記憶上下文
+  const memoryContext = CORE.getPlayerMemoryContext(user.id);
   
   const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 內力 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
   
-  // 取得選擇的名稱
-  const selectedChoice = event.choice || event.name || '未知選擇';
+  // 立即確認按鈕（避免 Discord 顯示失敗）
+  await interaction.deferUpdate().catch(() => {});
   
-  // 直接回覆並創建新訊息（不用 deferUpdate，避免按鈕過期）
-  await interaction.reply({
-    content: `**📍 你選擇了：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思故事...*\n\n_請稍候..._`,
+  // 發送一個「AI 正在思考」的訊息
+  const loadingMsg = await interaction.channel.send({
+    content: `🎲 **你選擇了：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*`,
     ephemeral: false
-  }).catch(() => {
-    // 如果 reply 失敗，嘗試 update
-    interaction.update({
-      content: `**📍 你選擇了：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思故事...*`,
-      components: []
-    }).catch(() => {});
   });
   
   // 背景 AI 生成故事和選項
-  STORY.generateStory(event, player, pet, event).then(storyText => {
-    return STORY.generateChoicesWithAI(player, pet, storyText).then(aiChoices => {
+  STORY.generateStory(event, player, pet, event, memoryContext).then(storyText => {
+    if (!storyText) {
+      return { storyText: null, aiChoices: null };
+    }
+    return STORY.generateChoicesWithAI(player, pet, storyText, memoryContext).then(aiChoices => {
       return { storyText, aiChoices };
-    }).catch(() => {
+    }).catch(err => {
+      console.log('[AI] 選項生成失敗:', err.message);
       return { storyText, aiChoices: null };
     });
   }).then(({ storyText, aiChoices }) => {
-    // 使用 AI 選項或生成新的
-    if (aiChoices && aiChoices.length > 0) {
-      player.eventChoices = aiChoices;
-    } else {
-      player.eventChoices = EVENTS.generateEventChoices(player, {});
+    // AI 失敗時顯示錯誤
+    if (!storyText || !aiChoices || aiChoices.length === 0) {
+      loadingMsg.edit({
+        content: `❌ AI 生成失敗，請稍後再試`
+      }).catch(() => {});
+      return;
     }
+    
+    player.eventChoices = aiChoices;
     CORE.savePlayer(player);
     
     const newChoices = player.eventChoices;
     
-    // 構建新選項文字（避免顯示 "true"）
+    // 構建新選項文字（帶標籤）
     let optionsText = '';
     newChoices.slice(0, 7).forEach((c, i) => {
+      const tag = c.tag || '';
       const text = (c.choice || c.name || '').toString();
       if (text && text !== 'true' && text !== 'false') {
-        optionsText += `\n${i+1}. ${text}`;
+        optionsText += `\n${i+1}. ${tag} ${text}`;
       }
     });
     
@@ -1563,7 +1679,8 @@ async function handleEvent(interaction, user, eventIndex) {
       new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_settings').setLabel('⚙️').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
     );
     
     const components = [];
@@ -1571,11 +1688,11 @@ async function handleEvent(interaction, user, eventIndex) {
       components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
     }
     
-    // 發送新訊息到 thread
-    interaction.channel.send({ embeds: [embed], components }).catch(() => {});
+    // 編輯原來的 loading 訊息為新內容
+    loadingMsg.edit({ content: null, embeds: [embed], components }).catch(() => {});
   }).catch((err) => {
     console.error('[事件] 處理失敗:', err);
-    // 失敗時用模板並發送到 thread
+    // 失敗時用模板並編輯 loading 訊息
     player.eventChoices = EVENTS.generateEventChoices(player, {});
     CORE.savePlayer(player);
   });
