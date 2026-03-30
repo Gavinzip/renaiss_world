@@ -63,7 +63,7 @@ function callAI(prompt, temperature = 0.9) {
     }
 
     const body = JSON.stringify({
-      model: 'MiniMax-M2.7',
+      model: 'MiniMax-M2.5-Lightning',
       messages: [{ role: 'user', content: prompt }],
       temperature: temperature,
       max_tokens: 1500
@@ -160,6 +160,14 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     safePlayerName = '冒險者';
   }
   
+  // 根據玩家語言設定決定輸出語言
+  const playerLang = player.language || 'zh-TW';
+  const langInstruction = {
+    'zh-TW': '請用繁體中文講述',
+    'zh-CN': '請用簡體中文講述',
+    'en': '請用英文講述'
+  }[playerLang] || '請用繁體中文講述';
+  
   // 記憶上下文
   const memorySection = memoryContext ? `\n【玩家之前的足跡】\n${memoryContext}` : '';
   
@@ -170,6 +178,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 玩家：${safePlayerName}
 寵物：${petName}(${petType})
 陣營：${alignment}
+語言設定：${playerLang}
 ${npcStatusText}
 ${memorySection}
 
@@ -177,12 +186,12 @@ ${memorySection}
 ${previousAction}
 
 【任務】
-請用中文講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼，故事長度適中（150-300字）。要點：
+${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼，故事長度適中（150-300字）。要點：
 1. 有具體的場景（光線、聲音、氣味、溫度、觸感）
 2. 有NPC或環境的互動
 3. 有Renaiss星球的科幻與奇幻元素
 4. 故事要有懸念，讓人想繼續看
-5. 全部用中文，不要摻雜英文！
+5. 嚴格使用對應語言，${langInstruction.replace('請用', '全部')}
 
 直接開始講：`;
 
@@ -216,6 +225,13 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     }
   }
   
+  const playerLang = player?.language || 'zh-TW';
+  const langInstruction = {
+    'zh-TW': '請用繁體中文輸出',
+    'zh-CN': '請用簡體中文輸出',
+    'en': 'Please output in English'
+  }[playerLang] || '請用繁體中文輸出';
+  
   const memorySection = memoryContext ? `\n【玩家之前的足跡】\n${memoryContext}` : '';
   
   const prompt = `你是Renaiss星球的冒險策劃師，設計的選項要有創意、刺激！
@@ -225,13 +241,14 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 玩家：${playerName}
 寵物：${petName}
 當地NPC：${npcStatusText || '沒有人'}
+語言設定：${playerLang}
 ${memorySection}
 
 【前面的故事】
 ${previousStory.substring(0, 400)}...
 
 【任務】
-根據上面的故事，生成7個獨特的冒險選項。要求：
+根據上面的故事，生成7個獨特的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意！拒絕無聊！
 2. 要符合故事的劇情發展
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
@@ -247,7 +264,7 @@ ${previousStory.substring(0, 400)}...
 
 禁止出現：打坐修煉、隨便逛逛、原地休息這類選項！
 
-用中文輸出7個選項，每行一個。例如：
+${langInstruction}輸出7個選項，每行一個。例如：
 [⚔️會戰鬥] 衝上去阻止：飛身撲向失控的飛行器
 [🔥高風險] 追進暗巷：代價不明但可能有好處
 [🤝需社交] 直接詢問：禮貌地向對方表明來意
@@ -323,6 +340,13 @@ async function generateInitialChoices(player, pet) {
     npcStatusText += `${npc.name}、`;
   }
   
+  const playerLang = player?.language || 'zh-TW';
+  const langInstruction = {
+    'zh-TW': '請用繁體中文輸出',
+    'zh-CN': '請用簡體中文輸出',
+    'en': 'Please output in English'
+  }[playerLang] || '請用繁體中文輸出';
+  
   const prompt = `你是Renaiss星球的冒險策劃師，設計的开場選項要有吸引力！
 
 【開場情境】
@@ -330,9 +354,10 @@ async function generateInitialChoices(player, pet) {
 玩家：${playerName}
 寵物：${petName}
 當地NPC：${npcStatusText || '沒有重要NPC'}
+語言設定：${playerLang}
 
 【任務】
-玩家剛來到${location}，請設計7個吸引人的冒險選項。要求：
+玩家剛來到${location}，請設計7個吸引人的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意、有畫面感
 2. 不要無聊選項
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
@@ -346,7 +371,7 @@ async function generateInitialChoices(player, pet) {
 - [🎁高回報] - 回報豐厚
 - [❓有驚喜] - 結果未知
 
-用中文輸出7個選項，每行一個。例如：
+${langInstruction}輸出7個選項，每行一個。例如：
 [🔍需探索] 走進維修站：看看有沒有高科技道具
 [🤝需社交] 參觀商店：和店主聊聊最近的傳聞
 [⚔️會戰鬥] 參加比武：廣場有寵物對戰賽事

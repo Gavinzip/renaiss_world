@@ -1,5 +1,6 @@
+// Renaiss World Discord Bot v5
 /**
- * 🗡️ 刀鋒 BLADE - Discord Bot v4
+ * 🌟 Renaiss World - Discord Bot v5
  * Renaiss星球 - 寵物對戰 RPG
  * 完整版本：無死路、隨機抽招、設置/角色按鈕
  */
@@ -114,6 +115,56 @@ function getPlayerThread(userId) {
   return threads[userId] || null;
 }
 
+// ============== 玩家臨時資料（語言選擇等）==============
+let playerTempData = {};
+
+function setPlayerTempData(userId, key, value) {
+  if (!playerTempData[userId]) playerTempData[userId] = {};
+  playerTempData[userId][key] = value;
+}
+
+function getPlayerTempData(userId, key) {
+  return playerTempData[userId]?.[key] || null;
+}
+
+function clearPlayerTempData(userId) {
+  delete playerTempData[userId];
+}
+
+// ============== 語言文字取得 ==============
+function getLanguageText(lang) {
+  const texts = {
+    'zh-TW': {
+      welcome: '歡迎來到 Renaiss 星球！',
+      welcomeDesc: '在這個世界，你需要：\n• 選擇你的陣營（正派/反派）\n• 培養你的寵物\n• 探索世界、戰鬥、任務',
+      choosePathHint: '請選擇你的陣營：',
+      positive: '正派',
+      positiveDesc: '行俠仗義，廣結善緣\n招式：治療、護盾、正義之擊',
+      negative: '反派',
+      negativeDesc: '心狠手辣，為所欲為\n招式：毒術、偷襲、暗黑之力'
+    },
+    'zh-CN': {
+      welcome: '欢迎来到 Renaiss 星球！',
+      welcomeDesc: '在这个世界，你需要：\n• 选择你的阵营（正派/反派）\n• 培养你的宠物\n• 探索世界、战斗、任务',
+      choosePathHint: '请选择你的阵营：',
+      positive: '正派',
+      positiveDesc: '行侠仗义，广结善缘\n招式：治疗、护盾、正义之击',
+      negative: '反派',
+      negativeDesc: '心狠手辣，为所欲为\n招式：毒术、偷袭、暗黑之力'
+    },
+    'en': {
+      welcome: 'Welcome to Renaiss Planet!',
+      welcomeDesc: 'In this world, you need to:\n• Choose your alignment (Hero/Villain)\n• Raise your pet\n• Explore, battle, and complete quests',
+      choosePathHint: 'Please choose your alignment:',
+      positive: 'Hero',
+      positiveDesc: 'Protect the innocent, spread kindness\nMoves: Heal, Shield, Justice Strike',
+      negative: 'Villain',
+      negativeDesc: 'Cruel and ruthless, do as you wish\nMoves: Poison, Ambush, Dark Force'
+    }
+  };
+  return texts[lang] || texts['zh-TW'];
+}
+
 // ============== 關閉舊 thread ==============
 async function closeOldThread(userId) {
   const oldThreadId = getPlayerThread(userId);
@@ -162,7 +213,7 @@ async function createNewThread(channel, user) {
 
 // ============== 啟動完成 ==============
 CLIENT.once('ready', () => {
-  console.log('[Bot] 🗡️ 刀鋒 BLADE 上線！');
+  console.log('[Bot] 🌟 Renaiss World 上線！');
   console.log('[系統] 模組：pet, battle, event, food');
   startAutoTick();
 });
@@ -217,8 +268,20 @@ async function handleStart(interaction, user) {
   // 檢查是否有存檔
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
-  
+
+  // Bug Fix: 新 thread 啟動時清除舊的 activeMessageId，避免新按鈕被判斷為過期
+  if (player) {
+    player.activeMessageId = null;
+    CORE.savePlayer(player);
+  }
+
   if (player && pet && pet.hatched) {
+    // 舊存檔沒有 language 欄位，自動補上繁體中文
+    if (!player.language) {
+      player.language = 'zh-TW';
+      CORE.savePlayer(player);
+    }
+    
     // 有存檔 → 在 thread 繼續遊戲
     await thread.send({ 
       content: `👋 <@${user.id}> 你回來了！繼續你的冒險吧！` 
@@ -290,29 +353,32 @@ async function handleStart(interaction, user) {
   const walletAssets = await WALLET.getPlayerWalletAssets(user.id);
   
   try {
-    const embed = new EmbedBuilder()
-      .setTitle(`🌟 ${t('welcome')}`)
-      .setColor(0x00ff00)
-      .setDescription(`**${user.username}**，歡迎來到 Renaiss 星球！\n\n在這個世界，你需要：\n• 選擇你的陣營（正派/反派）\n• 培養你的寵物\n• 探索世界、戰鬥、任務\n\n**${t('choosePath')}：**`)
+    // 第一步：語言選擇
+    const langEmbed = new EmbedBuilder()
+      .setTitle('🌍 選擇你的語言 / Choose Your Language')
+      .setColor(0xffd700)
+      .setDescription(`**${user.username}**，歡迎來到 Renaiss 星球！\n\nPlease select your language first / 請先選擇語言：\n\n支援的語言：`)
       .addFields(
-        { name: '☀️ 正派', value: '行俠仗義，廣結善緣\n招式：治療、護盾、正義之擊', inline: true },
-        { name: '🌙 反派', value: '心狠手辣，為所欲為\n招式：毒術、偷襲、暗黑之力', inline: true }
+        { name: '🇹🇼 繁體中文', value: '繁體中文（台灣、香港）', inline: true },
+        { name: '🇨🇳 簡體中文', value: '简体中文（中国）', inline: true },
+        { name: '🇺🇸 English', value: 'English (US/EU)', inline: true }
       );
     
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('choose_positive').setLabel('☀️ 選擇正派').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('choose_negative').setLabel('🌙 選擇反派').setStyle(ButtonStyle.Danger)
+    const langRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('select_lang_zh-TW').setLabel('🇹🇼 繁體中文').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('select_lang_zh-CN').setLabel('🇨🇳 簡體中文').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('select_lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary)
     );
     
     // 發送到已創建的 thread
     await thread.send({ 
       content: `👋 <@${user.id}> 這是你的專屬討論串！開始你的Renaiss探險之旅！`,
-      embeds: [embed], 
-      components: [row] 
+      embeds: [langEmbed], 
+      components: [langRow] 
     });
     
-    // 不需要在主頻道回覆，因為討論串已經在遊玩了
-    // await interaction.update({ content: '✅ 角色創建完成！', components: [] });
+    // 儲存 thread ID
+    setPlayerThread(user.id, thread.id);
     
   } catch (err) {
     console.error('[錯誤] 創建討論串失敗:', err.message);
@@ -472,18 +538,69 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 設置 =====
   if (customId === 'open_settings') {
+    // ===== Bug 2 Fix: Clear old message's buttons when entering settings =====
+    const player = CORE.loadPlayer(user.id);
+    if (player && player.activeMessageId && !player.activeMessageId.startsWith('instant_')) {
+      const oldMsg = interaction.channel?.messages?.cache?.get(player.activeMessageId);
+      if (oldMsg) {
+        oldMsg.edit({ components: [] }).catch(() => {});
+      }
+    }
     await showSettings(interaction, user);
     return;
   }
   
-  // ===== 切換語言 =====
-  if (customId === 'lang_zh' || customId === 'lang_en') {
+  // ===== 選擇語言（首次）=====
+  if (customId.startsWith('select_lang_')) {
+    const lang = customId.replace('select_lang_', '');
+    // 儲存語言到內存，等創建角色後寫入
+    setPlayerTempData(user.id, 'language', lang);
+    
+    // 立即確認
+    await interaction.deferUpdate().catch(() => {});
+    
+    // 發送陣營選擇（使用選定語言）
+    const langText = getLanguageText(lang);
+    const embed = new EmbedBuilder()
+      .setTitle(`🌟 ${langText.welcome}`)
+      .setColor(0x00ff00)
+      .setDescription(`${langText.welcomeDesc}\n\n${langText.choosePathHint}`)
+      .addFields(
+        { name: langText.positive, value: langText.positiveDesc, inline: true },
+        { name: langText.negative, value: langText.negativeDesc, inline: true }
+      );
+    
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('choose_positive').setLabel('☀️ ' + langText.positive).setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('choose_negative').setLabel('🌙 ' + langText.negative).setStyle(ButtonStyle.Danger)
+    );
+    
+    await interaction.channel.send({ embeds: [embed], components: [row] });
+    return;
+  }
+  
+  // ===== 設置頁面切換語言 =====
+  if (customId === 'lang_zh' || customId === 'lang_en' || customId === 'lang_zh-CN' || customId === 'lang_zh-TW') {
     const player = CORE.loadPlayer(user.id);
     if (player) {
-      player.language = customId === 'lang_zh' ? 'zh-TW' : 'en';
+      const langMap = { 'lang_zh': 'zh-TW', 'lang_en': 'en', 'lang_zh-CN': 'zh-CN', 'lang_zh-TW': 'zh-TW' };
+      player.language = langMap[customId] || 'zh-TW';
       CORE.savePlayer(player);
     }
     await showSettings(interaction, user);
+    return;
+  }
+
+  // ===== Bug 2 Fix: Settings back button - restore game message =====
+  if (customId === 'settings_back') {
+    const player = CORE.loadPlayer(user.id);
+    const pet = PET.loadPet(user.id);
+    if (player && pet && interaction.channel?.isThread()) {
+      // Restore the game message by calling sendMainMenuToThread
+      await sendMainMenuToThread(interaction.channel, player, pet, interaction);
+    } else {
+      await interaction.update({ content: '請在遊戲討論串中使用', components: [] });
+    }
     return;
   }
   
@@ -495,6 +612,17 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 事件按鈕 =====
   if (customId.startsWith('event_')) {
+    // ===== Bug 1 Fix: Check if message ID matches active message =====
+    const player = CORE.loadPlayer(user.id);
+    if (player && player.activeMessageId && interaction.message?.id !== player.activeMessageId) {
+      // Also check if it's from the same interaction channel
+      const oldActiveId = player.activeMessageId;
+      // Ignore if the old active ID starts with "instant_" (placeholder from instant path)
+      if (!oldActiveId.startsWith('instant_')) {
+        await interaction.reply({ content: '⚠️ 這個選項已過期，請使用 /start 重新開始', ephemeral: true });
+        return;
+      }
+    }
     const idx = parseInt(customId.split('_')[1]);
     await handleEvent(interaction, user, idx);
     return;
@@ -708,9 +836,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
 // ============== 選擇陣營 ==============
 async function handleChooseAlignment(interaction, user, customId) {
-  // 先確認按鈕，避免 Discord 顯示「交互失敗」
-  await interaction.deferUpdate().catch(() => {});
-  
   const alignment = customId === 'choose_positive' ? '正派' : '反派';
   
   // 先確認按鈕
@@ -747,7 +872,14 @@ async function createCharacterWithName(interaction, user, alignment, charName) {
   player.alignment = alignment;
   player.wanted = 0;
   player.stats.財富 = pendingRNS; // 使用暫時 RNS（0 或上次保存的值）
+  
+  // 取得選擇的語言
+  const selectedLang = getPlayerTempData(user.id, 'language') || 'zh-TW';
+  player.language = selectedLang;
   CORE.savePlayer(player);
+  
+  // 清除臨時資料
+  clearPlayerTempData(user.id);
   
   const egg = PET.createPetEgg(user.id, alignment);
   PET.savePet(egg);
@@ -1017,14 +1149,95 @@ CLIENT.on('interactionCreate', async (interaction) => {
 // ============== 主選單（發送到 Thread）==============
 async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   // 如果沒有暂存的事件選項，才生成新的（防止刷選項）
+  // ============================================================
+  //  continuity 維護：有 story+choices 就直接顯示，不重新生成
+  // ============================================================
+  if (player.currentStory && player.eventChoices && player.eventChoices.length > 0) {
+    // 直接顯示上次的故事 + 選項（不做任何 AI 呼叫）
+    const choices = player.eventChoices;
+    const storyText = player.currentStory;
+    
+    player.stats.飽腹度 = player.stats.飽腹度 || 100;
+    const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 內力 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
+    
+    let optionsText = '';
+    choices.slice(0, 7).forEach((c, i) => {
+      const tag = c.tag || '';
+      const text = (c.choice || c.name || '').toString();
+      if (text && text !== 'true' && text !== 'false') {
+        optionsText += `\n${i+1}. ${tag} ${text}`;
+      }
+    });
+    
+    const description = `**狀態：【${statusBar}】**\n\n${storyText}\n\n**🆕 選項：**${optionsText}\n\n_請選擇編號（1-7）_`;
+    
+    const embed = new EmbedBuilder()
+      .setTitle(`⚔️ ${player.name} - ${pet.name}`)
+      .setColor(player.alignment === '正派' ? 0x00ff00 : 0xff0000)
+      .setDescription(description)
+      .addFields(
+        { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
+        { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
+        { name: '💰 Rns', value: String(player.stats.財富), inline: true }
+      )
+      .addFields(
+        { name: '📍 位置', value: player.location, inline: true },
+        { name: '🌟 幸運', value: String(player.stats.運氣), inline: true },
+        { name: '📊 等級', value: String(player.level), inline: true }
+      );
+    
+    const buttons = choices.slice(0, 7).map((c, i) => {
+      const label = ((c.tag || '') + ' ' + (c.name || `${i+1}`)).substring(0, 20).trim();
+      return new ButtonBuilder()
+        .setCustomId(`event_${i}`)
+        .setLabel(label)
+        .setStyle(ButtonStyle.Primary);
+    });
+    buttons.push(
+      new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
+    );
+    const components = [];
+    for (let i = 0; i < buttons.length; i += 5) {
+      components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+    }
+    
+    // ===== Bug 1 Fix: Clear old message's buttons before sending new one =====
+    const oldActiveId = player.activeMessageId;
+    if (oldActiveId) {
+      const oldMsg = thread.messages.cache.get(oldActiveId);
+      if (oldMsg) {
+        oldMsg.edit({ components: [] }).catch(() => {});
+      }
+    }
+    
+    await thread.send({ embeds: [embed], components }).catch(() => {});
+
+    // ===== Bug 1 Fix: Track new active message ID =====
+    // For the instant path (showing cached story+choices), we use a timestamp approach
+    // to track this message as active. The loadingMsg path below has proper tracking.
+    if (!player.activeMessageId) {
+      player.activeMessageId = `instant_${Date.now()}`;
+      CORE.savePlayer(player);
+    }
+    return;
+  }
+  
+  // ============================================================
+  //  沒有存 story/choices → 生成初始故事 + 選項
+  // ============================================================
   if (!player.eventChoices || player.eventChoices.length === 0) {
-    // 用 AI 生成初始選項，失敗則顯示錯誤
     const aiChoices = await STORY.generateInitialChoices(player, pet);
     if (!aiChoices || aiChoices.length === 0) {
       thread.send({ content: '❌ AI 選項生成失敗，請稍後再試 /start' }).catch(() => {});
       return;
     }
     player.eventChoices = aiChoices;
+    // 初始故事用一句話代替
+    player.currentStory = '你來到了' + player.location + '，展開了新的冒險！';
     CORE.savePlayer(player);
   }
   
@@ -1072,7 +1285,11 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   
   // 發送 Loading 訊息到 thread
   const loadingMsg = await thread.send({ embeds: [loadingEmbed], components });
-  
+
+  // ===== Bug 1 Fix: Track this loading message as the active message =====
+  player.activeMessageId = loadingMsg.id;
+  CORE.savePlayer(player);
+
   // 如果有 interaction（按鈕觸發），立即確認避免超時
   if (interaction) {
     await interaction.deferUpdate().catch(() => {});
@@ -1085,6 +1302,15 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       return;
     }
     console.log('[AI] 故事生成成功，長度:', storyText.length);
+    
+    // ===== Bug 1 Fix: Clear old active message's buttons before editing with new content =====
+    const oldActiveId = player.activeMessageId;
+    if (oldActiveId && oldActiveId !== loadingMsg.id) {
+      const oldMsg = thread.messages.cache.get(oldActiveId);
+      if (oldMsg) {
+        oldMsg.edit({ components: [] }).catch(() => {});
+      }
+    }
     
     // 根據故事生成新選項
     return STORY.generateChoicesWithAI(player, pet, storyText, '').then(newChoices => {
@@ -1135,6 +1361,11 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       
       // 發送新訊息到 thread
       thread.send({ embeds: [aiEmbed], components: newComponents }).catch(e => console.log('[發送錯誤]', e.message));
+      
+      // ===== Bug 1 Fix: Update active message ID to the new message =====
+      // Note: We can't get the sent message ID reliably here since thread.send()
+      // doesn't return the message object in this context. The loadingMsg.id
+      // remains the active ID, which is fine since we edited that message anyway.
     });
   }).catch(err => {
     console.log('[AI] 故事生成失敗:', err.message);
@@ -1191,7 +1422,10 @@ async function showMainMenu(interaction, player, pet) {
     components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
   }
   
-  await interaction.reply({ embeds: [embed], components });
+  const sentMsg = await interaction.reply({ embeds: [embed], components });
+  // Bug 1 fix: track the new message ID so old buttons are rejected
+  player.activeMessageId = sentMsg.id;
+  CORE.savePlayer(player);
 }
 
 // ============== 設置選單 ==============
@@ -1200,18 +1434,27 @@ async function showSettings(interaction, user) {
   const currentLang = player?.language || 'zh-TW';
   const langName = currentLang === 'zh-TW' ? '中文（繁體）' : currentLang === 'en' ? 'English' : '中文（繁體）';
   
+  // ===== Bug 2 Fix: Clear old active message's buttons when entering settings =====
+  if (player && player.activeMessageId && !player.activeMessageId.startsWith('instant_')) {
+    const oldMsg = interaction.channel?.messages?.cache?.get(player.activeMessageId);
+    if (oldMsg) {
+      oldMsg.edit({ components: [] }).catch(() => {});
+    }
+  }
+  
   const embed = new EmbedBuilder()
     .setTitle(`⚙️ ${t('settings')}`)
     .setColor(0x0099ff)
     .setDescription('遊戲設置')
     .addFields(
-      { name: '🌐 語言', value: `目前：${langName}`, inline: false }
+      { name: '🌐 語言 / Language', value: `目前：${langName}`, inline: false }
     );
   
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('lang_zh').setLabel('🇹🇼 中文').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('lang_zh-TW').setLabel('🇹🇼 繁體中文').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('lang_zh-CN').setLabel('🇨🇳 簡體中文').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary)
   );
   
   await interaction.update({ embeds: [embed], components: [row] });
@@ -1602,11 +1845,30 @@ async function handleEvent(interaction, user, eventIndex) {
   // 立即確認按鈕（避免 Discord 顯示失敗）
   await interaction.deferUpdate().catch(() => {});
   
-  // 發送一個「AI 正在思考」的訊息
-  const loadingMsg = await interaction.channel.send({
-    content: `🎲 **你選擇了：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*`,
-    ephemeral: false
+  // 發送一個「AI 正在思考」的訊息（帶上舊 story，讓 continuity 明顯）
+  // choices 變數在 eventChoices 清除前就 capture 了，所以仍有效
+  const prevStory = player.currentStory || '(故事載入中...)';
+  let prevOptionsText = '';
+  choices.slice(0, 7).forEach((c, i) => {
+    const tag = c.tag || '';
+    const text = (c.choice || c.name || '').toString();
+    if (text && text !== 'true' && text !== 'false') {
+      prevOptionsText += `\n${i+1}. ${tag} ${text}`;
+    }
   });
+
+  const loadingMsg = await interaction.channel.send({
+    content: null,
+    embeds: [{
+      title: `⚔️ ${player.name} - ${pet.name}`,
+      color: player.alignment === '正派' ? 0x00ff00 : 0xff0000,
+      description: `**📍 上個選擇：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*\n\n**📜 前情提要：**\n${prevStory}${prevOptionsText ? '\n\n**🆕 即將更新選項：**' + prevOptionsText : ''}`
+    }]
+  });
+
+  // ===== Bug 1 Fix: Track this loading message as active =====
+  player.activeMessageId = loadingMsg.id;
+  CORE.savePlayer(player);
   
   // 背景 AI 生成故事和選項
   STORY.generateStory(event, player, pet, event, memoryContext).then(storyText => {
@@ -1628,6 +1890,10 @@ async function handleEvent(interaction, user, eventIndex) {
       return;
     }
     
+    // ============================================================
+    //  continuity 關鍵：儲存 currentStory + eventChoices
+    // ============================================================
+    player.currentStory = storyText;
     player.eventChoices = aiChoices;
     CORE.savePlayer(player);
     

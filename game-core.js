@@ -908,6 +908,7 @@ function createPlayer(discordId, name, gender, sect) {
     sect: sect || "無門無派",
     alignment: null, // '正派' 或 '反派'
     petId: null, // 寵物ID
+    language: 'zh-TW', // 預設繁體中文
     title: "Renaiss星球新人",
     level: 1,
     exp: 0,
