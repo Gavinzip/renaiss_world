@@ -245,32 +245,6 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
   throw lastError || new Error('AI request failed');
 }
 
-function getStoryLengthRule(playerLang = 'zh-TW') {
-  if (playerLang === 'en') {
-    return {
-      promptRule: '故事長度必須 280-360 words。',
-      min: 260,
-      max: 390,
-      unit: 'words'
-    };
-  }
-  return {
-    promptRule: '故事長度必須 400-500 字。',
-    min: 380,
-    max: 530,
-    unit: 'chars'
-  };
-}
-
-function measureStoryLength(story, playerLang = 'zh-TW') {
-  const text = String(story || '').trim();
-  if (!text) return 0;
-  if (playerLang === 'en') {
-    return (text.match(/[A-Za-z0-9'-]+/g) || []).length;
-  }
-  return text.replace(/\s+/g, '').length;
-}
-
 // ========== 生成故事（帶記憶）============
 async function generateStory(event, player, pet, previousChoice, memoryContext = '') {
   const startedAt = Date.now();
@@ -310,7 +284,6 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     'zh-CN': '請用簡體中文講述',
     'en': '請用英文講述'
   }[playerLang] || '請用繁體中文講述';
-  const lengthRule = getStoryLengthRule(playerLang);
   
   // 記憶上下文
   const focusedMemory = summarizeContext(memoryContext, 220, 3);
@@ -331,7 +304,7 @@ ${memorySection}
 ${previousAction}
 
 【任務】
-${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼。${lengthRule.promptRule} 少於下限視為不合格。要點：
+${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼。故事目標長度約 400-500 字。要點：
 1. 有具體的場景（光線、聲音、氣味、溫度、觸感）
 2. 有NPC或環境的互動
 3. 有Renaiss星球的科幻與奇幻元素
@@ -358,15 +331,10 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
         throw new Error('Story too short');
       }
 
-      const len = measureStoryLength(story, playerLang);
-      if (len < lengthRule.min || len > lengthRule.max) {
-        throw new Error(`Story length out of range: ${len} ${lengthRule.unit}`);
-      }
-
       if (story.length > 2600) {
         return story.substring(0, 2600) + '...[故事過長已截斷]';
       }
-      console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms len=${len}${lengthRule.unit}`);
+      console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
       return story;
     } catch (e) {
       console.error(`[Storyteller] generateStory model=${model} 失敗:`, e.message);
