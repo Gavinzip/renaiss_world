@@ -157,6 +157,45 @@ async function disableMessageComponents(channel, messageId) {
   await msg.edit({ components: [] }).catch(() => {});
 }
 
+async function resumeExistingOnboardingOrGame(interaction, user) {
+  const existingPlayer = CORE.loadPlayer(user.id);
+  const existingPet = PET.loadPet(user.id);
+  if (!existingPlayer || !existingPet) return false;
+
+  if (existingPet.hatched && existingPet.waitingForName) {
+    const tierMove = existingPet.moves?.[2];
+    const embed = new EmbedBuilder()
+      .setTitle(`🎰 恭喜獲得：${tierMove?.name || '天賦招式'}！`)
+      .setColor(0xffd700)
+      .setDescription('請先為你的寵物命名，才能開始冒險。')
+      .addFields({ name: '⚔️ 招式', value: tierMove?.name || '未知', inline: true });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('enter_pet_name').setLabel('✏️ 輸入名字').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('skip_name').setLabel('🔨 隨機').setStyle(ButtonStyle.Secondary)
+    );
+    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true }).catch(() => {});
+    return true;
+  }
+
+  if (!existingPet.hatched) {
+    const embed = new EmbedBuilder()
+      .setTitle('🐾 你的寵物蛋還沒孵化！')
+      .setColor(0xffa500)
+      .setDescription('讓我們繼續孵化你的寵物吧！');
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('hatch_egg').setLabel('🔨 敲開寵物蛋！').setStyle(ButtonStyle.Primary)
+    );
+    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true }).catch(() => {});
+    return true;
+  }
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success)
+  );
+  await interaction.reply({ content: '✅ 你已完成建角，請直接回到冒險。', components: [row], ephemeral: true }).catch(() => {});
+  return true;
+}
+
 function trackActiveGameMessage(player, channelId, messageId) {
   if (!player) return;
   player.activeThreadId = channelId || null;
@@ -751,12 +790,20 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 選擇語言（首次）=====
   if (customId.startsWith('select_lang_')) {
+    if (CORE.loadPlayer(user.id) && PET.loadPet(user.id)) {
+      await interaction.message?.edit({ components: [] }).catch(() => {});
+      await resumeExistingOnboardingOrGame(interaction, user);
+      return;
+    }
+
     const lang = customId.replace('select_lang_', '');
     // 儲存語言到內存，等創建角色後寫入
     setPlayerTempData(user.id, 'language', lang);
     
-    // 立即確認
-    await interaction.deferUpdate().catch(() => {});
+    // 立即鎖住本則語言按鈕，避免重複觸發
+    await interaction.update({ components: [] }).catch(async () => {
+      await interaction.deferUpdate().catch(() => {});
+    });
     
     // 發送陣營選擇（使用選定語言）
     const langText = getLanguageText(lang);
@@ -1140,9 +1187,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
 // ============== 選擇陣營 ==============
 async function handleChooseAlignment(interaction, user, customId) {
   const alignment = customId === 'choose_positive' ? '正派' : '反派';
-  
-  // 先確認按鈕
-  await interaction.deferUpdate().catch(() => {});
+
+  // 已建立角色時，不允許重複選陣營，直接導回目前進度
+  const resumed = await resumeExistingOnboardingOrGame(interaction, user);
+  if (resumed) {
+    await interaction.message?.edit({ components: [] }).catch(() => {});
+    return;
+  }
+
+  // 先鎖住當前陣營按鈕，確保只能點一次
+  await interaction.message?.edit({ components: [] }).catch(() => {});
   
   // 顯示名字輸入 Modal
   const modal = new ModalBuilder()
@@ -1162,12 +1216,24 @@ async function handleChooseAlignment(interaction, user, customId) {
   
   await interaction.showModal(modal).catch(async () => {
     // 如果 Modal 失敗，直接用 DC 名稱
+    await interaction.deferUpdate().catch(() => {});
     await createCharacterWithName(interaction, user, alignment, user.username);
   });
 }
 
 // 創建角色（名字輸入後調用）
 async function createCharacterWithName(interaction, user, alignment, charName) {
+  const existingPlayer = CORE.loadPlayer(user.id);
+  const existingPet = PET.loadPet(user.id);
+  if (existingPlayer && existingPet) {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: '✅ 你已建立角色，請繼續目前進度。', ephemeral: true }).catch(() => {});
+    } else {
+      await interaction.reply({ content: '✅ 你已建立角色，請繼續目前進度。', ephemeral: true }).catch(() => {});
+    }
+    return;
+  }
+
   // 使用暫時 RNS（背景掃描完成後會更新）
   const pendingRNS = WALLET.getPendingRNS(user.id);
   
@@ -1201,8 +1267,15 @@ async function createCharacterWithName(interaction, user, alignment, charName) {
     new ButtonBuilder().setCustomId('hatch_egg').setLabel('🔨 敲開寵物蛋！').setStyle(ButtonStyle.Primary)
   );
   
-  // 按鈕在 thread 裡，用 channel.send() 而不是 interaction.update()
-  await interaction.channel.send({ embeds: [embed], components: [row] });
+  if (interaction.deferred || interaction.replied) {
+    await interaction.followUp({ embeds: [embed], components: [row] }).catch(async () => {
+      await interaction.channel.send({ embeds: [embed], components: [row] });
+    });
+  } else {
+    await interaction.reply({ embeds: [embed], components: [row] }).catch(async () => {
+      await interaction.channel.send({ embeds: [embed], components: [row] });
+    });
+  }
 }
 
 // ============== 敲蛋孵化 - 動畫版 ==============
