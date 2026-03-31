@@ -172,6 +172,15 @@ const EPIC_BOSSES = {
 
 // ============== 計算玩家招式傷害 ==============
 function calculatePlayerMoveDamage(move, player, pet) {
+  if (!move || typeof move !== 'object') {
+    return { instant: 0, overTime: 0, totalTurns: 0, total: 0 };
+  }
+
+  // 逃跑不屬於攻擊招式，不應造成傷害
+  if (move.effect?.flee) {
+    return { instant: 0, overTime: 0, totalTurns: 0, total: 0 };
+  }
+
   const level = pet.level || 1;
   const attack = pet.attack || 20;
   
@@ -221,7 +230,10 @@ function executeBattleRound(player, pet, enemy, chosenMove, enemyMove = null) {
   
   // ===== 玩家攻擊 =====
   const moveDmg = calculatePlayerMoveDamage(chosenMove, player, pet);
-  const finalDamage = Math.max(1, moveDmg.total - enemy.defense);
+  const finalDamage =
+    moveDmg.total > 0
+      ? Math.max(1, moveDmg.total - enemy.defense)
+      : 0;
   
   results.push({
     attacker: pet.name,

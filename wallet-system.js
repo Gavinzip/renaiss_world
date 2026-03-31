@@ -9,6 +9,18 @@ const CORE = require('./game-core');
 const fs = require('fs');
 const path = require('path');
 
+// 讀取 .env（讓單獨執行 wallet-system 測試時也能拿到 API Key）
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf-8');
+  envContent.split('\n').forEach(line => {
+    const [key, ...valueParts] = line.split('=');
+    if (key && valueParts.length > 0) {
+      process.env[key.trim()] = valueParts.join('=').trim();
+    }
+  });
+}
+
 // ============== Renaiss API 配置 ==============
 const RENAISS_CONFIG = {
   collectibleListUrl: 'https://www.renaiss.xyz/api/trpc/collectible.list',
@@ -17,7 +29,7 @@ const RENAISS_CONFIG = {
 
 // ============== BSCScan API 配置 ==============
 const BSC_CONFIG = {
-  apiUrl: 'https://api.bscscan.com/api',
+  apiUrl: 'https://api.etherscan.io/v2/api',
   chainId: 56,
   apiKey: process.env.BSCSCAN_API_KEY || '',
   
@@ -67,6 +79,11 @@ function bindWallet(discordUserId, walletAddress) {
   }
   
   const settings = loadWalletSettings();
+  const existed = settings[discordUserId]?.walletAddress;
+  if (existed) {
+    return { success: false, reason: `你已綁定錢包：${existed}，目前不允許重綁。` };
+  }
+
   settings[discordUserId] = {
     walletAddress: normalizedAddress,
     boundAt: new Date().toISOString()
@@ -85,53 +102,229 @@ function getWalletAddress(discordUserId) {
   return settings[discordUserId]?.walletAddress || null;
 }
 
+function extractCollectibleRows(result) {
+  if (Array.isArray(result?.collection)) return result.collection;
+  if (Array.isArray(result?.collectibles)) return result.collectibles;
+  return [];
+}
+
+function parseFmvUSD(card) {
+  const fmvCentRaw = card?.fmvPriceInUSD ?? card?.fmvPriceInUsd;
+  const fmvCent = Number(fmvCentRaw);
+  if (Number.isFinite(fmvCent) && fmvCent >= 0) {
+    return fmvCent / 100;
+  }
+
+  const legacyRaw = card?.fmv ?? card?.value ?? card?.price ?? 0;
+  const legacyValue = Number(legacyRaw);
+  return Number.isFinite(legacyValue) ? legacyValue : 0;
+}
+
+function normalizeWalletAddress(walletAddress) {
+  return String(walletAddress || '').toLowerCase().trim();
+}
+
+function dedupeCollectibles(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const tokenId = String(row.tokenId || '').trim();
+    const id = String(row.id || '').trim();
+    const ownerAddress = normalizeWalletAddress(row.ownerAddress);
+    const key = tokenId || id || `${ownerAddress}:${map.size}`;
+    if (!map.has(key)) {
+      map.set(key, row);
+    }
+  }
+  return Array.from(map.values());
+}
+
+async function trpcCollectibleList(queryPayload) {
+  const maxRetries = 3;
+  let lastErr = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const inputJson = JSON.stringify({ 0: { json: queryPayload } });
+      const url = `${RENAISS_CONFIG.collectibleListUrl}?batch=1&input=${encodeURIComponent(inputJson)}`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`collectible.list HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const root = Array.isArray(data) ? data[0] : data;
+      if (!root) {
+        throw new Error('collectible.list empty response');
+      }
+      if (root.error) {
+        const errMsg = root.error?.json?.message || root.error?.message || 'unknown error';
+        throw new Error(`collectible.list error: ${errMsg}`);
+      }
+
+      const result = root?.result?.data?.json;
+      if (!result || typeof result !== 'object') {
+        throw new Error('collectible.list missing result json');
+      }
+      return result;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, attempt * 300));
+      }
+    }
+  }
+
+  throw lastErr || new Error('collectible.list unknown failure');
+}
+
+async function resolveUserFromWallet(walletAddress) {
+  const wallet = normalizeWalletAddress(walletAddress);
+  if (!wallet) return { userId: null, matchedRows: [] };
+
+  const limit = 100;
+  const maxPages = 60;
+  let offset = 0;
+  const matchedRows = [];
+
+  for (let page = 0; page < maxPages; page++) {
+    const result = await trpcCollectibleList({
+      address: wallet,
+      filter: 'all',
+      isHolding: true,
+      limit,
+      offset,
+      sortBy: 'mintDate',
+      sortOrder: 'desc',
+      includeOpenCardPackRecords: true
+    });
+    const rows = extractCollectibleRows(result);
+    for (const row of rows) {
+      const ownerAddress = normalizeWalletAddress(row?.ownerAddress);
+      if (ownerAddress !== wallet) continue;
+      matchedRows.push(row);
+      const userId = row?.owner?.id;
+      if (typeof userId === 'string' && userId.trim()) {
+        return { userId: userId.trim(), matchedRows };
+      }
+    }
+
+    const pagination = result?.pagination || {};
+    if (!pagination.hasMore) break;
+    const step = Number(pagination.limit) || limit;
+    if (step <= 0) break;
+    offset += step;
+  }
+
+  return { userId: null, matchedRows };
+}
+
+async function fetchUserCollection(userId) {
+  const uid = String(userId || '').trim();
+  if (!uid) return [];
+
+  const limit = 100;
+  const firstResult = await trpcCollectibleList({
+    limit,
+    offset: 0,
+    sortBy: 'mintDate',
+    sortOrder: 'desc',
+    userId: uid,
+    includeOpenCardPackRecords: true
+  });
+
+  const firstRows = extractCollectibleRows(firstResult);
+  const pagination = firstResult?.pagination || {};
+  if (!pagination.hasMore) {
+    return dedupeCollectibles(firstRows);
+  }
+
+  const total = Number(pagination.total) || firstRows.length;
+  const step = Number(pagination.limit) || limit;
+  const allRows = [...firstRows];
+  const maxPages = 100;
+
+  for (let offset = step, i = 0; offset < total && i < maxPages; offset += step, i++) {
+    const result = await trpcCollectibleList({
+      limit: step,
+      offset,
+      sortBy: 'mintDate',
+      sortOrder: 'desc',
+      userId: uid,
+      includeOpenCardPackRecords: true
+    });
+    const rows = extractCollectibleRows(result);
+    allRows.push(...rows);
+    const hasMore = Boolean(result?.pagination?.hasMore);
+    if (!hasMore && rows.length === 0) break;
+  }
+
+  return dedupeCollectibles(allRows);
+}
+
 // ============== 從 Renaiss API 讀取卡片 FMV ==============
 async function fetchCardFMV(walletAddress) {
   try {
-    const payload = {
-      address: walletAddress.toLowerCase(),
-      filter: 'all',
-      isHolding: true,
-      limit: 1000
-    };
-    
-    const inputJson = JSON.stringify({"0":{"json":payload}});
-    const url = `${RENAISS_CONFIG.collectibleListUrl}?batch=1&input=${encodeURIComponent(inputJson)}`;
-    
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
+    const wallet = normalizeWalletAddress(walletAddress);
+    if (!wallet) {
+      return { totalFMV: 0, cardCount: 0 };
+    }
+
+    let userId = null;
+    let matchedRows = [];
+    try {
+      const resolved = await resolveUserFromWallet(wallet);
+      userId = resolved.userId;
+      matchedRows = resolved.matchedRows;
+    } catch (e) {
+      console.error('[錢包] 解析 userId 失敗，改用 fallback:', e.message);
+    }
+
+    let collectibles = [];
+    if (userId) {
+      try {
+        collectibles = await fetchUserCollection(userId);
+      } catch (e) {
+        console.error('[錢包] userId 收藏分頁讀取失敗，改用 fallback:', e.message);
       }
-    });
-    
-    if (!response.ok) {
-      console.error('[錢包] Renaiss API 錯誤:', response.status);
-      return { totalFMV: 0, cardCount: 0 };
     }
-    
-    const data = await response.json();
-    
-    if (!Array.isArray(data) || !data[0]) {
-      return { totalFMV: 0, cardCount: 0 };
+
+    // fallback: 如果 userId 取不到，至少保留掃描過程中找到的同地址卡片
+    if (collectibles.length === 0 && matchedRows.length > 0) {
+      collectibles = dedupeCollectibles(matchedRows);
     }
-    
-    const result = data[0]?.result?.data?.json;
-    if (!result) {
-      return { totalFMV: 0, cardCount: 0 };
+
+    // fallback: 補一輪 address 查詢，防止前面流程因短暫 API 異常而回傳空資料
+    if (collectibles.length === 0) {
+      const fallbackResult = await trpcCollectibleList({
+        address: wallet,
+        filter: 'all',
+        isHolding: true,
+        limit: 100,
+        offset: 0,
+        sortBy: 'mintDate',
+        sortOrder: 'desc',
+        includeOpenCardPackRecords: true
+      });
+      const fallbackRows = extractCollectibleRows(fallbackResult).filter(
+        card => normalizeWalletAddress(card?.ownerAddress) === wallet
+      );
+      collectibles = dedupeCollectibles(fallbackRows);
     }
-    
-    const collectibles = result.collectibles || [];
-    
-    // 計算 FMV 總價值
+
     let totalFMV = 0;
     for (const card of collectibles) {
-      const fmv = parseFloat(card.fmv || card.value || card.price || 0);
-      totalFMV += fmv;
+      totalFMV += parseFmvUSD(card);
     }
-    
+
     return {
-      totalFMV,
+      totalFMV: Number(totalFMV.toFixed(2)),
       cardCount: collectibles.length
     };
   } catch (e) {
@@ -173,13 +366,22 @@ async function fetchUSDTTransfers(walletAddress) {
     let packTxCount = 0;
     let packSpentUSDT = 0;
     
+    const validPackContracts = BSC_CONFIG.packContracts
+      .filter(addr => /^0x[a-fA-F0-9]{40}$/.test(addr))
+      .map(addr => addr.toLowerCase());
+    const marketplace = (BSC_CONFIG.marketplaceContract || '').toLowerCase();
+    const userWallet = walletAddress.toLowerCase();
+
     for (const tx of data.result) {
       const from = tx.from?.toLowerCase();
       const to = tx.to?.toLowerCase();
       const value = parseFloat(tx.value) / 1e18; // USDT 18 位小數
       
-      // 如果發送到 pack 合約，算是開包
-      if (BSC_CONFIG.packContracts.some(p => to === p.toLowerCase())) {
+      // 往 pack 合約或 marketplace 的轉出，都視為消費/開包相關行為
+      const isOutgoing = from === userWallet;
+      const isPackSpend = validPackContracts.includes(to);
+      const isMarketplaceSpend = marketplace && to === marketplace;
+      if (isOutgoing && (isPackSpend || isMarketplaceSpend)) {
         packTxCount++;
         packSpentUSDT += value;
       }

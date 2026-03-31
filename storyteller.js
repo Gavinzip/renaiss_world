@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { LOCATION_DESCRIPTIONS } = require('./world-map');
 
 const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
@@ -17,20 +18,9 @@ if (fs.existsSync(envPath)) {
 }
 
 const API_KEY = process.env.MINIMAX_API_KEY || '';
+const MINIMAX_MODEL = process.env.MINIMAX_MODEL || 'MiniMax-M2.5-Lightning';
 
-const RENAISS_LOCATIONS = {
-  '草原部落': '無垠草原上的移動式巨型蒙古包林立，基因改造牧馬在遠處奔馳',
-  '襄陽城': '繁華熱鬧的街道上人來人往，全息廣告牌投射著絢麗的光影',
-  '大都': '皇城腳下戒備森嚴，高聳的塔樓直插雲霄',
-  '洛陽城': '牡丹花城繁華似錦，大大小小的花園遍布各處',
-  '黑木崖': '黑暗深淵中的巨型浮空城市，暗能量反重力系統支撐',
-  '蓬萊仙島': '雲端之上的仙境島嶼，靈氣充沛，奇花異草遍佈',
-  '極北冰原': '永夜與暴風雪籠罩的冰凍荒原',
-  '南疆苗疆': '毒蟲猛獸橫行的神秘叢林',
-  '西域沙漠': '烈日風沙下的絲路商隊之地',
-  '俠客島': '神秘莫測的海外孤島，據說藏有絕世秘籍',
-  '死亡之海': '生機斷絕的荒漠，傳聞有古文明遺蹟'
-};
+const RENAISS_LOCATIONS = { ...LOCATION_DESCRIPTIONS };
 
 const RENAISS_NPCS = {
   '草原部落': [
@@ -55,27 +45,107 @@ const RENAISS_NPCS = {
 
 const https = require('https');
 
-function callAI(prompt, temperature = 0.9) {
+const AI_MAX_RETRIES = 3;
+const AI_TIMEOUT_MS = 90000;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function sanitizeAIContent(content) {
+  let source = '';
+  if (typeof content === 'string') {
+    source = content;
+  } else if (Array.isArray(content)) {
+    source = content
+      .map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          return item.text || item.content || '';
+        }
+        return '';
+      })
+      .join('\n');
+  } else if (content && typeof content === 'object') {
+    source = content.text || content.content || '';
+  }
+
+  if (!source || typeof source !== 'string') return '';
+  let cleaned = source.trim();
+  // 移除 <think>...</think> 思考標籤（多行）
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  cleaned = cleaned.replace(/<[^>]+>/g, '');
+  return cleaned.trim();
+}
+
+function previewAIContent(content) {
+  try {
+    if (typeof content === 'string') return content.slice(0, 120);
+    return JSON.stringify(content).slice(0, 120);
+  } catch {
+    return String(content).slice(0, 120);
+  }
+}
+
+function buildFallbackStory(player, pet, location, locDesc, previousAction, playerLang = 'zh-TW') {
+  const name = player?.name || '冒險者';
+  const petName = pet?.name || '寵物';
+  const scenes = [
+    '遠處傳來金屬碰撞聲，像有人在夜色中交手。',
+    '潮濕的風帶著鹹味掠過街角，霓虹在地面上碎成斑斕光點。',
+    '地面細微震動，彷彿有巨物在暗處緩慢移動。'
+  ];
+  const hooks = [
+    '你直覺這不只是巧合，下一步很可能改變局勢。',
+    '四周目光開始聚集，所有人都在等你做出決定。',
+    '你與寵物交換了一個眼神，真正的挑戰才剛開始。'
+  ];
+  const scene = scenes[Math.floor(Math.random() * scenes.length)];
+  const hook = hooks[Math.floor(Math.random() * hooks.length)];
+
+  if (playerLang === 'en') {
+    return `${name} and ${petName} move through ${location} (${locDesc}). After choosing "${previousAction}", ${scene} ${hook}`;
+  }
+  if (playerLang === 'zh-CN') {
+    return `${name}与${petName}行进在${location}（${locDesc}）。你刚刚选择了「${previousAction}」，${scene}${hook}`;
+  }
+  return `${name}與${petName}行進在${location}（${locDesc}）。你剛剛選擇了「${previousAction}」，${scene}${hook}`;
+}
+
+function buildFallbackChoices(player, location, playerLang = 'zh-TW') {
+  if (playerLang === 'en') {
+    return [
+      { name: 'Push forward', choice: 'Close in and confront the suspicious figure', desc: 'Close in and confront the suspicious figure', tag: '[⚔️Battle]' },
+      { name: 'Scout flank', choice: 'Ask your pet to scout from the side', desc: 'Ask your pet to scout from the side', tag: '[🔥Risky]' },
+      { name: 'Gather clues', choice: 'Search nearby traces for hidden information', desc: 'Search nearby traces for hidden information', tag: '[🔍Explore]' },
+      { name: 'Talk first', choice: 'Open with dialogue to test their intent', desc: 'Open with dialogue to test their intent', tag: '[🤝Social]' },
+      { name: 'Take high ground', choice: 'Move to a better position before action', desc: 'Move to a better position before action', tag: '[🎁Reward]' },
+      { name: 'Use resources', choice: 'Spend some coins on temporary support', desc: 'Spend some coins on temporary support', tag: '[💰Cost]' },
+      { name: 'Follow instinct', choice: 'Trust your instinct and make an unexpected move', desc: 'Trust your instinct and make an unexpected move', tag: '[❓Surprise]' }
+    ];
+  }
+  const shortLoc = location || '此地';
+  return [
+    { name: `正面逼近`, choice: `拔劍逼近${shortLoc}可疑身影`, desc: `拔劍逼近${shortLoc}可疑身影`, tag: '[⚔️會戰鬥]' },
+    { name: '側翼偵查', choice: '命令寵物從側面偵查動靜', desc: '命令寵物從側面偵查動靜', tag: '[🔥高風險]' },
+    { name: '搜尋線索', choice: '檢查地面痕跡與殘留氣味', desc: '檢查地面痕跡與殘留氣味', tag: '[🔍需探索]' },
+    { name: '先談再動', choice: '先和對方交涉摸清來意', desc: '先和對方交涉摸清來意', tag: '[🤝需社交]' },
+    { name: '搶占地形', choice: '移到高處準備反制與突襲', desc: '移到高處準備反制與突襲', tag: '[🎁高回報]' },
+    { name: '臨時補給', choice: '花費銀兩購買一次性支援道具', desc: '花費銀兩購買一次性支援道具', tag: '[💰需花錢]' },
+    { name: '隨機應變', choice: '交給直覺做出意外選擇', desc: '交給直覺做出意外選擇', tag: '[❓有驚喜]' }
+  ];
+}
+
+function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    if (!API_KEY) {
-      reject(new Error('No API Key'));
-      return;
-    }
-
-    const body = JSON.stringify({
-      model: 'MiniMax-M2.5-Lightning',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: temperature,
-      max_tokens: 1500
-    });
-
     const options = {
       hostname: 'api.minimax.io',
       path: '/v1/chat/completions',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + API_KEY
+        'Authorization': 'Bearer ' + API_KEY,
+        'Content-Length': Buffer.byteLength(body)
       }
     };
 
@@ -83,36 +153,34 @@ function callAI(prompt, temperature = 0.9) {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        // 檢查 HTTP 狀態碼
         if (res.statusCode !== 200) {
           console.log('[AI] HTTP 錯誤:', res.statusCode, data.substring(0, 300));
           reject(new Error('HTTP ' + res.statusCode));
           return;
         }
-        
+
         try {
           const parsed = JSON.parse(data);
-          
-          if (parsed.choices && parsed.choices[0] && parsed.choices[0].message && parsed.choices[0].message.content) {
-            let content = parsed.choices[0].message.content.trim();
-            // 移除 <think>...</think> 思考標籤（多行）
-            content = content.replace(/<think>[\s\S]*?<\/think>/gi, '');
-            content = content.replace(/<[^>]+>/g, '');
-            
-            // 限制故事長度在 2000 字以內
-            if (content.length > 2000) {
-              content = content.substring(0, 2000) + '...[故事過長已截斷]';
-            }
-            
-            resolve(content);
-          } else if (parsed.error) {
+          if (parsed.error) {
             reject(new Error(parsed.error.message || 'API Error'));
-          } else if (parsed.base_resp && parsed.base_resp.status_msg) {
-            reject(new Error(parsed.base_resp.status_msg));
-          } else {
-            console.log('[AI] Raw response:', data.substring(0, 300));
-            reject(new Error('Invalid response'));
+            return;
           }
+          if (parsed.base_resp && parsed.base_resp.status_msg) {
+            reject(new Error(parsed.base_resp.status_msg));
+            return;
+          }
+
+          const choice = parsed.choices?.[0];
+          const rawContent = choice?.message?.content || '';
+          if (!rawContent) {
+            reject(new Error('Empty AI content'));
+            return;
+          }
+
+          resolve({
+            content: rawContent,
+            finishReason: choice?.finish_reason || ''
+          });
         } catch (e) {
           console.log('[AI] Parse error, raw:', data.substring(0, 300));
           reject(e);
@@ -120,17 +188,89 @@ function callAI(prompt, temperature = 0.9) {
       });
     });
 
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error('AI timeout'));
+    });
+
     req.on('error', (e) => {
       console.log('[AI] Network error:', e.message);
       reject(e);
     });
+
     req.write(body);
     req.end();
   });
 }
 
+function summarizeContext(rawText, maxChars = 240, maxLines = 3) {
+  const text = String(rawText || '').trim();
+  if (!text) return '';
+  const lines = text
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .slice(0, maxLines);
+  const merged = lines.join('\n');
+  return merged.length > maxChars ? merged.slice(0, maxChars) + '...' : merged;
+}
+
+async function callAI(prompt, temperature = 0.9, options = {}) {
+  if (!API_KEY) throw new Error('No API Key');
+
+  const retries = Math.max(1, Number(options.retries || AI_MAX_RETRIES));
+  const timeoutMs = Math.max(5000, Number(options.timeoutMs || AI_TIMEOUT_MS));
+  const maxTokens = Math.max(120, Number(options.maxTokens || 700));
+  const label = String(options.label || 'callAI');
+  const hardRule = '\n\n【硬性輸出規則】只輸出最終答案，禁止輸出任何思考過程、XML標籤或系統說明。';
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const startAt = Date.now();
+      const attemptPrompt =
+        prompt +
+        hardRule +
+        (
+          attempt > 1
+            ? '\n上一輪你可能只輸出了<think>內容。這一輪禁止輸出<think>，直接輸出最終內容。'
+            : ''
+        );
+      const attemptMaxTokens = attempt > 1 ? Math.min(2200, Math.floor(maxTokens * 2)) : maxTokens;
+      const body = JSON.stringify({
+        model: MINIMAX_MODEL,
+        messages: [{ role: 'user', content: attemptPrompt }],
+        temperature: temperature,
+        max_tokens: attemptMaxTokens
+      });
+
+      const { content, finishReason } = await requestAI(body, timeoutMs);
+      const cleaned = sanitizeAIContent(content);
+
+      if (!cleaned || cleaned.length < 30) {
+        throw new Error(`Empty cleaned content raw=${previewAIContent(content)}`);
+      }
+      if (finishReason === 'length' && cleaned.length < 80) {
+        throw new Error('Truncated content');
+      }
+
+      console.log(`[AI][${label}] model=${MINIMAX_MODEL} attempt ${attempt}/${retries} ok in ${Date.now() - startAt}ms`);
+      return cleaned;
+    } catch (e) {
+      lastError = e;
+      console.log(`[AI][${label}] model=${MINIMAX_MODEL} attempt ${attempt}/${retries} failed: ${e.message}`);
+      if (attempt < retries) {
+        await sleep(400 * attempt);
+        continue;
+      }
+    }
+  }
+
+  throw lastError || new Error('AI request failed');
+}
+
 // ========== 生成故事（帶記憶）============
 async function generateStory(event, player, pet, previousChoice, memoryContext = '') {
+  const startedAt = Date.now();
   const location = player.location || '襄陽城';
   const playerName = player.name || '冒險者';
   const petName = pet?.name || '寵物';
@@ -169,7 +309,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   }[playerLang] || '請用繁體中文講述';
   
   // 記憶上下文
-  const memorySection = memoryContext ? `\n【玩家之前的足跡】\n${memoryContext}` : '';
+  const focusedMemory = summarizeContext(memoryContext, 220, 3);
+  const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
   
   const prompt = `你是Renaiss星球的說書人，講故事要有畫面感、節奏感。
 
@@ -186,7 +327,7 @@ ${memorySection}
 ${previousAction}
 
 【任務】
-${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼，故事長度適中（150-300字）。要點：
+${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼，故事長度適中（120-220字）。要點：
 1. 有具體的場景（光線、聲音、氣味、溫度、觸感）
 2. 有NPC或環境的互動
 3. 有Renaiss星球的科幻與奇幻元素
@@ -196,20 +337,31 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 直接開始講：`;
 
   try {
-    const story = await callAI(prompt, 0.95);
+    const story = await callAI(prompt, 0.95, {
+      label: 'generateStory',
+      maxTokens: 1200,
+      timeoutMs: 22000,
+      retries: 2
+    });
     if (story && story.length > 50) {
+      if (story.length > 2000) {
+        return story.substring(0, 2000) + '...[故事過長已截斷]';
+      }
+      console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
       return story;
     }
   } catch (e) {
     console.error('[Storyteller] AI失敗:', e.message);
   }
   
-  // 不使用模板！失敗就返回 null
-  return null;
+  const fallback = buildFallbackStory(player, pet, location, locDesc, previousAction, playerLang);
+  console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms (fallback)`);
+  return fallback;
 }
 
 // ========== AI 生成選項（帶風險標籤+更具體）============
 async function generateChoicesWithAI(player, pet, previousStory, memoryContext = '') {
+  const startedAt = Date.now();
   const location = player.location || '襄陽城';
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
   const petName = pet?.name || '寵物';
@@ -232,7 +384,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     'en': 'Please output in English'
   }[playerLang] || '請用繁體中文輸出';
   
-  const memorySection = memoryContext ? `\n【玩家之前的足跡】\n${memoryContext}` : '';
+  const focusedMemory = summarizeContext(memoryContext, 180, 2);
+  const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
   
   const prompt = `你是Renaiss星球的冒險策劃師，設計的選項要有創意、刺激！
 
@@ -245,7 +398,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 ${memorySection}
 
 【前面的故事】
-${previousStory.substring(0, 400)}...
+${String(previousStory || '').substring(0, 220)}...
 
 【任務】
 根據上面的故事，生成7個獨特的冒險選項。${langInstruction}。要求：
@@ -274,7 +427,12 @@ ${langInstruction}輸出7個選項，每行一個。例如：
 [❓有驚喜] 嘗試呼喚：看寵物感應到了什麼`;
 
   try {
-    const result = await callAI(prompt, 1.0);
+    const result = await callAI(prompt, 1.0, {
+      label: 'generateChoicesWithAI',
+      maxTokens: 700,
+      timeoutMs: 14000,
+      retries: 1
+    });
     
     const choices = [];
     const lines = result.split('\n').filter(line => line.trim());
@@ -317,18 +475,21 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     }
     
     if (choices.length >= 5) {
+      console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms`);
       return choices.slice(0, 7);
     }
   } catch (e) {
     console.error('[AI] 生成選項失敗:', e.message);
   }
   
-  // 不使用模板！失敗就返回空，讓調用方處理
-  return null;
+  const fallback = buildFallbackChoices(player, location, playerLang);
+  console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms (fallback)`);
+  return fallback;
 }
 
 // ========== 初始選項生成（開場用）============
 async function generateInitialChoices(player, pet) {
+  const startedAt = Date.now();
   const location = player.location || '襄陽城';
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
   const petName = pet?.name || '寵物';
@@ -381,7 +542,12 @@ ${langInstruction}輸出7個選項，每行一個。例如：
 [🔥高風險] 探索禁區：據說那裡有寶藏`;
 
   try {
-    const result = await callAI(prompt, 1.0);
+    const result = await callAI(prompt, 1.0, {
+      label: 'generateInitialChoices',
+      maxTokens: 700,
+      timeoutMs: 14000,
+      retries: 1
+    });
     
     const choices = [];
     const lines = result.split('\n').filter(line => line.trim());
@@ -406,14 +572,16 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     }
     
     if (choices.length >= 5) {
+      console.log(`[AI][generateInitialChoices] total ${Date.now() - startedAt}ms`);
       return choices.slice(0, 7);
     }
   } catch (e) {
     console.error('[AI] 生成開場選項失敗:', e.message);
   }
   
-  // 不使用模板！失敗就返回 null
-  return null;
+  const fallback = buildFallbackChoices(player, location, playerLang);
+  console.log(`[AI][generateInitialChoices] total ${Date.now() - startedAt}ms (fallback)`);
+  return fallback;
 }
 
 module.exports = {

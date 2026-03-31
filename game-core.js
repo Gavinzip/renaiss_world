@@ -511,6 +511,20 @@ const NPC_AGENTS = [
     memory: [] }
 ];
 let agents = NPC_AGENTS.map(a => ({ ...a, alive: true, exp: 0, party: null, status: "自由" }));
+
+function getNPCById(npcId) {
+  if (!npcId) return null;
+
+  const byId = agents.find(a => a.id === npcId);
+  if (byId) return byId;
+
+  const byName = agents.find(a => a.name === npcId);
+  if (byName) return byName;
+
+  const fallback = NPC_AGENTS.find(a => a.id === npcId || a.name === npcId);
+  return fallback || null;
+}
+
 // ============== 世界 Tick ==============
 async function worldTick(useAI, apiKey) {
   world.day++;
@@ -1082,7 +1096,6 @@ async function callAI(prompt, apiKey) {
   const data = JSON.stringify({
     model: 'MiniMax-M2.5',
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 250,
     temperature: 0.9
   });
   
@@ -1146,10 +1159,8 @@ function resetPlayerGame(playerId) {
   
   // 刪除寵物資料
   const petSystem = require('./pet-system');
-  const pet = petSystem.loadPet(playerId);
-  if (pet) {
-    petSystem.resetPet(pet);
-    petSystem.savePet(pet);
+  if (typeof petSystem.deletePetByOwner === 'function') {
+    petSystem.deletePetByOwner(playerId);
   }
   
   // 刪除記憶

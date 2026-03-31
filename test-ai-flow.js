@@ -50,6 +50,9 @@ async function runTest() {
 
   console.log('--- 測試 1: 初始故事生成 ---');
   const story1 = await STORY.generateStory(null, player, pet, null);
+  if (!story1) {
+    throw new Error('初始故事生成失敗（空內容）');
+  }
   console.log('故事1:', story1.substring(0, 100) + '...');
   console.log('長度:', story1.length, '字\n');
 
@@ -63,6 +66,9 @@ async function runTest() {
   CORE.savePlayer(player);
 
   const story2 = await STORY.generateStory(choices[0], player, pet, selectedChoice);
+  if (!story2) {
+    throw new Error('第二段故事生成失敗（空內容）');
+  }
   console.log('故事2:', story2.substring(0, 100) + '...');
   console.log('長度:', story2.length, '字\n');
 

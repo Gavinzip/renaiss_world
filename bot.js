@@ -58,6 +58,13 @@ const FOOD = require('./food-system');
 const STORY = require('./storyteller');
 const GACHA = require('./gacha-system');
 const WALLET = require('./wallet-system');
+const { ISLAND_MAP_TEXT, MAP_LOCATIONS } = require('./world-map');
+
+try {
+  CORE.loadWorld();
+} catch (e) {
+  console.log('[世界] 載入失敗:', e.message);
+}
 
 // ============== 翻譯文字 ==============
 const TEXT = {
@@ -129,6 +136,198 @@ function getPlayerTempData(userId, key) {
 
 function clearPlayerTempData(userId) {
   delete playerTempData[userId];
+}
+
+async function findMessageInChannel(channel, messageId) {
+  if (!channel || !messageId || typeof messageId !== 'string') return null;
+  if (!channel.messages) return null;
+  const cached = channel.messages.cache?.get(messageId);
+  if (cached) return cached;
+  try {
+    return await channel.messages.fetch(messageId);
+  } catch {
+    return null;
+  }
+}
+
+async function disableMessageComponents(channel, messageId) {
+  if (!messageId || messageId.startsWith('instant_')) return;
+  const msg = await findMessageInChannel(channel, messageId);
+  if (!msg) return;
+  await msg.edit({ components: [] }).catch(() => {});
+}
+
+function trackActiveGameMessage(player, channelId, messageId) {
+  if (!player) return;
+  player.activeThreadId = channelId || null;
+  player.activeMessageId = messageId || null;
+  CORE.savePlayer(player);
+}
+
+function shouldTriggerBattle(event, result) {
+  if (!event) return false;
+  if (result?.type === 'combat') return true;
+  if (event.action === 'fight') return true;
+  const tag = (event.tag || '').toString();
+  return tag.includes('⚔️會戰鬥');
+}
+
+function getBattleEnemyName(event, result) {
+  const explicit = result?.enemy?.name || event?.enemy?.name;
+  if (explicit) return explicit;
+  const fallback = ['哥布林', '狼人', '巫師學徒', '殭屍'];
+  return fallback[Math.floor(Math.random() * fallback.length)];
+}
+
+function buildEnemyForBattle(event, result, player) {
+  const level = Math.max(1, player?.level || 1);
+  const base = BATTLE.createEnemy(getBattleEnemyName(event, result), level);
+  const sourceEnemy = result?.enemy || event?.enemy || {};
+  const hp = sourceEnemy.hp || sourceEnemy.maxHp || base.hp;
+  const reward = sourceEnemy.reward || base.reward || { gold: [20, 40] };
+  const rewardGold = Array.isArray(reward.gold) ? reward.gold : [20, 40];
+  const enemy = {
+    ...base,
+    ...sourceEnemy,
+    id: sourceEnemy.id || sourceEnemy.name || base.name,
+    name: sourceEnemy.name || base.name,
+    hp: hp,
+    maxHp: sourceEnemy.maxHp || hp,
+    attack: sourceEnemy.attack || base.attack,
+    defense: sourceEnemy.defense ?? base.defense,
+    moves: sourceEnemy.moves || base.moves,
+    reward: { ...reward, gold: rewardGold },
+    isMonster: sourceEnemy.isMonster !== false
+  };
+  return enemy;
+}
+
+function pickBestMoveForAI(player, pet, enemy) {
+  const candidateMoves = (pet?.moves || []).filter(m => !(m?.effect && m.effect.flee));
+  if (candidateMoves.length === 0) return null;
+
+  let best = candidateMoves[0];
+  let bestScore = -1;
+  for (const move of candidateMoves) {
+    const dmg = BATTLE.calculatePlayerMoveDamage(move, player, pet);
+    const score = Math.max(1, (dmg.total || 0) - (enemy?.defense || 0));
+    if (score > bestScore) {
+      best = move;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function startLoadingAnimation(message, label = 'AI 說書人正在構思故事') {
+  if (!message) return () => {};
+
+  const frames = ['⏳', '⌛', '🌀'];
+  const phases = ['鋪陳場景', '安排角色互動', '生成分支選項', '補完世界細節'];
+  const startAt = Date.now();
+  let tick = 0;
+
+  message.edit({ content: `⏳ ${label}...（鋪陳場景）` }).catch(() => {});
+
+  const timer = setInterval(() => {
+    tick += 1;
+    const icon = frames[tick % frames.length];
+    const dots = '.'.repeat((tick % 3) + 1);
+    const elapsed = Math.floor((Date.now() - startAt) / 1000);
+    const phase = phases[tick % phases.length];
+    message.edit({ content: `${icon} ${label}${dots}（${phase}｜${elapsed}s）` }).catch(() => {});
+  }, 1500);
+
+  return () => clearInterval(timer);
+}
+
+const MAP_PAGE_SIZE = 8;
+
+function buildMapComponents(page, currentLocation) {
+  const maxPage = Math.max(0, Math.ceil(MAP_LOCATIONS.length / MAP_PAGE_SIZE) - 1);
+  const safePage = Math.max(0, Math.min(page, maxPage));
+  const start = safePage * MAP_PAGE_SIZE;
+  const pageLocations = MAP_LOCATIONS.slice(start, start + MAP_PAGE_SIZE);
+
+  const rows = [];
+  for (let i = 0; i < pageLocations.length; i += 4) {
+    const slice = pageLocations.slice(i, i + 4);
+    const buttons = slice.map((loc, idx) => {
+      const absoluteIdx = start + i + idx;
+      return new ButtonBuilder()
+        .setCustomId(`map_goto_${absoluteIdx}`)
+        .setLabel(loc.substring(0, 10))
+        .setStyle(loc === currentLocation ? ButtonStyle.Primary : ButtonStyle.Secondary);
+    });
+    rows.push(new ActionRowBuilder().addComponents(buttons));
+  }
+
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`map_page_${safePage - 1}`)
+        .setLabel('⬅️ 上一頁')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage <= 0),
+      new ButtonBuilder()
+        .setCustomId(`map_page_${safePage + 1}`)
+        .setLabel('下一頁 ➡️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage >= maxPage),
+      new ButtonBuilder().setCustomId('map_back_main').setLabel('🏠 返回冒險').setStyle(ButtonStyle.Success)
+    )
+  );
+
+  return { rows, safePage, maxPage };
+}
+
+async function showIslandMap(interaction, user, page = 0, notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+    } else {
+      await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+    }
+    return;
+  }
+
+  const { rows, safePage, maxPage } = buildMapComponents(page, player.location);
+  const mapDesc =
+    '```text\n' + ISLAND_MAP_TEXT + '\n```' +
+    `\n**目前位置：** @ ${player.location || '未知'}` +
+    `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
+    (notice ? `\n${notice}` : '');
+
+  const embed = new EmbedBuilder()
+    .setTitle('🗺️ Renaiss 群島海圖')
+    .setColor(0x4da6ff)
+    .setDescription(mapDesc);
+
+  if (interaction.isButton && interaction.isButton()) {
+    await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
+    if (interaction.message?.id) {
+      trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+    }
+    return;
+  }
+
+  if (interaction.deferred || interaction.replied) {
+    const msg = await interaction.followUp({ embeds: [embed], components: rows }).catch(() => null);
+    if (msg) trackActiveGameMessage(player, interaction.channel?.id, msg.id);
+  } else {
+    const msg = await interaction.reply({ embeds: [embed], components: rows }).catch(() => null);
+    if (msg) trackActiveGameMessage(player, interaction.channel?.id, msg.id);
+  }
+}
+
+function buildRetryGenerationComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('retry_story_generation').setLabel('🔄 重新生成').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('main_menu').setLabel('🏠 主選單').setStyle(ButtonStyle.Secondary)
+    )
+  ];
 }
 
 // ============== 語言文字取得 ==============
@@ -272,6 +471,7 @@ async function handleStart(interaction, user) {
   // Bug Fix: 新 thread 啟動時清除舊的 activeMessageId，避免新按鈕被判斷為過期
   if (player) {
     player.activeMessageId = null;
+    player.activeThreadId = null;
     CORE.savePlayer(player);
   }
 
@@ -325,32 +525,11 @@ async function handleStart(interaction, user) {
     return;
   }
   
-  // 沒有存檔 → 檢查錢包綁定
-  if (!WALLET.isWalletBound(user.id)) {
-    const embed = new EmbedBuilder()
-      .setTitle('💳 綁定你的 BSC 錢包')
-      .setColor(0xffd700)
-      .setDescription(`**${user.username}**，在開始你的 Renaiss 星球的冒險之前，需要先綁定你的 BSC 錢包來計算你的初始資產！\n\n**💰 資產規則：**`)
-      .addFields(
-        { name: '📊 < 1000 RNS', value: '1 隻寵物', inline: true },
-        { name: '📊 1000+ RNS', value: '2 隻寵物', inline: true },
-        { name: '📊 5000+ RNS', value: '3 隻寵物', inline: true }
-      )
-      .addFields({ name: '🔗 請粘貼你的 BSC 錢包地址', value: '（開頭為 0x，42個字符）', inline: false })
-      .setFooter({ text: '錢包只用於讀取資產，不會進行任何轉帳' });
-    
-    // 發送錢包绑定消息到 thread（带按钮触发 modal）
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('open_wallet_modal').setLabel('💳 綁定錢包').setStyle(ButtonStyle.Primary)
-    );
-    
-    setPlayerThread(user.id, thread.id);
-    await thread.send({ embeds: [embed], components: [row] });
-    return;
-  }
-  
-  // 有錢包但還沒讀取資產 → 讀取並創建角色（使用已創建的 thread）
-  const walletAssets = await WALLET.getPlayerWalletAssets(user.id);
+  // 沒有存檔：不強制綁錢包，可先開始遊戲、稍後再綁並即時入帳
+  const walletBound = WALLET.isWalletBound(user.id);
+  const walletNote = walletBound
+    ? '✅ 已綁定錢包：建立角色時會帶入目前錢包資產。'
+    : 'ℹ️ 尚未綁定錢包：你可以先玩，之後到設定綁定並即時入帳。';
   
   try {
     // 第一步：語言選擇
@@ -361,7 +540,8 @@ async function handleStart(interaction, user) {
       .addFields(
         { name: '🇹🇼 繁體中文', value: '繁體中文（台灣、香港）', inline: true },
         { name: '🇨🇳 簡體中文', value: '简体中文（中国）', inline: true },
-        { name: '🇺🇸 English', value: 'English (US/EU)', inline: true }
+        { name: '🇺🇸 English', value: 'English (US/EU)', inline: true },
+        { name: '💳 錢包狀態', value: walletNote, inline: false }
       );
     
     const langRow = new ActionRowBuilder().addComponents(
@@ -486,6 +666,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     await interaction.showModal(modal);
     return;
   }
+
+  if (customId === 'sync_wallet_now') {
+    await handleWalletSyncNow(interaction, user);
+    return;
+  }
   
   // ===== 錢包綁定 Modal =====
   if (customId === 'wallet_bind_modal') {
@@ -525,8 +710,13 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const player = CORE.loadPlayer(user.id);
     const pet = PET.loadPet(user.id);
     if (player && pet) {
+      if (player.battleState) {
+        player.battleState = null;
+        CORE.savePlayer(player);
+      }
       // 在 thread 裡用 sendMainMenuToThread，在外面用 showMainMenu
       if (interaction.channel?.isThread()) {
+        await interaction.deferUpdate().catch(() => {});
         await sendMainMenuToThread(interaction.channel, player, pet, interaction);
         await interaction.message.delete().catch(() => {});
       } else {
@@ -535,16 +725,25 @@ CLIENT.on('interactionCreate', async (interaction) => {
     }
     return;
   }
+
+  if (customId === 'retry_story_generation') {
+    const player = CORE.loadPlayer(user.id);
+    const pet = PET.loadPet(user.id);
+    if (!player || !pet || !interaction.channel?.isThread()) {
+      await interaction.reply({ content: '⚠️ 請在遊戲討論串中使用此按鈕。', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    await interaction.deferUpdate().catch(() => {});
+    await sendMainMenuToThread(interaction.channel, player, pet, interaction);
+    return;
+  }
   
   // ===== 設置 =====
   if (customId === 'open_settings') {
-    // ===== Bug 2 Fix: Clear old message's buttons when entering settings =====
     const player = CORE.loadPlayer(user.id);
-    if (player && player.activeMessageId && !player.activeMessageId.startsWith('instant_')) {
-      const oldMsg = interaction.channel?.messages?.cache?.get(player.activeMessageId);
-      if (oldMsg) {
-        oldMsg.edit({ components: [] }).catch(() => {});
-      }
+    if (player?.activeMessageId) {
+      await disableMessageComponents(interaction.channel, player.activeMessageId);
     }
     await showSettings(interaction, user);
     return;
@@ -609,22 +808,90 @@ CLIENT.on('interactionCreate', async (interaction) => {
     await showCharacter(interaction, user);
     return;
   }
+
+  if (customId === 'open_map') {
+    await showIslandMap(interaction, user, 0);
+    return;
+  }
+
+  if (customId.startsWith('map_page_')) {
+    const page = parseInt(customId.split('_')[2]);
+    await showIslandMap(interaction, user, Number.isNaN(page) ? 0 : page);
+    return;
+  }
+
+  if (customId.startsWith('map_goto_')) {
+    const idx = parseInt(customId.split('_')[2]);
+    if (Number.isNaN(idx) || idx < 0 || idx >= MAP_LOCATIONS.length) {
+      await interaction.reply({ content: '⚠️ 無效的地點按鈕。', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const targetLocation = MAP_LOCATIONS[idx];
+    player.location = targetLocation;
+    player.eventChoices = [];
+    player.currentStory = '';
+    CORE.addPlayerMemory(user.id, { type: '移動', content: `前往${targetLocation}` });
+    CORE.savePlayer(player);
+
+    const page = Math.floor(idx / MAP_PAGE_SIZE);
+    await showIslandMap(interaction, user, page, `✅ 你已航行至 **${targetLocation}**`);
+    return;
+  }
+
+  if (customId === 'map_back_main') {
+    const player = CORE.loadPlayer(user.id);
+    const pet = PET.loadPet(user.id);
+    if (!player || !pet || !interaction.channel?.isThread()) {
+      await interaction.reply({ content: '⚠️ 請回到遊戲討論串使用。', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    await interaction.deferUpdate().catch(() => {});
+    await sendMainMenuToThread(interaction.channel, player, pet, interaction);
+    await interaction.message.delete().catch(() => {});
+    return;
+  }
   
   // ===== 事件按鈕 =====
   if (customId.startsWith('event_')) {
-    // ===== Bug 1 Fix: Check if message ID matches active message =====
     const player = CORE.loadPlayer(user.id);
-    if (player && player.activeMessageId && interaction.message?.id !== player.activeMessageId) {
-      // Also check if it's from the same interaction channel
-      const oldActiveId = player.activeMessageId;
-      // Ignore if the old active ID starts with "instant_" (placeholder from instant path)
-      if (!oldActiveId.startsWith('instant_')) {
-        await interaction.reply({ content: '⚠️ 這個選項已過期，請使用 /start 重新開始', ephemeral: true });
-        return;
-      }
+    if (!player) {
+      await interaction.reply({ content: '⚠️ 找不到角色資料，請使用 /start 重新開始', ephemeral: true });
+      return;
+    }
+
+    if (player.activeThreadId && interaction.channelId !== player.activeThreadId) {
+      await interaction.reply({ content: '⚠️ 這是舊討論串，請到最新討論串操作。', ephemeral: true });
+      return;
+    }
+
+    if (
+      player.activeMessageId &&
+      !player.activeMessageId.startsWith('instant_') &&
+      interaction.message?.id !== player.activeMessageId
+    ) {
+      await interaction.reply({ content: '⚠️ 這個選項已過期，請點擊最新訊息中的選項。', ephemeral: true });
+      return;
     }
     const idx = parseInt(customId.split('_')[1]);
     await handleEvent(interaction, user, idx);
+    return;
+  }
+
+  if (customId === 'battle_mode_manual') {
+    await startManualBattle(interaction, user);
+    return;
+  }
+
+  if (customId === 'battle_mode_ai') {
+    await startAutoBattle(interaction, user);
     return;
   }
   
@@ -705,6 +972,29 @@ CLIENT.on('interactionCreate', async (interaction) => {
 });
 
 // ============== 錢包綁定 ==============
+async function syncWalletAndApplyNow(discordUserId) {
+  const assets = await WALLET.getPlayerWalletAssets(discordUserId);
+  if (!assets?.success || !assets.assets) {
+    throw new Error(assets?.reason || '無法讀取錢包資產');
+  }
+
+  WALLET.updatePendingRNS(discordUserId, assets.rns);
+  WALLET.updateWalletData(discordUserId, {
+    cardFMV: assets.assets.cardFMV,
+    cardCount: assets.assets.cardCount,
+    packTxCount: assets.assets.packTxCount,
+    packSpentUSDT: assets.assets.packSpentUSDT
+  });
+
+  const player = CORE.loadPlayer(discordUserId);
+  if (player) {
+    player.stats.財富 = assets.rns;
+    CORE.savePlayer(player);
+  }
+
+  return assets;
+}
+
 async function handleWalletBind(interaction, user) {
   const walletAddress = interaction.fields.getTextInputValue('wallet_address').trim();
   
@@ -714,74 +1004,89 @@ async function handleWalletBind(interaction, user) {
     await interaction.reply({ content: `❌ ${result.reason}`, ephemeral: true });
     return;
   }
-  
-  // 設置初始 pendingRNS 為 0，等背景掃描完成後更新
-  WALLET.updatePendingRNS(user.id, 0);
-  
-  // 立即顯示綁定成功，背景掃描開始
-  const embed = new EmbedBuilder()
-    .setTitle('✅ 錢包綁定成功！')
-    .setColor(0x00ff00)
-    .setDescription(`錢包地址：\`${result.address}\`\n\n📊 **正在掃描 Renaiss 卡牌價值...**\n\n⏳ 請點擊繼續，遊戲將即時開始！\n💰 掃描完成後（約2-5分鐘），RNS 會自動入帳到你的帳戶。`);
-  
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('continue_with_wallet').setLabel('🚀 繼續遊戲 →').setStyle(ButtonStyle.Primary)
-  );
-  
-  await interaction.update({ embeds: [embed], components: [row] });
-  
-  // 背景掃描錢包資產（不阻塞遊戲）
-  setImmediate(() => {
-    scanWalletBackground(user.id);
-  });
+
+  try {
+    const assets = await syncWalletAndApplyNow(user.id);
+    const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
+    const hasPlayer = Boolean(CORE.loadPlayer(user.id));
+    const cardInfo = assets.assets.cardCount > 0
+      ? `📦 卡片 FMV: $${assets.assets.cardFMV.toFixed(2)} USD (${assets.assets.cardCount} 張)\n`
+      : '📦 卡片 FMV: $0.00 USD (0 張)\n';
+
+    const embed = new EmbedBuilder()
+      .setTitle('✅ 錢包綁定完成，資產已即時入帳')
+      .setColor(0x00ff00)
+      .setDescription(
+        `錢包地址：\`${result.address}\`\n\n` +
+        `${cardInfo}` +
+        `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
+        `🎁 目前 RNS: ${assets.rns}\n` +
+        `🐾 可擁有寵物: ${maxPets} 隻\n\n` +
+        (hasPlayer ? '你可以直接回到主選單繼續冒險。' : '你可以繼續完成新手流程。')
+      );
+
+    const buttons = hasPlayer
+      ? new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId('open_profile').setLabel('💳 查看檔案').setStyle(ButtonStyle.Secondary)
+        )
+      : new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('continue_with_wallet').setLabel('🚀 繼續新手流程').setStyle(ButtonStyle.Primary)
+        );
+
+    await interaction.update({ embeds: [embed], components: [buttons] });
+  } catch (e) {
+    console.error(`[錢包] 綁定後同步失敗: ${e.message}`);
+    await interaction.update({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('⚠️ 錢包已綁定，但同步失敗')
+          .setColor(0xffa500)
+          .setDescription(`錢包地址：\`${result.address}\`\n\n錯誤：${e.message}\n請稍後再試，或聯絡管理員。`)
+      ],
+      components: []
+    });
+  }
 }
 
-// ============== 背景掃描錢包 ==============
-async function scanWalletBackground(discordUserId) {
+async function handleWalletSyncNow(interaction, user) {
   try {
-    console.log(`[錢包] 開始背景掃描: ${discordUserId}`);
-    
-    const assets = await WALLET.getPlayerWalletAssets(discordUserId);
-    
-    // 保存到錢包設定（用於下次快速讀取）
-    WALLET.updatePendingRNS(discordUserId, assets.rns);
-    WALLET.updateWalletData(discordUserId, {
-      cardFMV: assets.assets.cardFMV,
-      cardCount: assets.assets.cardCount,
-      packTxCount: assets.assets.packTxCount,
-      packSpentUSDT: assets.assets.packSpentUSDT
-    });
-    
-    // 更新玩家 RNS
-    const player = CORE.loadPlayer(discordUserId);
-    if (player) {
-      player.stats.財富 = assets.rns;
-      CORE.savePlayer(player);
-      console.log(`[錢包] ${discordUserId} RNS 已更新: ${assets.rns}`);
-      console.log(`[錢包] ${discordUserId} FMV: ${assets.assets.cardFMV}, 可擁有 ${WALLET.getMaxPetsByFMV(assets.assets.cardFMV)} 隻寵物`);
-      
-      // 如果用戶在線，發送通知
-      const threadId = getPlayerThread(discordUserId);
-      if (threadId) {
-        const thread = CLIENT.channels.cache.get(threadId);
-        if (thread) {
-          const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
-          const cardInfo = assets.assets.cardCount > 0 
-            ? `📦 卡片 FMV: $${assets.assets.cardFMV.toFixed(2)} USD (${assets.assets.cardCount}張)\n`
-            : '';
-          
-          thread.send({
-            embeds: [{
-              title: '💰 RNS 已入帳！',
-              color: 0x00ff00,
-              description: `背景掃描完成！\n\n${cardInfo}📊 開包數量: ${assets.assets.packTxCount} 次\n🎁 初始 RNS: ${assets.rns}\n🐾 可擁有寵物: ${maxPets} 隻\n\n*你可以繼續遊戲了！*`
-            }]
-          }).catch(() => {});
-        }
-      }
-    }
+    const assets = await syncWalletAndApplyNow(user.id);
+    const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
+    const cardInfo = assets.assets.cardCount > 0
+      ? `📦 卡片 FMV: $${assets.assets.cardFMV.toFixed(2)} USD (${assets.assets.cardCount} 張)\n`
+      : '📦 卡片 FMV: $0.00 USD (0 張)\n';
+
+    const embed = new EmbedBuilder()
+      .setTitle('🔄 錢包資產已同步')
+      .setColor(0x00c853)
+      .setDescription(
+        `${cardInfo}` +
+        `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
+        `🎁 目前 RNS: ${assets.rns}\n` +
+        `🐾 可擁有寵物: ${maxPets} 隻`
+      );
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success)
+    );
+
+    await interaction.update({ embeds: [embed], components: [row] });
   } catch (e) {
-    console.error(`[錢包] 背景掃描失敗: ${e.message}`);
+    await interaction.update({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('⚠️ 同步失敗')
+          .setColor(0xffa500)
+          .setDescription(`錯誤：${e.message}\n請稍後再試。`)
+      ],
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary)
+        )
+      ]
+    });
   }
 }
 
@@ -796,6 +1101,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // 檢查是否已有存檔
   const player = CORE.loadPlayer(user.id);
   if (player) {
+    await interaction.deferUpdate().catch(() => {});
     await showMainMenu(interaction, player, PET.loadPet(user.id));
     return;
   }
@@ -804,11 +1110,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
   await interaction.deferUpdate().catch(() => {});
   
   try {
-    // 讀取錢包資產
-    const assets = await WALLET.getPlayerWalletAssets(user.id);
-    
-    // 根據 RNS 計算初始金錢
-    const initialRns = assets.rns;
+    // 綁定時已即時同步，這裡直接讀 pendingRNS（避免重抓造成等待）
+    const initialRns = WALLET.getPendingRNS(user.id);
     
     const embed = new EmbedBuilder()
       .setTitle(`🌟 歡迎來到 Renaiss 星球！`)
@@ -1198,30 +1501,22 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
     );
     const components = [];
     for (let i = 0; i < buttons.length; i += 5) {
       components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
     }
     
-    // ===== Bug 1 Fix: Clear old message's buttons before sending new one =====
     const oldActiveId = player.activeMessageId;
     if (oldActiveId) {
-      const oldMsg = thread.messages.cache.get(oldActiveId);
-      if (oldMsg) {
-        oldMsg.edit({ components: [] }).catch(() => {});
-      }
+      await disableMessageComponents(thread, oldActiveId);
     }
-    
-    await thread.send({ embeds: [embed], components }).catch(() => {});
 
-    // ===== Bug 1 Fix: Track new active message ID =====
-    // For the instant path (showing cached story+choices), we use a timestamp approach
-    // to track this message as active. The loadingMsg path below has proper tracking.
-    if (!player.activeMessageId) {
-      player.activeMessageId = `instant_${Date.now()}`;
-      CORE.savePlayer(player);
+    const sentMsg = await thread.send({ embeds: [embed], components }).catch(() => null);
+    if (sentMsg) {
+      trackActiveGameMessage(player, thread.id, sentMsg.id);
     }
     return;
   }
@@ -1232,7 +1527,13 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   if (!player.eventChoices || player.eventChoices.length === 0) {
     const aiChoices = await STORY.generateInitialChoices(player, pet);
     if (!aiChoices || aiChoices.length === 0) {
-      thread.send({ content: '❌ AI 選項生成失敗，請稍後再試 /start' }).catch(() => {});
+      const failMsg = await thread.send({
+        content: '❌ AI 選項生成失敗，請點「重新生成」再試。',
+        components: buildRetryGenerationComponents()
+      }).catch(() => null);
+      if (failMsg) {
+        trackActiveGameMessage(player, thread.id, failMsg.id);
+      }
       return;
     }
     player.eventChoices = aiChoices;
@@ -1275,7 +1576,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
   );
   
   const components = [];
@@ -1285,53 +1587,67 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   
   // 發送 Loading 訊息到 thread
   const loadingMsg = await thread.send({ embeds: [loadingEmbed], components });
-
-  // ===== Bug 1 Fix: Track this loading message as the active message =====
-  player.activeMessageId = loadingMsg.id;
-  CORE.savePlayer(player);
+  trackActiveGameMessage(player, thread.id, loadingMsg.id);
+  const stopLoadingAnimation = startLoadingAnimation(loadingMsg, 'AI 說書人正在構思故事');
 
   // 如果有 interaction（按鈕觸發），立即確認避免超時
   if (interaction) {
     await interaction.deferUpdate().catch(() => {});
   }
   
-  // 背景 AI 生成故事和選項，完成後發送新訊息
-  STORY.generateStory(null, player, pet, null).then(storyText => {
-    if (!storyText) {
-      thread.send({ content: '❌ AI 故事生成失敗，請稍後再試' }).catch(() => {});
-      return;
-    }
-    console.log('[AI] 故事生成成功，長度:', storyText.length);
-    
-    // ===== Bug 1 Fix: Clear old active message's buttons before editing with new content =====
-    const oldActiveId = player.activeMessageId;
-    if (oldActiveId && oldActiveId !== loadingMsg.id) {
-      const oldMsg = thread.messages.cache.get(oldActiveId);
-      if (oldMsg) {
-        oldMsg.edit({ components: [] }).catch(() => {});
-      }
-    }
-    
-    // 根據故事生成新選項
-    return STORY.generateChoicesWithAI(player, pet, storyText, '').then(newChoices => {
-      if (!newChoices || newChoices.length === 0) {
-        console.log('[AI] 選項生成失敗');
-        thread.send({ content: '❌ AI 選項生成失敗，請稍後再試' }).catch(() => {});
+  // 背景 AI 生成：先出故事，再補按鈕
+  (async () => {
+    try {
+      const storyText = await STORY.generateStory(null, player, pet, null);
+      if (!storyText) {
+        stopLoadingAnimation();
+        await loadingMsg.edit({
+          content: '❌ AI 故事生成失敗，請點「重新生成」再試。',
+          embeds: [],
+          components: buildRetryGenerationComponents()
+        }).catch(() => {});
+        trackActiveGameMessage(player, thread.id, loadingMsg.id);
         return;
       }
-      
+
+      player.currentStory = storyText;
+      player.eventChoices = [];
+      CORE.savePlayer(player);
+
+      const storyFirstDesc =
+        `**狀態：【${statusBar}】**\n\n${storyText}\n\n` +
+        `⏳ *故事已送達，正在生成選項...*`;
+
+      const storyFirstEmbed = new EmbedBuilder()
+        .setTitle(`⚔️ ${player.name} - ${pet.name}`)
+        .setColor(0x00ff00)
+        .setDescription(storyFirstDesc);
+
+      stopLoadingAnimation();
+      await loadingMsg.edit({ content: null, embeds: [storyFirstEmbed], components: [] }).catch(() => {});
+      trackActiveGameMessage(player, thread.id, loadingMsg.id);
+
+      const newChoices = await STORY.generateChoicesWithAI(player, pet, storyText, '');
+      if (!newChoices || newChoices.length === 0) {
+        await loadingMsg.edit({
+          content: '⚠️ 故事已生成，但選項生成失敗，請點「重新生成」。',
+          embeds: [storyFirstEmbed],
+          components: buildRetryGenerationComponents()
+        }).catch(() => {});
+        trackActiveGameMessage(player, thread.id, loadingMsg.id);
+        return;
+      }
+
       player.eventChoices = newChoices;
       CORE.savePlayer(player);
-      
-      // 構建新選項文字
+
       let newOptionsText = '';
       newChoices.slice(0, 7).forEach((c, i) => {
         const tag = c.tag || '';
         const text = c.choice || c.name || '';
         newOptionsText += `\n${i+1}. ${tag} ${text}`;
       });
-      
-      // 構建新按鈕
+
       const newButtons = newChoices.slice(0, 7).map((c, i) => {
         const label = ((c.tag || '') + ' ' + (c.name || `${i+1}`)).substring(0, 20).trim();
         return new ButtonBuilder()
@@ -1344,88 +1660,52 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
       );
-      
+
       const newComponents = [];
       for (let i = 0; i < newButtons.length; i += 5) {
         newComponents.push(new ActionRowBuilder().addComponents(newButtons.slice(i, i + 5)));
       }
-      
+
       const aiDesc = `**狀態：【${statusBar}】**\n\n${storyText}\n\n**🆕 新選項：**${newOptionsText}\n\n_請選擇編號（1-7）_`;
-      
+
       const aiEmbed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
         .setColor(0x00ff00)
         .setDescription(aiDesc);
-      
-      // 發送新訊息到 thread
-      thread.send({ embeds: [aiEmbed], components: newComponents }).catch(e => console.log('[發送錯誤]', e.message));
-      
-      // ===== Bug 1 Fix: Update active message ID to the new message =====
-      // Note: We can't get the sent message ID reliably here since thread.send()
-      // doesn't return the message object in this context. The loadingMsg.id
-      // remains the active ID, which is fine since we edited that message anyway.
-    });
-  }).catch(err => {
-    console.log('[AI] 故事生成失敗:', err.message);
-    thread.send({ content: `❌ AI 失敗：${err.message}` }).catch(() => {});
-  });
+
+      await loadingMsg.edit({ content: null, embeds: [aiEmbed], components: newComponents }).catch(e => console.log('[發送錯誤]', e.message));
+      trackActiveGameMessage(player, thread.id, loadingMsg.id);
+    } catch (err) {
+      stopLoadingAnimation();
+      console.log('[AI] 故事生成失敗:', err.message);
+      await loadingMsg.edit({
+        content: `❌ AI 失敗：${err.message}\n請點「重新生成」再試。`,
+        embeds: [],
+        components: buildRetryGenerationComponents()
+      }).catch(() => {});
+      trackActiveGameMessage(player, thread.id, loadingMsg.id);
+    }
+  })();
   
   return;
 }
 
 // ============== 主選單 ===============
 async function showMainMenu(interaction, player, pet) {
-  choices.slice(0, 7).forEach((choice, i) => {
-    const text = choice.choice || choice.name;
-    optionsText += `\n${i+1}. ${text}`;
-  });
-  
-  const description = `**狀態：【${statusBar}】**\n\n${openingNarrative}\n\n**選項：**${optionsText}\n\n_請選擇編號（1-7）_`;
-  
-  const embed = new EmbedBuilder()
-    .setTitle(`⚔️ ${player.name} - ${pet.name}`)
-    .setColor(player.alignment === '正派' ? 0x00ff00 : 0xff0000)
-    .setDescription(description)
-    .addFields(
-      { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
-      { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
-      { name: '💰 Rns', value: String(player.stats.財富), inline: true }
-    )
-    .addFields(
-      { name: '📍 位置', value: player.location, inline: true },
-      { name: '🌟 幸運', value: String(player.stats.運氣), inline: true },
-      { name: '📊 等級', value: String(player.level), inline: true }
-    );
-  
-  // ===== 生成7個數字按鈕 =====
-  const buttons = choices.slice(0, 7).map((choice, i) => {
-    return new ButtonBuilder()
-      .setCustomId(`event_${i}`)
-      .setLabel(`${i+1}`)
-      .setStyle(ButtonStyle.Primary);
-  });
-  
-  // ===== 底部快捷欄 =====
-  buttons.push(
-    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
-  );
-  
-  // 每行最多5個
-  const components = [];
-  for (let i = 0; i < buttons.length; i += 5) {
-    components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+  if (interaction.channel?.isThread()) {
+    await sendMainMenuToThread(interaction.channel, player, pet, interaction);
+    return;
   }
-  
-  const sentMsg = await interaction.reply({ embeds: [embed], components });
-  // Bug 1 fix: track the new message ID so old buttons are rejected
-  player.activeMessageId = sentMsg.id;
-  CORE.savePlayer(player);
+
+  const msg = '⚠️ 請使用 /start 開啟你的遊戲討論串，再繼續冒險。';
+  if (interaction.deferred || interaction.replied) {
+    await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
+  } else {
+    await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+  }
 }
 
 // ============== 設置選單 ==============
@@ -1433,13 +1713,14 @@ async function showSettings(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const currentLang = player?.language || 'zh-TW';
   const langName = currentLang === 'zh-TW' ? '中文（繁體）' : currentLang === 'en' ? 'English' : '中文（繁體）';
+  const walletBound = WALLET.isWalletBound(user.id);
+  const walletData = WALLET.getWalletData(user.id);
+  const walletStatus = walletBound
+    ? `已綁定：\`${walletData?.walletAddress || 'unknown'}\``
+    : '未綁定（可中途綁定，立即入帳）';
   
-  // ===== Bug 2 Fix: Clear old active message's buttons when entering settings =====
-  if (player && player.activeMessageId && !player.activeMessageId.startsWith('instant_')) {
-    const oldMsg = interaction.channel?.messages?.cache?.get(player.activeMessageId);
-    if (oldMsg) {
-      oldMsg.edit({ components: [] }).catch(() => {});
-    }
+  if (player?.activeMessageId) {
+    await disableMessageComponents(interaction.channel, player.activeMessageId);
   }
   
   const embed = new EmbedBuilder()
@@ -1447,13 +1728,18 @@ async function showSettings(interaction, user) {
     .setColor(0x0099ff)
     .setDescription('遊戲設置')
     .addFields(
-      { name: '🌐 語言 / Language', value: `目前：${langName}`, inline: false }
+      { name: '🌐 語言 / Language', value: `目前：${langName}`, inline: false },
+      { name: '💳 錢包', value: walletStatus, inline: false }
     );
   
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('lang_zh-TW').setLabel('🇹🇼 繁體中文').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('lang_zh-CN').setLabel('🇨🇳 簡體中文').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(walletBound ? 'sync_wallet_now' : 'open_wallet_modal')
+      .setLabel(walletBound ? '🔄 同步資產' : '💳 綁定錢包')
+      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary)
   );
   
@@ -1821,6 +2107,7 @@ async function handleEvent(interaction, user, eventIndex) {
   
   // 執行事件
   const result = EVENTS.executeEvent(event, player);
+  const selectedChoice = event.choice || event.name || '未知選擇';
   
   // 減少飽腹度
   player.stats.飽腹度 = Math.max(0, (player.stats.飽腹度 || 100) - Math.floor(Math.random() * 5 + 3));
@@ -1829,11 +2116,46 @@ async function handleEvent(interaction, user, eventIndex) {
   player.eventChoices = [];
   
   // 加入記憶
-  const selectedChoice = event.choice || event.name || '未知選擇';
   CORE.addPlayerMemory(user.id, {
     type: event.tag ? '行動' : '選擇',
     content: selectedChoice
   });
+
+  if (shouldTriggerBattle(event, result)) {
+    const enemy = buildEnemyForBattle(event, result, player);
+    player.battleState = {
+      enemy,
+      mode: null,
+      fleeAttempts: 0,
+      startedAt: Date.now(),
+      sourceChoice: selectedChoice
+    };
+    player.currentStory = result?.message || event?.desc || `${selectedChoice}`;
+    CORE.savePlayer(player);
+
+    await interaction.deferUpdate().catch(() => {});
+
+    const embed = new EmbedBuilder()
+      .setTitle(`⚔️ ${player.name} - ${pet.name}`)
+      .setColor(0xff6600)
+      .setDescription(
+        `**戰鬥即將開始！**\n\n${player.currentStory}\n\n` +
+        `👹 敵人：**${enemy.name}**\n` +
+        `❤️ 敵方 HP：${enemy.hp}/${enemy.maxHp}\n` +
+        `⚔️ 敵方攻擊：${enemy.attack}\n\n` +
+        `請選擇戰鬥模式：`
+      );
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('battle_mode_manual').setLabel('⚔️ 手動戰鬥').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 AI戰鬥').setStyle(ButtonStyle.Primary)
+    );
+
+    const battlePromptMsg = await interaction.channel.send({ embeds: [embed], components: [row] });
+    trackActiveGameMessage(player, interaction.channel?.id, battlePromptMsg.id);
+    await disableMessageComponents(interaction.channel, interaction.message?.id);
+    return;
+  }
   
   CORE.savePlayer(player);
   
@@ -1866,133 +2188,134 @@ async function handleEvent(interaction, user, eventIndex) {
     }]
   });
 
-  // ===== Bug 1 Fix: Track this loading message as active =====
-  player.activeMessageId = loadingMsg.id;
-  CORE.savePlayer(player);
+  trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+  const stopLoadingAnimation = startLoadingAnimation(loadingMsg, 'AI 說書人正在構思新故事');
   
-  // 背景 AI 生成故事和選項
-  STORY.generateStory(event, player, pet, event, memoryContext).then(storyText => {
-    if (!storyText) {
-      return { storyText: null, aiChoices: null };
-    }
-    return STORY.generateChoicesWithAI(player, pet, storyText, memoryContext).then(aiChoices => {
-      return { storyText, aiChoices };
-    }).catch(err => {
-      console.log('[AI] 選項生成失敗:', err.message);
-      return { storyText, aiChoices: null };
-    });
-  }).then(({ storyText, aiChoices }) => {
-    // AI 失敗時顯示錯誤
-    if (!storyText || !aiChoices || aiChoices.length === 0) {
-      loadingMsg.edit({
-        content: `❌ AI 生成失敗，請稍後再試`
-      }).catch(() => {});
-      return;
-    }
-    
-    // ============================================================
-    //  continuity 關鍵：儲存 currentStory + eventChoices
-    // ============================================================
-    player.currentStory = storyText;
-    player.eventChoices = aiChoices;
-    CORE.savePlayer(player);
-    
-    const newChoices = player.eventChoices;
-    
-    // 構建新選項文字（帶標籤）
-    let optionsText = '';
-    newChoices.slice(0, 7).forEach((c, i) => {
-      const tag = c.tag || '';
-      const text = (c.choice || c.name || '').toString();
-      if (text && text !== 'true' && text !== 'false') {
-        optionsText += `\n${i+1}. ${tag} ${text}`;
+  // 背景 AI 生成：先出故事，再補按鈕
+  (async () => {
+    try {
+      const storyText = await STORY.generateStory(event, player, pet, event, memoryContext);
+      if (!storyText) {
+        stopLoadingAnimation();
+        await loadingMsg.edit({
+          content: '❌ AI 生成失敗，請點「重新生成」再試。',
+          embeds: [],
+          components: buildRetryGenerationComponents()
+        }).catch(() => {});
+        trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+        return;
       }
-    });
-    
-    // 構建獎勵文字
-    const rewardText = [];
-    if (result.gold) rewardText.push(`💰 +${result.gold} Rns`);
-    if (result.wantedLevel) rewardText.push(`⚠️ 通緝等级: ${result.wantedLevel}`);
-    
-    // 世界事件
-    const worldEvents = CORE.getRecentWorldEvents(3);
-    let worldEventsText = '';
-    if (worldEvents.length > 0) {
-      worldEventsText = '\n\n📢 **世界事件：**\n' + worldEvents.map(e => e.message || e).join('\n');
-    }
-    
-    const description = `**📍 上個選擇：** ${selectedChoice}\n\n${storyText}${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}${worldEventsText}\n\n**🆕 新選項：**${optionsText}\n\n_請選擇編號（1-7）_`;
-    
-    const embed = new EmbedBuilder()
-      .setTitle(`⚔️ ${player.name} - ${pet.name}`)
-      .setColor(player.alignment === '正派' ? 0x00ff00 : 0xff0000)
-      .setDescription(description)
-      .addFields(
-        { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
-        { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
-        { name: '💰 Rns', value: String(player.stats.財富), inline: true }
+
+      player.currentStory = storyText;
+      player.eventChoices = [];
+      CORE.savePlayer(player);
+
+      const rewardText = [];
+      if (result.gold) rewardText.push(`💰 +${result.gold} Rns`);
+      if (result.wantedLevel) rewardText.push(`⚠️ 通緝等级: ${result.wantedLevel}`);
+
+      const worldEvents = CORE.getRecentWorldEvents(3);
+      let worldEventsText = '';
+      if (worldEvents.length > 0) {
+        worldEventsText = '\n\n📢 **世界事件：**\n' + worldEvents.map(e => e.message || e).join('\n');
+      }
+
+      const storyOnlyDesc =
+        `**📍 上個選擇：** ${selectedChoice}\n\n${storyText}` +
+        `${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}` +
+        `${worldEventsText}\n\n⏳ *故事已送達，正在生成選項...*`;
+
+      const storyOnlyEmbed = new EmbedBuilder()
+        .setTitle(`⚔️ ${player.name} - ${pet.name}`)
+        .setColor(player.alignment === '正派' ? 0x00ff00 : 0xff0000)
+        .setDescription(storyOnlyDesc)
+        .addFields(
+          { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
+          { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
+          { name: '💰 Rns', value: String(player.stats.財富), inline: true }
+        );
+
+      stopLoadingAnimation();
+      await loadingMsg.edit({ content: null, embeds: [storyOnlyEmbed], components: [] }).catch(() => {});
+      trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+
+      const aiChoices = await STORY.generateChoicesWithAI(player, pet, storyText, memoryContext);
+      if (!aiChoices || aiChoices.length === 0) {
+        await loadingMsg.edit({
+          content: '⚠️ 故事已生成，但選項生成失敗，請點「重新生成」。',
+          embeds: [storyOnlyEmbed],
+          components: buildRetryGenerationComponents()
+        }).catch(() => {});
+        trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+        return;
+      }
+
+      player.eventChoices = aiChoices;
+      CORE.savePlayer(player);
+
+      const newChoices = player.eventChoices;
+      let optionsText = '';
+      newChoices.slice(0, 7).forEach((c, i) => {
+        const tag = c.tag || '';
+        const text = (c.choice || c.name || '').toString();
+        if (text && text !== 'true' && text !== 'false') {
+          optionsText += `\n${i+1}. ${tag} ${text}`;
+        }
+      });
+
+      const description = `**📍 上個選擇：** ${selectedChoice}\n\n${storyText}${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}${worldEventsText}\n\n**🆕 新選項：**${optionsText}\n\n_請選擇編號（1-7）_`;
+
+      const embed = new EmbedBuilder()
+        .setTitle(`⚔️ ${player.name} - ${pet.name}`)
+        .setColor(player.alignment === '正派' ? 0x00ff00 : 0xff0000)
+        .setDescription(description)
+        .addFields(
+          { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
+          { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
+          { name: '💰 Rns', value: String(player.stats.財富), inline: true }
+        );
+
+      const buttons = newChoices.slice(0, 7).map((c, i) => {
+        const label = (c.choice || c.name || `選項${i+1}`).toString();
+        return new ButtonBuilder()
+          .setCustomId(`event_${i}`)
+          .setLabel(label.substring(0, 20))
+          .setStyle(ButtonStyle.Primary);
+      });
+      buttons.push(
+        new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
       );
-    
-    // 生成按鈕
-    const buttons = newChoices.slice(0, 7).map((c, i) => {
-      const label = (c.choice || c.name || `選項${i+1}`).toString();
-      return new ButtonBuilder()
-        .setCustomId(`event_${i}`)
-        .setLabel(label.substring(0, 20)) // 限制長度
-        .setStyle(ButtonStyle.Primary);
-    });
-    buttons.push(
-      new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary)
-    );
-    
-    const components = [];
-    for (let i = 0; i < buttons.length; i += 5) {
-      components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+
+      const components = [];
+      for (let i = 0; i < buttons.length; i += 5) {
+        components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+      }
+
+      await loadingMsg.edit({ content: null, embeds: [embed], components }).catch(() => {});
+      trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+    } catch (err) {
+      stopLoadingAnimation();
+      console.error('[事件] 處理失敗:', err);
+      await loadingMsg.edit({
+        content: '❌ 事件處理失敗，請點「重新生成」再試。',
+        embeds: [],
+        components: buildRetryGenerationComponents()
+      }).catch(() => {});
+      trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
     }
-    
-    // 編輯原來的 loading 訊息為新內容
-    loadingMsg.edit({ content: null, embeds: [embed], components }).catch(() => {});
-  }).catch((err) => {
-    console.error('[事件] 處理失敗:', err);
-    // 失敗時用模板並編輯 loading 訊息
-    player.eventChoices = EVENTS.generateEventChoices(player, {});
-    CORE.savePlayer(player);
-  });
+  })();
   
   return;
 }
 
 // ============== 戰鬥 ==============
-async function handleFight(interaction, user) {
-  const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
-  
-  if (!pet || pet.moves.length === 0) {
-    await interaction.update({ content: '❌ 沒有招式！', components: [] });
-    return;
-  }
-  
-  const enemy = BATTLE.createEnemy('哥布林', 1);
-  
-  const moveButtons = pet.moves.slice(0, 4).map((m, i) => {
-    const d = BATTLE.calculatePlayerMoveDamage(m, player, pet);
-    return new ButtonBuilder()
-      .setCustomId(`use_move_${i}`)
-      .setLabel(`${m.name} (${d.total})`)
-      .setStyle(ButtonStyle.Danger);
-  });
-  
-  const moveRow = new ActionRowBuilder().addComponents(moveButtons);
-  const actionRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('flee_0').setLabel(`${t('flee')} (70%×2)`).setStyle(ButtonStyle.Secondary)
-  );
-  
-  // 詳細招式資訊
-  const dmgInfo = pet.moves.map(m => {
+function buildBattleMoveDetails(player, pet) {
+  return (pet.moves || []).filter(m => !(m?.effect && m.effect.flee)).map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, player, pet);
     let effectStr = '';
     if (m.effect.burn) effectStr += `燃燒${m.effect.burn}回合 `;
@@ -2003,37 +2326,226 @@ async function handleFight(interaction, user) {
     if (m.effect.shield) effectStr += `護盾${m.effect.shield}回合 `;
     if (m.effect.heal) effectStr += `治療${m.effect.heal} `;
     if (m.effect.drain) effectStr += `吸血${m.effect.drain} `;
-    return `⚔️ ${m.name} | ${d.total}dmg | ${effectStr || '無'}`;
+    return `⚔️ ${m.name} | ${d.total} dmg | ${effectStr || '無'}`;
   }).join('\n');
-  
+}
+
+function buildBattleActionRows(player, pet) {
+  const battleState = player.battleState || {};
+  const indexedMoves = (pet.moves || [])
+    .map((m, i) => ({ move: m, index: i }))
+    .filter(({ move }) => !(move?.effect && move.effect.flee))
+    .slice(0, 4);
+
+  const moveButtons = indexedMoves.map(({ move, index }) => {
+    const m = move;
+    const d = BATTLE.calculatePlayerMoveDamage(m, player, pet);
+    return new ButtonBuilder()
+      .setCustomId(`use_move_${index}`)
+      .setLabel(`${m.name} (${d.total})`)
+      .setStyle(ButtonStyle.Danger);
+  });
+
+  const moveRow = new ActionRowBuilder().addComponents(
+    moveButtons.length > 0
+      ? moveButtons
+      : [new ButtonBuilder().setCustomId('no_attack_moves').setLabel('無可用攻擊招式').setStyle(ButtonStyle.Secondary).setDisabled(true)]
+  );
+  const fleeTry = battleState.fleeAttempts || 0;
+  const actionRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`flee_${fleeTry}`).setLabel(`${t('flee')} (70%×2)`).setStyle(ButtonStyle.Secondary)
+  );
+  return [moveRow, actionRow];
+}
+
+async function renderManualBattle(interaction, player, pet, roundMessage = '') {
+  const enemy = player?.battleState?.enemy;
+  if (!enemy) {
+    await interaction.update({ content: '❌ 找不到戰鬥狀態，請重新選擇戰鬥。', components: [] });
+    return;
+  }
+
+  if (interaction.message?.id) {
+    trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+  }
+
+  const [moveRow, actionRow] = buildBattleActionRows(player, pet);
+  const dmgInfo = buildBattleMoveDetails(player, pet);
+  const roundText = roundMessage ? `\n\n${roundMessage}\n` : '\n';
+
   await interaction.update({
-    content: `⚔️ **戰鬥！${enemy.name}**\n\n敵人 HP: ${enemy.hp} | ATK: ${enemy.attack}\n你的 ${pet.name} HP: ${pet.hp}\n\n**招式：**\n${dmgInfo}`,
+    content:
+      `⚔️ **戰鬥中：${pet.name} vs ${enemy.name}**${roundText}\n` +
+      `敵人 HP: ${enemy.hp}/${enemy.maxHp} | ATK: ${enemy.attack}\n` +
+      `你的 ${pet.name} HP: ${pet.hp}/${pet.maxHp}\n\n` +
+      `**招式：**\n${dmgInfo}`,
+    embeds: [],
     components: [moveRow, actionRow]
   });
+}
+
+async function startManualBattle(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const pet = PET.loadPet(user.id);
+  if (!player || !pet || !pet.moves || pet.moves.length === 0) {
+    await interaction.update({ content: '❌ 沒有可用招式，無法開始戰鬥。', components: [] });
+    return;
+  }
+
+  if (!player.battleState?.enemy) {
+    player.battleState = {
+      enemy: BATTLE.createEnemy('哥布林', Math.max(1, player.level || 1)),
+      mode: 'manual',
+      fleeAttempts: 0,
+      startedAt: Date.now(),
+      sourceChoice: '突發戰鬥'
+    };
+  } else {
+    player.battleState.mode = 'manual';
+  }
+
+  CORE.savePlayer(player);
+  await handleFight(interaction, user);
+}
+
+async function startAutoBattle(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const pet = PET.loadPet(user.id);
+  if (!player || !pet || !pet.moves || pet.moves.length === 0) {
+    await interaction.update({ content: '❌ 沒有可用招式，無法開始 AI 戰鬥。', components: [] });
+    return;
+  }
+
+  if (!player.battleState?.enemy) {
+    player.battleState = {
+      enemy: BATTLE.createEnemy('哥布林', Math.max(1, player.level || 1)),
+      mode: 'ai',
+      fleeAttempts: 0,
+      startedAt: Date.now(),
+      sourceChoice: '突發戰鬥'
+    };
+  } else {
+    player.battleState.mode = 'ai';
+  }
+
+  const enemy = player.battleState.enemy;
+  const logs = [];
+  let finalResult = null;
+  const maxTurns = 12;
+
+  for (let turn = 1; turn <= maxTurns; turn++) {
+    const aiMove = pickBestMoveForAI(player, pet, enemy);
+    if (!aiMove) break;
+    const enemyMove = BATTLE.enemyChooseMove(enemy);
+    const roundResult = BATTLE.executeBattleRound(player, pet, enemy, aiMove, enemyMove);
+    logs.push(`**第 ${turn} 回合**\n${roundResult.message}`);
+    if (roundResult.victory !== null) {
+      finalResult = roundResult;
+      break;
+    }
+  }
+
+  PET.savePet(pet);
+
+  if (finalResult?.victory === true) {
+    player.stats.財富 += finalResult.gold;
+    player.battleState = null;
+    CORE.savePlayer(player);
+
+    const embed = new EmbedBuilder()
+      .setTitle('🤖 AI戰鬥勝利！')
+      .setColor(0x00cc66)
+      .setDescription(
+        `**AI 已完成自動作戰**\n\n` +
+        `${logs.join('\n\n')}\n\n` +
+        `${finalResult.message}`
+      )
+      .addFields(
+        { name: '💰 獎勵', value: `${finalResult.gold} Rns`, inline: true },
+        { name: '🐾 剩餘 HP', value: `${pet.hp}/${pet.maxHp}`, inline: true }
+      );
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+    );
+
+    await interaction.update({ embeds: [embed], content: null, components: [row] });
+    return;
+  }
+
+  if (finalResult?.victory === false || pet.hp <= 0) {
+    player.battleState = null;
+    CORE.savePlayer(player);
+
+    const embed = new EmbedBuilder()
+      .setTitle('💀 AI戰鬥失敗...')
+      .setColor(0xff0000)
+      .setDescription(`${logs.join('\n\n')}\n\n你的旅程就此結束...`);
+
+    CORE.resetPlayerGame(user.id);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('choose_positive').setLabel('🔄 重新開始').setStyle(ButtonStyle.Danger)
+    );
+
+    await interaction.update({ embeds: [embed], content: null, components: [row] });
+    return;
+  }
+
+  player.battleState.enemy = enemy;
+  CORE.savePlayer(player);
+  await renderManualBattle(interaction, player, pet, logs.join('\n\n'));
+}
+
+async function handleFight(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const pet = PET.loadPet(user.id);
+
+  if (!player || !pet || !pet.moves || pet.moves.length === 0) {
+    await interaction.update({ content: '❌ 沒有招式！', components: [] });
+    return;
+  }
+
+  if (!player.battleState?.enemy) {
+    player.battleState = {
+      enemy: BATTLE.createEnemy('哥布林', Math.max(1, player.level || 1)),
+      mode: 'manual',
+      fleeAttempts: 0,
+      startedAt: Date.now(),
+      sourceChoice: '突發戰鬥'
+    };
+    CORE.savePlayer(player);
+  }
+
+  await renderManualBattle(interaction, player, pet);
 }
 
 // ============== 使用招式 ==============
 async function handleUseMove(interaction, user, moveIndex) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
-  const enemy = BATTLE.createEnemy('哥布林', 1);
-  
-  if (!pet || !pet.moves[moveIndex]) {
+  const enemy = player?.battleState?.enemy;
+
+  if (!player || !pet || !enemy || !pet.moves[moveIndex]) {
     await interaction.update({ content: '❌ 招式不存在！', components: [] });
     return;
   }
-  
+
   const chosenMove = pet.moves[moveIndex];
+  if (chosenMove?.effect?.flee) {
+    await renderManualBattle(interaction, player, pet, '⚠️ 請使用下方「逃跑」按鈕，不是招式按鈕。');
+    return;
+  }
   const enemyMove = BATTLE.enemyChooseMove(enemy);
-  
   const result = BATTLE.executeBattleRound(player, pet, enemy, chosenMove, enemyMove);
-  
+
   PET.savePet(pet);
-  
+
   if (result.victory === true) {
     player.stats.財富 += result.gold;
+    player.battleState = null;
     CORE.savePlayer(player);
-    
+
     const embed = new EmbedBuilder()
       .setTitle(t('victory'))
       .setColor(0x00ff00)
@@ -2050,88 +2562,91 @@ async function handleUseMove(interaction, user, moveIndex) {
     await interaction.update({ embeds: [embed], components: [row] });
     return;
   }
-  
+
   if (result.victory === false) {
+    player.battleState = null;
+    CORE.savePlayer(player);
+
     const embed = new EmbedBuilder()
       .setTitle(t('defeat'))
       .setColor(0xff0000)
       .setDescription(result.message + '\n\n你的旅程就此結束...');
-    
+
     CORE.resetPlayerGame(user.id);
-    
+
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('choose_positive').setLabel('🔄 重新開始').setStyle(ButtonStyle.Danger)
     );
-    
+
     await interaction.update({ embeds: [embed], components: [row] });
     return;
   }
-  
-  // 繼續戰鬥
-  const moveButtons = pet.moves.slice(0, 4).map((m, i) => {
-    const d = BATTLE.calculatePlayerMoveDamage(m, player, pet);
-    return new ButtonBuilder()
-      .setCustomId(`use_move_${i}`)
-      .setLabel(`${m.name} (${d.total})`)
-      .setStyle(ButtonStyle.Danger);
-  });
-  
-  const moveRow = new ActionRowBuilder().addComponents(moveButtons);
-  const actionRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('flee_0').setLabel(`${t('flee')} (70%×2)`).setStyle(ButtonStyle.Secondary)
-  );
-  
-  await interaction.update({
-    content: `⚔️ **${pet.name} vs ${enemy.name}**\n\n${result.message}\n\n敵人 HP: ${enemy.hp}\n你的 HP: ${pet.hp}`,
-    components: [moveRow, actionRow]
-  });
+
+  player.battleState.enemy = enemy;
+  player.battleState.mode = 'manual';
+  CORE.savePlayer(player);
+  await renderManualBattle(interaction, player, pet, result.message);
 }
 
 // ============== 逃跑 ==============
 async function handleFlee(interaction, user, attemptNum) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
-  const enemy = BATTLE.createEnemy('哥布林', 1);
-  enemy.hp = 50;
-  
-  const result = BATTLE.attemptFlee(player, pet, enemy, attemptNum + 1);
-  
+  const enemy = player?.battleState?.enemy;
+
+  if (!player || !pet || !enemy) {
+    await interaction.update({ content: '❌ 目前不在戰鬥狀態。', components: [] });
+    return;
+  }
+
+  const currentAttempt = (player.battleState.fleeAttempts || 0) + 1;
+  const result = BATTLE.attemptFlee(player, pet, enemy, currentAttempt);
+
   if (result.success) {
+    player.battleState = null;
+    CORE.savePlayer(player);
+
     const embed = new EmbedBuilder()
       .setTitle('🏃 逃跑成功！')
       .setColor(0x00ff00)
       .setDescription(result.message);
-    
+
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
     );
-    
+
     await interaction.update({ embeds: [embed], components: [row] });
     return;
   }
-  
+
   if (result.death) {
+    player.battleState = null;
+    CORE.savePlayer(player);
+
     const embed = new EmbedBuilder()
       .setTitle('💀 逃跑失敗...')
       .setColor(0xff0000)
       .setDescription(result.message + '\n\n你的旅程就此結束...');
-    
+
     CORE.resetPlayerGame(user.id);
-    
+
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('choose_positive').setLabel('🔄 重新開始').setStyle(ButtonStyle.Danger)
     );
-    
+
     await interaction.update({ embeds: [embed], components: [row] });
     return;
   }
-  
+
+  player.battleState.fleeAttempts = currentAttempt;
+  CORE.savePlayer(player);
+
   // 可以再試一次
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`flee_${attemptNum + 1}`).setLabel('🏃 再逃一次！').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`flee_${currentAttempt}`).setLabel('🏃 再逃一次！').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('fight_retry').setLabel('⚔️ 不逃了！').setStyle(ButtonStyle.Secondary)
   );
-  
+
   await interaction.update({ content: result.message, components: [row] });
 }
 

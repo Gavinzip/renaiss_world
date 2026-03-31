@@ -233,6 +233,23 @@ function loadPet(playerId) {
   return Object.values(pets).find(p => p.ownerId === playerId) || null;
 }
 
+function deletePetByOwner(playerId) {
+  const pets = loadAllPets();
+  let changed = false;
+  for (const [petId, pet] of Object.entries(pets)) {
+    if (pet?.ownerId === playerId) {
+      delete pets[petId];
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
+  }
+
+  return changed;
+}
+
 function getPetById(petId) {
   const pets = loadAllPets();
   return pets[petId] || null;
@@ -259,6 +276,7 @@ module.exports = {
   calculateMoveDamage,
   savePet,
   loadPet,
+  deletePetByOwner,
   loadAllPets,
   getPetById
 };
