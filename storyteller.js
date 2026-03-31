@@ -19,6 +19,8 @@ if (fs.existsSync(envPath)) {
 
 const API_KEY = process.env.MINIMAX_API_KEY || '';
 const MINIMAX_MODEL = process.env.MINIMAX_MODEL || 'MiniMax-M2.5-Lightning';
+const MINIMAX_STORY_FAST_MODEL = process.env.MINIMAX_STORY_FAST_MODEL || 'MiniMax-M2.5-highspeed';
+const MINIMAX_STORY_TRY_FALLBACK = /^(1|true|yes)$/i.test(process.env.MINIMAX_STORY_TRY_FALLBACK || '');
 
 const RENAISS_LOCATIONS = { ...LOCATION_DESCRIPTIONS };
 
@@ -220,6 +222,7 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
   const retries = Math.max(1, Number(options.retries || AI_MAX_RETRIES));
   const timeoutMs = Math.max(5000, Number(options.timeoutMs || AI_TIMEOUT_MS));
   const maxTokens = Math.max(120, Number(options.maxTokens || 700));
+  const model = String(options.model || MINIMAX_MODEL);
   const label = String(options.label || 'callAI');
   const hardRule = '\n\n【硬性輸出規則】只輸出最終答案，禁止輸出任何思考過程、XML標籤或系統說明。';
   let lastError = null;
@@ -237,7 +240,7 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
         );
       const attemptMaxTokens = attempt > 1 ? Math.min(2200, Math.floor(maxTokens * 2)) : maxTokens;
       const body = JSON.stringify({
-        model: MINIMAX_MODEL,
+        model,
         messages: [{ role: 'user', content: attemptPrompt }],
         temperature: temperature,
         max_tokens: attemptMaxTokens
@@ -253,11 +256,11 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
         throw new Error('Truncated content');
       }
 
-      console.log(`[AI][${label}] model=${MINIMAX_MODEL} attempt ${attempt}/${retries} ok in ${Date.now() - startAt}ms`);
+      console.log(`[AI][${label}] model=${model} attempt ${attempt}/${retries} ok in ${Date.now() - startAt}ms`);
       return cleaned;
     } catch (e) {
       lastError = e;
-      console.log(`[AI][${label}] model=${MINIMAX_MODEL} attempt ${attempt}/${retries} failed: ${e.message}`);
+      console.log(`[AI][${label}] model=${model} attempt ${attempt}/${retries} failed: ${e.message}`);
       if (attempt < retries) {
         await sleep(400 * attempt);
         continue;
@@ -336,22 +339,33 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 
 直接開始講：`;
 
-  try {
-    const story = await callAI(prompt, 0.95, {
-      label: 'generateStory',
-      maxTokens: 1200,
-      timeoutMs: 22000,
-      retries: 2
-    });
-    if (story && story.length > 50) {
-      if (story.length > 2000) {
-        return story.substring(0, 2000) + '...[故事過長已截斷]';
+  // 快速優先策略：先用 highspeed 模型，失敗再回退到預設模型
+  const modelCandidates = [MINIMAX_STORY_FAST_MODEL];
+  if (MINIMAX_STORY_TRY_FALLBACK) {
+    modelCandidates.push(MINIMAX_MODEL);
+  }
+  const uniqCandidates = modelCandidates.filter((m, idx, arr) => m && arr.indexOf(m) === idx);
+
+  for (let i = 0; i < uniqCandidates.length; i++) {
+    const model = uniqCandidates[i];
+    try {
+      const story = await callAI(prompt, 0.95, {
+        label: i === 0 ? 'generateStory.fast' : 'generateStory.fallback',
+        model,
+        maxTokens: 1000,
+        timeoutMs: 13000,
+        retries: 1
+      });
+      if (story && story.length > 50) {
+        if (story.length > 2000) {
+          return story.substring(0, 2000) + '...[故事過長已截斷]';
+        }
+        console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
+        return story;
       }
-      console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
-      return story;
+    } catch (e) {
+      console.error(`[Storyteller] generateStory model=${model} 失敗:`, e.message);
     }
-  } catch (e) {
-    console.error('[Storyteller] AI失敗:', e.message);
   }
   
   const fallback = buildFallbackStory(player, pet, location, locDesc, previousAction, playerLang);
@@ -429,8 +443,9 @@ ${langInstruction}輸出7個選項，每行一個。例如：
   try {
     const result = await callAI(prompt, 1.0, {
       label: 'generateChoicesWithAI',
+      model: MINIMAX_MODEL,
       maxTokens: 700,
-      timeoutMs: 14000,
+      timeoutMs: 10000,
       retries: 1
     });
     

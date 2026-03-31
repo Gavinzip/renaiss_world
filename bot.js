@@ -280,6 +280,14 @@ function startLoadingAnimation(message, label = 'AI 說書人正在構思故事'
   return () => clearInterval(timer);
 }
 
+function startTypingIndicator(channel, intervalMs = 6500) {
+  if (!channel || typeof channel.sendTyping !== 'function') return () => {};
+  const ping = () => channel.sendTyping().catch(() => {});
+  ping();
+  const timer = setInterval(ping, intervalMs);
+  return () => clearInterval(timer);
+}
+
 const MAP_PAGE_SIZE = 8;
 
 function buildMapComponents(page, currentLocation) {
@@ -1662,6 +1670,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   const loadingMsg = await thread.send({ embeds: [loadingEmbed], components });
   trackActiveGameMessage(player, thread.id, loadingMsg.id);
   const stopLoadingAnimation = startLoadingAnimation(loadingMsg, 'AI 說書人正在構思故事');
+  const stopTypingIndicator = startTypingIndicator(thread);
 
   // 如果有 interaction（按鈕觸發），立即確認避免超時
   if (interaction) {
@@ -1760,6 +1769,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         components: buildRetryGenerationComponents()
       }).catch(() => {});
       trackActiveGameMessage(player, thread.id, loadingMsg.id);
+    } finally {
+      stopTypingIndicator();
     }
   })();
   
@@ -2263,6 +2274,7 @@ async function handleEvent(interaction, user, eventIndex) {
 
   trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
   const stopLoadingAnimation = startLoadingAnimation(loadingMsg, 'AI 說書人正在構思新故事');
+  const stopTypingIndicator = startTypingIndicator(interaction.channel);
   
   // 背景 AI 生成：先出故事，再補按鈕
   (async () => {
@@ -2380,6 +2392,8 @@ async function handleEvent(interaction, user, eventIndex) {
         components: buildRetryGenerationComponents()
       }).catch(() => {});
       trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+    } finally {
+      stopTypingIndicator();
     }
   })();
   
