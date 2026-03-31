@@ -20,7 +20,6 @@ if (fs.existsSync(envPath)) {
 const API_KEY = process.env.MINIMAX_API_KEY || '';
 const MINIMAX_MODEL = process.env.MINIMAX_MODEL || 'MiniMax-M2.5-Lightning';
 const MINIMAX_STORY_FAST_MODEL = process.env.MINIMAX_STORY_FAST_MODEL || 'MiniMax-M2.5-highspeed';
-const MINIMAX_STORY_TRY_FALLBACK = /^(1|true|yes)$/i.test(process.env.MINIMAX_STORY_TRY_FALLBACK || '');
 
 const RENAISS_LOCATIONS = { ...LOCATION_DESCRIPTIONS };
 
@@ -87,31 +86,6 @@ function previewAIContent(content) {
   } catch {
     return String(content).slice(0, 120);
   }
-}
-
-function buildFallbackStory(player, pet, location, locDesc, previousAction, playerLang = 'zh-TW') {
-  const name = player?.name || '冒險者';
-  const petName = pet?.name || '寵物';
-  const scenes = [
-    '遠處傳來金屬碰撞聲，像有人在夜色中交手。',
-    '潮濕的風帶著鹹味掠過街角，霓虹在地面上碎成斑斕光點。',
-    '地面細微震動，彷彿有巨物在暗處緩慢移動。'
-  ];
-  const hooks = [
-    '你直覺這不只是巧合，下一步很可能改變局勢。',
-    '四周目光開始聚集，所有人都在等你做出決定。',
-    '你與寵物交換了一個眼神，真正的挑戰才剛開始。'
-  ];
-  const scene = scenes[Math.floor(Math.random() * scenes.length)];
-  const hook = hooks[Math.floor(Math.random() * hooks.length)];
-
-  if (playerLang === 'en') {
-    return `${name} and ${petName} move through ${location} (${locDesc}). After choosing "${previousAction}", ${scene} ${hook}`;
-  }
-  if (playerLang === 'zh-CN') {
-    return `${name}与${petName}行进在${location}（${locDesc}）。你刚刚选择了「${previousAction}」，${scene}${hook}`;
-  }
-  return `${name}與${petName}行進在${location}（${locDesc}）。你剛剛選擇了「${previousAction}」，${scene}${hook}`;
 }
 
 function buildFallbackChoices(player, location, playerLang = 'zh-TW') {
@@ -271,6 +245,32 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
   throw lastError || new Error('AI request failed');
 }
 
+function getStoryLengthRule(playerLang = 'zh-TW') {
+  if (playerLang === 'en') {
+    return {
+      promptRule: '故事長度必須 280-360 words。',
+      min: 260,
+      max: 390,
+      unit: 'words'
+    };
+  }
+  return {
+    promptRule: '故事長度必須 400-500 字。',
+    min: 380,
+    max: 530,
+    unit: 'chars'
+  };
+}
+
+function measureStoryLength(story, playerLang = 'zh-TW') {
+  const text = String(story || '').trim();
+  if (!text) return 0;
+  if (playerLang === 'en') {
+    return (text.match(/[A-Za-z0-9'-]+/g) || []).length;
+  }
+  return text.replace(/\s+/g, '').length;
+}
+
 // ========== 生成故事（帶記憶）============
 async function generateStory(event, player, pet, previousChoice, memoryContext = '') {
   const startedAt = Date.now();
@@ -310,6 +310,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     'zh-CN': '請用簡體中文講述',
     'en': '請用英文講述'
   }[playerLang] || '請用繁體中文講述';
+  const lengthRule = getStoryLengthRule(playerLang);
   
   // 記憶上下文
   const focusedMemory = summarizeContext(memoryContext, 220, 3);
@@ -330,7 +331,7 @@ ${memorySection}
 ${previousAction}
 
 【任務】
-${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼，故事長度適中（120-220字）。要點：
+${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼。${lengthRule.promptRule} 少於下限視為不合格。要點：
 1. 有具體的場景（光線、聲音、氣味、溫度、觸感）
 2. 有NPC或環境的互動
 3. 有Renaiss星球的科幻與奇幻元素
@@ -339,11 +340,8 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 
 直接開始講：`;
 
-  // 快速優先策略：先用 highspeed 模型，失敗再回退到預設模型
-  const modelCandidates = [MINIMAX_STORY_FAST_MODEL];
-  if (MINIMAX_STORY_TRY_FALLBACK) {
-    modelCandidates.push(MINIMAX_MODEL);
-  }
+  // AI-only：先用 highspeed，失敗再試預設模型；不使用本地假故事
+  const modelCandidates = [MINIMAX_STORY_FAST_MODEL, MINIMAX_MODEL];
   const uniqCandidates = modelCandidates.filter((m, idx, arr) => m && arr.indexOf(m) === idx);
 
   for (let i = 0; i < uniqCandidates.length; i++) {
@@ -352,25 +350,30 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
       const story = await callAI(prompt, 0.95, {
         label: i === 0 ? 'generateStory.fast' : 'generateStory.fallback',
         model,
-        maxTokens: 1000,
-        timeoutMs: 13000,
-        retries: 1
+        maxTokens: 1600,
+        timeoutMs: 18000,
+        retries: 2
       });
-      if (story && story.length > 50) {
-        if (story.length > 2000) {
-          return story.substring(0, 2000) + '...[故事過長已截斷]';
-        }
-        console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
-        return story;
+      if (!story || story.length < 120) {
+        throw new Error('Story too short');
       }
+
+      const len = measureStoryLength(story, playerLang);
+      if (len < lengthRule.min || len > lengthRule.max) {
+        throw new Error(`Story length out of range: ${len} ${lengthRule.unit}`);
+      }
+
+      if (story.length > 2600) {
+        return story.substring(0, 2600) + '...[故事過長已截斷]';
+      }
+      console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms len=${len}${lengthRule.unit}`);
+      return story;
     } catch (e) {
       console.error(`[Storyteller] generateStory model=${model} 失敗:`, e.message);
     }
   }
-  
-  const fallback = buildFallbackStory(player, pet, location, locDesc, previousAction, playerLang);
-  console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms (fallback)`);
-  return fallback;
+
+  throw new Error('AI story generation failed (no fallback story)');
 }
 
 // ========== AI 生成選項（帶風險標籤+更具體）============
