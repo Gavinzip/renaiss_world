@@ -47,6 +47,16 @@ function normalizeOwnerId(ownerId) {
   return source;
 }
 
+function sanitizeMemoryPlayerId(raw, fallback = '') {
+  const source = String(raw || '').trim().toLowerCase();
+  if (!source) return fallback;
+  const safe = source
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return safe || fallback;
+}
+
 function getDb() {
   if (db) return db;
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -505,6 +515,31 @@ function clearPlayerNamespace(playerId, namespace = DEFAULT_NAMESPACE) {
   return clearEntityNamespace(playerId, namespace);
 }
 
+function clearPlayerRelatedMemories(playerId) {
+  const owner = normalizeOwnerId(playerId);
+  if (!owner) return 0;
+  const playerNsKey = sanitizeMemoryPlayerId(playerId, '');
+  const privateNamespace = playerNsKey ? `npc_private:${playerNsKey}` : '';
+
+  let totalChanges = 0;
+  const byOwner = getDb().prepare('DELETE FROM memory_vectors WHERE player_id = ?').run(owner);
+  totalChanges += safeNumber(byOwner?.changes, 0);
+
+  if (privateNamespace) {
+    const byPrivateNamespace = getDb()
+      .prepare('DELETE FROM memory_vectors WHERE namespace = ?')
+      .run(privateNamespace);
+    totalChanges += safeNumber(byPrivateNamespace?.changes, 0);
+  }
+
+  return totalChanges;
+}
+
+function clearAllMemories() {
+  const result = getDb().prepare('DELETE FROM memory_vectors').run();
+  return safeNumber(result?.changes, 0);
+}
+
 function rebuildEntityIndexFromMemories(ownerId, memories, options = {}) {
   const owner = normalizeOwnerId(ownerId);
   if (!owner) return Promise.resolve({ inserted: 0, cleared: 0 });
@@ -574,6 +609,8 @@ module.exports = {
   rebuildPlayerIndexFromMemories,
   clearEntityNamespace,
   clearPlayerNamespace,
+  clearPlayerRelatedMemories,
+  clearAllMemories,
   getEntityIndexStats,
   getIndexStats,
   isEmbeddingEnabled: () => Boolean(OPENAI_API_KEY),

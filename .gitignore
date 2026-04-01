@@ -2,18 +2,9 @@
 .env.js
 node_modules/
 .renaiss_world_data_repo/
-# data 預設忽略，但保留玩家/世界狀態可進版控
-data/*
-!data/players/
-!data/players/*.json
-!data/world.json
-!data/pets.json
-!data/world_events.json
-!data/scratch_lottery.json
-!data/user_wallets.json
-!data/player_threads.json
-!data/memory_index.sqlite
-!data/memory_index.sqlite-shm
-!data/memory_index.sqlite-wal
+# 遊戲資料一律放外部 world_data，不進專案版控
+data
+data/
+data_local_backup_*/
 *.log
 package-lock.json

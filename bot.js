@@ -12,7 +12,6 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { setupWorldStorage } = require('./storage-paths');
 
 // 讀取 .env 檔案
 const envPath = path.join(__dirname, '.env');
@@ -33,9 +32,15 @@ const CONFIG = {
 };
 const WORLD_BACKUP_NOTIFY_CHANNEL_ID = 1473923458751660063;
 
+const { setupWorldStorage } = require('./storage-paths');
 const STORAGE = setupWorldStorage();
 const DATA_DIR = STORAGE.dataDir;
 const PLAYER_THREADS_FILE = path.join(DATA_DIR, 'player_threads.json');
+const PLAYERS_DIR = path.join(DATA_DIR, 'players');
+const PETS_FILE = path.join(DATA_DIR, 'pets.json');
+const USER_WALLETS_FILE = path.join(DATA_DIR, 'user_wallets.json');
+const SCRATCH_LOTTERY_FILE = path.join(DATA_DIR, 'scratch_lottery.json');
+const RESETDATA_PASSWORD = String(process.env.RESETDATA_PASSWORD || '0121').trim();
 
 // ============== 初始化 ==============
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -62,6 +67,7 @@ const WALLET = require('./wallet-system');
 const WISH = require('./wish-pool-ai');
 const MAIN_STORY = require('./main-story');
 const ECON = require('./economy-system');
+const MEMORY_INDEX = require('./memory-index');
 const { startWorldBackupScheduler } = require('./world-backup');
 const {
   ISLAND_MAP_TEXT,
@@ -117,6 +123,113 @@ function loadPlayerThreads() {
 
 function savePlayerThreads(threads) {
   fs.writeFileSync(PLAYER_THREADS_FILE, JSON.stringify(threads, null, 2));
+}
+
+function loadJsonObject(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return {};
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function saveJsonObject(filePath, data) {
+  const safe = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(safe, null, 2));
+}
+
+function clearSelfCharacterData(userId) {
+  const id = String(userId || '').trim();
+  if (!id) throw new Error('missing user id');
+  const report = {
+    scope: 'self',
+    removedPlayerFile: false,
+    removedLegacyMemoryFile: false,
+    removedPet: false,
+    removedThread: false,
+    removedWallet: false,
+    clearedSemanticMemory: 0
+  };
+
+  const playerFile = path.join(PLAYERS_DIR, `${id}.json`);
+  const legacyMemoryFile = path.join(PLAYERS_DIR, `${id}_memory.json`);
+
+  if (fs.existsSync(playerFile)) {
+    fs.unlinkSync(playerFile);
+    report.removedPlayerFile = true;
+  }
+  if (fs.existsSync(legacyMemoryFile)) {
+    fs.unlinkSync(legacyMemoryFile);
+    report.removedLegacyMemoryFile = true;
+  }
+
+  if (typeof PET.deletePetByOwner === 'function') {
+    report.removedPet = Boolean(PET.deletePetByOwner(id));
+  }
+
+  const threads = loadPlayerThreads();
+  if (Object.prototype.hasOwnProperty.call(threads, id)) {
+    delete threads[id];
+    savePlayerThreads(threads);
+    report.removedThread = true;
+  }
+
+  const wallets = loadJsonObject(USER_WALLETS_FILE);
+  if (Object.prototype.hasOwnProperty.call(wallets, id)) {
+    delete wallets[id];
+    saveJsonObject(USER_WALLETS_FILE, wallets);
+    report.removedWallet = true;
+  }
+
+  if (typeof MEMORY_INDEX.clearPlayerRelatedMemories === 'function') {
+    report.clearedSemanticMemory = Number(MEMORY_INDEX.clearPlayerRelatedMemories(id) || 0);
+  }
+
+  releaseStoryLock(id);
+  return report;
+}
+
+function clearAllCharacterData() {
+  const report = {
+    scope: 'all',
+    removedPlayerFiles: 0,
+    removedLegacyMemoryFiles: 0,
+    resetPets: false,
+    resetThreads: false,
+    resetWallets: false,
+    resetScratchLottery: false,
+    clearedSemanticMemory: 0
+  };
+
+  fs.mkdirSync(PLAYERS_DIR, { recursive: true });
+  const names = fs.readdirSync(PLAYERS_DIR);
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const target = path.join(PLAYERS_DIR, name);
+    fs.unlinkSync(target);
+    if (name.endsWith('_memory.json')) report.removedLegacyMemoryFiles += 1;
+    else report.removedPlayerFiles += 1;
+  }
+
+  saveJsonObject(PETS_FILE, {});
+  report.resetPets = true;
+  saveJsonObject(PLAYER_THREADS_FILE, {});
+  report.resetThreads = true;
+  saveJsonObject(USER_WALLETS_FILE, {});
+  report.resetWallets = true;
+  saveJsonObject(SCRATCH_LOTTERY_FILE, {});
+  report.resetScratchLottery = true;
+
+  if (typeof MEMORY_INDEX.clearAllMemories === 'function') {
+    report.clearedSemanticMemory = Number(MEMORY_INDEX.clearAllMemories() || 0);
+  }
+
+  STORY_GEN_LOCKS.clear();
+  return report;
 }
 
 function setPlayerThread(userId, threadId) {
@@ -1925,6 +2038,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   try {
     if (commandName === 'start') await handleStart(interaction, user);
     if (commandName === 'warstatus') await handleWarStatus(interaction);
+    if (commandName === 'resetdata') await handleResetData(interaction, user);
   } catch (err) {
     console.error(`[Slash] 指令處理失敗 ${commandName}:`, err?.message || err);
     const msg = `❌ 指令執行失敗：${err?.message || err}`;
@@ -1935,6 +2049,47 @@ CLIENT.on('interactionCreate', async (interaction) => {
     }
   }
 });
+
+async function handleResetData(interaction, user) {
+  const scope = String(interaction.options.getString('scope') || 'self').trim().toLowerCase();
+  const password = String(interaction.options.getString('password') || '').trim();
+
+  if (password !== RESETDATA_PASSWORD) {
+    await interaction.reply({ content: '❌ 密碼錯誤，無法清空資料。', ephemeral: true });
+    return;
+  }
+
+  if (scope !== 'self' && scope !== 'all') {
+    await interaction.reply({ content: '❌ scope 只能是 self 或 all。', ephemeral: true });
+    return;
+  }
+
+  if (scope === 'all') {
+    const report = clearAllCharacterData();
+    await interaction.reply({
+      content:
+        `✅ 已清空【所有人】角色資料。\n` +
+        `- 玩家檔：${report.removedPlayerFiles} 筆\n` +
+        `- 舊記憶檔：${report.removedLegacyMemoryFiles} 筆\n` +
+        `- 向量記憶刪除：${report.clearedSemanticMemory} 筆\n` +
+        `- pets/player_threads/user_wallets/scratch_lottery 已重置`,
+      ephemeral: true
+    });
+    return;
+  }
+
+  const report = clearSelfCharacterData(user.id);
+  await interaction.reply({
+    content:
+      `✅ 已清空你自己的角色資料。\n` +
+      `- 玩家檔：${report.removedPlayerFile ? '已刪除' : '無'}\n` +
+      `- 寵物：${report.removedPet ? '已刪除' : '無'}\n` +
+      `- 討論串綁定：${report.removedThread ? '已清除' : '無'}\n` +
+      `- 錢包綁定：${report.removedWallet ? '已清除' : '無'}\n` +
+      `- 向量記憶刪除：${report.clearedSemanticMemory} 筆`,
+    ephemeral: true
+  });
+}
 
 function formatFactionWinnerLabel(winner) {
   if (winner === 'order') return '正派';
@@ -5540,7 +5695,29 @@ CLIENT.on('ready', async () => {
 
   const commands = [
     { name: 'start', description: '開始你的Renaiss星球冒險！（有存檔則繼續）' },
-    { name: 'warstatus', description: '查看正派與 Digital 張力、勢力值與最近三次衝突' }
+    { name: 'warstatus', description: '查看正派與 Digital 張力、勢力值與最近三次衝突' },
+    {
+      name: 'resetdata',
+      description: '清空角色資料（需密碼）',
+      options: [
+        {
+          type: 3,
+          name: 'scope',
+          description: '清空範圍：自己或所有人',
+          required: true,
+          choices: [
+            { name: '自己', value: 'self' },
+            { name: '所有人', value: 'all' }
+          ]
+        },
+        {
+          type: 3,
+          name: 'password',
+          description: '安全密碼',
+          required: true
+        }
+      ]
+    }
   ];
   
   try {
