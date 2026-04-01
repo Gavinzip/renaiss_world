@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { sanitizeWorldText } = require('./style-sanitizer');
 
 // ============== 元素相剋 ==============
 const ELEMENT_ADVANTAGE = {
@@ -22,17 +23,17 @@ const ELEMENT_ADVANTAGE = {
 const NARRATIVE_STYLES = {
   // 正派勝利
   positive_win: [
-    '只見俠者身影一晃，對手根本來不及反應！',
-    '一道金光閃過，邪道中人已被制服在地！',
-    '俠客運起內力，一招斃敵，乾淨利落！',
-    '正氣凜然的一擊，讓邪派人士聞風喪膽！',
-    '俠之大者，為國為民，這一掌蘊含俠義之心！'
+    '只見先手身影一晃，對手根本來不及反應！',
+    '一道光束閃過，敵方單位已被壓制在地！',
+    '能量回路瞬間超載，一擊斃敵，乾淨利落！',
+    '守序陣線的一擊，讓敵方行動立刻崩解！',
+    '這一擊精準而果斷，沒有任何多餘動作！'
   ],
   // 反派勝利
   negative_win: [
     '黑影一閃，對手還沒看清就已倒地！',
     '只見魔爪探出，敵人無處可逃！',
-    '邪功發動，正道人士節節敗退！',
+    '暗域協議發動，守序陣線節節敗退！',
     '詭異的笑聲中，對手已被毒素入侵！',
     '心狠手辣的一擊，毫無留情！'
   ],
@@ -40,7 +41,7 @@ const NARRATIVE_STYLES = {
   epic_clash: [
     '雙方實力不相上下，金鐵交鳴聲中難分難解！',
     '招式來回拆解了數十招，誰也奈何不了誰！',
-    '內力激盪，周圍草木皆被震斷！',
+    '能量波激盪，周圍地形都被震出裂痕！',
     '一招硬碰，雙方各自退了三步！',
     '電光火石間，雙方已過手十餘招！'
   ],
@@ -64,12 +65,12 @@ const NARRATIVE_STYLES = {
 
 // ============== 招式組合效果 ==============
 const MOVE_COMBOS = {
-  '金針刺穴+寒冰掌': '金寒交加，敵人穴位被封，行動全被限制！',
-  '回春術+楊枝淨水': '陰陽調和，療效倍增，幾乎瞬間恢復！',
-  '烈焰焚天+洪水滔天': '水火不容，兩股力量互相衝突，場面壯觀！',
-  '吸星大法+蛛絲縛魂': '吸取精華加上束縛，根本逃不掉！',
-  '金鐘罩+赤焰甲': '金火相生，防禦無敵！',
-  '地震轟鳴+流沙陣': '天地之力合而為一，無處可逃！'
+  '脈衝標定+低溫衝擊': '高頻鎖定加低溫封阻，敵方行動遭到重度限制！',
+  '再生矩陣+淨化波': '修復與淨化同步啟動，幾乎瞬間回穩！',
+  '電漿盛放+潮汐奇點': '熱能與潮汐衝擊疊加，場面極具壓制力！',
+  '核心抽離+黏網拘束': '先抽離能量再封鎖走位，幾乎無法脫身！',
+  '堡壘力場+熱盾回路': '雙層防護同步運轉，防禦效率極高！',
+  '隕塊墜落+漂砂陷落': '地形重壓與陷落疊加，對手寸步難行！'
 };
 
 // ============== 裁判決定勝負 ==============
@@ -223,7 +224,7 @@ function generateNarrative(result, attacker, defender, atkMove, defMove, context
   const openers = [
     '只見雙方對峙，空氣中充滿了緊張的氣息...',
     '電光火石間，兩道身影交錯而過！',
-    '內力催動，雙方同時出手！',
+    '能量催動，雙方同時出手！',
     '招式交織，誰能在這回合佔得先機？',
     '這一刻，決定命運的一擊！'
   ];
@@ -270,10 +271,10 @@ function generateNarrative(result, attacker, defender, atkMove, defMove, context
   narrative += `⚔️ 造成傷害：${isAttackerWinner ? result.damage.defender : result.damage.attacker}\n`;
   
   if (result.moveEffects.length > 0) {
-    narrative += `\n💫 裁判點評：這場戰鬥展現了武學的精髓`;
+    narrative += `\n💫 裁判點評：這場戰鬥展現了戰術協同的精髓`;
   }
   
-  return narrative;
+  return sanitizeWorldText(narrative);
 }
 
 // ============== 逆轉敘述 ==============
@@ -297,25 +298,25 @@ function generateReversalNarrative(result, attacker, defender) {
   narrative += '📖 ' + winStyles[Math.floor(Math.random() * winStyles.length)] + '\n\n';
   
   narrative += `⚔️ 造成傷害：${isAttackerWinner ? result.damage.defender : result.damage.attacker}\n`;
-  narrative += '\n💫 裁判點評：江湖處處是驚喜，誰也不知道下一秒會發生什麼！';
+  narrative += '\n💫 裁判點評：前線處處是驚喜，誰也不知道下一秒會發生什麼！';
   
-  return narrative;
+  return sanitizeWorldText(narrative);
 }
 
 // ============== 裁判點評（戰鬥總結）==============
 function getJudgeComment(result, battleContext) {
   const comments = [
-    '這場戰鬥充分展現了武學的精髓！',
+    '這場戰鬥充分展現了戰技協同的精髓！',
     '招式之間的配合恰到好處！',
     '雙方的實力都在伯仲之間！',
     '精彩的一戰！讓人熱血沸騰！',
     '裁判對雙方的表現都非常滿意！',
-    '這就是江湖！處處充滿驚奇！',
+    '這就是前線！處處充滿驚奇！',
     '無論勝敗，能站在這裡的都是好漢！',
     '期待下次能看到更精彩的對決！'
   ];
   
-  return comments[Math.floor(Math.random() * comments.length)];
+  return sanitizeWorldText(comments[Math.floor(Math.random() * comments.length)]);
 }
 
 // ============== 獲取招式克制資訊 ==============

@@ -40,7 +40,7 @@ const BUTTON_IDS = {
   FLEE: 'flee',
   USE_ITEM: 'use_item',
   
-  // 武學
+  // 技能
   PRACTICE: 'practice',
   LEARN_NEW: 'learn_new',
   VIEW_MANUALS: 'view_manuals'
@@ -122,7 +122,7 @@ function getActionResultButtons(action, result, player) {
     rows.push(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(BUTTON_IDS.HARVEST).setLabel('🌿 采集資源').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('choice_tavern').setLabel('🍺 去酒樓').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('choice_tavern').setLabel('🍺 去情報酒吧').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('choice_dojo').setLabel('🗡️ 去武館').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(BUTTON_IDS.MAP).setLabel('🗺️ 換地方').setStyle(ButtonStyle.Secondary)
       )
@@ -189,9 +189,9 @@ function getFightButtons() {
 function getSkillsButtons() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(BUTTON_IDS.PRACTICE).setLabel('🧘 修煉').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(BUTTON_IDS.LEARN_NEW).setLabel('📖 學新武功').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(BUTTON_IDS.VIEW_MANUALS).setLabel('📚 秘籍').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(BUTTON_IDS.PRACTICE).setLabel('🧘 訓練').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(BUTTON_IDS.LEARN_NEW).setLabel('📖 學新戰技').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(BUTTON_IDS.VIEW_MANUALS).setLabel('📚 技術檔案').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(BUTTON_IDS.BACK).setLabel('返回').setStyle(ButtonStyle.Secondary)
     )
   ];
@@ -202,8 +202,8 @@ function getExploreButtons() {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(BUTTON_IDS.HARVEST).setLabel('🌿 采集').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('choice_tavern').setLabel('🍺 酒樓').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('choice_dojo').setLabel('🗡️ 武館').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('choice_tavern').setLabel('🍺 情報酒吧').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('choice_dojo').setLabel('🗡️ 訓練站').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('choice_market').setLabel('💰 集市').setStyle(ButtonStyle.Primary)
     ),
     new ActionRowBuilder().addComponents(
@@ -215,17 +215,17 @@ function getExploreButtons() {
   ];
 }
 
-// ============== 江湖互動選項 ==============
+// ============== 星域互動選項 ==============
 function getAdventureChoices() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('choice_tavern').setLabel('🍺 去酒樓喝酒').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('choice_dojo').setLabel('🗡️ 去武館拜師').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('choice_tavern').setLabel('🍺 去情報酒吧喝酒').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('choice_dojo').setLabel('🗡️ 去訓練站拜訪導師').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('choice_market').setLabel('💰 去集市經商').setStyle(ButtonStyle.Primary)
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('choice_heal').setLabel('🏥 找郎中治傷').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('choice_temple').setLabel('🏯 寺廟參拜').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('choice_temple').setLabel('🏯 信標站祈願').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('choice_gamble').setLabel('🎲 賭坊試手氣').setStyle(ButtonStyle.Danger)
     ),
     new ActionRowBuilder().addComponents(
@@ -236,16 +236,16 @@ function getAdventureChoices() {
   ];
 }
 
-// 江湖風格冒險敘述
+// 星域風格冒險敘述
 const ADVENTURE_NARRATIVES = {
   'choice_tavern': [
-    '你走進酒樓，找了個角落的位置坐下...',
-    '酒樓裡人聲鼎沸，各路江湖人士匯聚於此...',
-    '你聞到酒香四溢，只見一位俠客正在獨酌...'
+    '你走進情報酒吧，找了個角落的位置坐下...',
+    '情報酒吧裡人聲鼎沸，各路探索者匯聚於此...',
+    '你聞到酒香四溢，只見一位探索者正在獨酌...'
   ],
   'choice_dojo': [
-    '你來到當地武館，只見學徒們正在操練...',
-    '武館師父看了你一眼，似乎在評估你的資質...',
+    '你來到當地訓練站，只見學徒們正在操練...',
+    '訓練站導師看了你一眼，似乎在評估你的資質...',
     '牆上掛滿了各種兵器，你心中一陣激動...'
   ],
   'choice_market': [
@@ -259,9 +259,9 @@ const ADVENTURE_NARRATIVES = {
     '郎中給你開了幾副草藥，囑咐你要按時服用...'
   ],
   'choice_temple': [
-    '寺廟裡香火鼎盛，佛像莊嚴...',
+    '信標站裡能量火炬穩定運轉...',
     '你虔誠地跪拜，心中默默祈禱...',
-    '一位老和尚路過，說你面帶祥瑞之氣...'
+    '一位值守員路過，說你的能量頻率很穩定...'
   ],
   'choice_gamble': [
     '你走進賭坊，只見裡面燈紅酒綠...',
@@ -280,11 +280,11 @@ const ADVENTURE_NARRATIVES = {
   ],
   'adventure_gossip': [
     '你找了個茶攤坐下，豎起耳朵聽四周的談話...',
-    '兩個江湖客正在低声谈论著什麼秘密...',
-    '你聽到有人提起最近江湖上的大事...'
+    '兩個旅者正在低声谈论著什麼秘密...',
+    '你聽到有人提起最近區域熱點...'
   ],
   'adventure_spar': [
-    '你看到幾個俠客正在樹下切磋武藝...',
+    '你看到幾個探索者正在樹下切磋戰技...',
     '一位年輕劍客正在練習招式，動作行雲流水...',
     '你想找個人試試自己的身手...'
   ],
@@ -309,7 +309,7 @@ function createPlayerEmbed(player, title = '🌟 Renaiss World RPG') {
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setColor(0x00ff00)
-    .setDescription(`**${player.name}**（${player.title || '江湖新人'}）`)
+    .setDescription(`**${player.name}**（${player.title || '新進探索者'}）`)
     .addFields(
       { name: '📍 位置', value: player.location || '未知', inline: true },
       { name: '⚔️ 戰力', value: String(player.stats?.戰力 || 30), inline: true },
@@ -323,11 +323,11 @@ function createPlayerEmbed(player, title = '🌟 Renaiss World RPG') {
 function createStatusEmbed(world, agents) {
   const alive = agents.filter(a => a.alive).length;
   const embed = new EmbedBuilder()
-    .setTitle('🌍 江湖狀態')
+    .setTitle('🌍 世界狀態')
     .setColor(0x0099ff)
     .setDescription(`📅 Day ${world.day} | ${world.season} | 天氣：${world.weather}`)
     .addFields(
-      { name: '👥 俠客', value: `${alive}/${agents.length}人存活`, inline: true },
+      { name: '👥 探索者', value: `${alive}/${agents.length}人存活`, inline: true },
       { name: '📰 最新事件', value: world.events?.[0] || '尚無', inline: false }
     );
   

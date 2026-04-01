@@ -133,7 +133,7 @@ function buildHeuristicOutcome(wishText) {
       title: '破頁秘笈',
       immediateText: '一名衣衫襤褸的乞丐從橋下探頭，丟給你一張殘破拳譜，笑說「這招夠你活命」。',
       futureHook: '若你願意繼續投資資源，這張殘頁未來或許能補全成真正武學。',
-      worldRumor: '江湖傳聞你在許願池邊拜了一位瘋癲師父。',
+      worldRumor: '星域傳聞你在許願池邊遇到了一位行為古怪的導師。',
       itemReward: '破舊拳譜殘頁',
       statDelta: { gold: -20, hp: 0, innerPower: 5, luck: -1 }
     }, wish);

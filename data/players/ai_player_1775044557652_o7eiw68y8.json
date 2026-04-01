@@ -1,0 +1,112 @@
+{
+  "id": "ai_player_1775044557652_o7eiw68y8",
+  "name": "正氣俠客雲飛",
+  "gender": "男",
+  "sect": "無門無派",
+  "alignment": "正派",
+  "petId": null,
+  "language": "zh-TW",
+  "title": "Renaiss星球新人",
+  "level": 1,
+  "exp": 0,
+  "reputation": 0,
+  "location": "敦煌",
+  "status": "自由",
+  "stats": {
+    "戰力": 33,
+    "生命": 100,
+    "內力": 30,
+    "智商": 71,
+    "魅力": 63,
+    "運氣": 69,
+    "財富": 84,
+    "飽腹度": 91,
+    "賺錢倍率": 1
+  },
+  "maxStats": {
+    "生命": 100,
+    "內力": 100
+  },
+  "skills": {},
+  "inventory": [
+    "乾糧一包",
+    "水囊"
+  ],
+  "herbs": [],
+  "craftedItems": [],
+  "party": [],
+  "companions": [],
+  "relationships": {},
+  "mainStory": {
+    "act": 1,
+    "node": "act1_market",
+    "side": null,
+    "completed": false,
+    "history": [],
+    "pressure": 0,
+    "signals": {
+      "order": 0,
+      "chaos": 0,
+      "control": 0
+    },
+    "eventCount": 0
+  },
+  "memories": [
+    {
+      "type": "action",
+      "content": "Round 3: 👻 遇到幽靈",
+      "outcome": "Success",
+      "location": "敦煌",
+      "tags": [],
+      "importance": 0,
+      "timestamp": 1775044636272
+    },
+    {
+      "type": "action",
+      "content": "Round 2: 🏠 遇到迷路老人",
+      "outcome": "Success",
+      "location": "敦煌",
+      "tags": [],
+      "importance": 0,
+      "timestamp": 1775044628387
+    },
+    {
+      "type": "action",
+      "content": "Round 1: 🌟 聽聞 WM 傳聞",
+      "outcome": "Success",
+      "location": "敦煌",
+      "tags": [],
+      "importance": 0,
+      "timestamp": 1775044615607
+    }
+  ],
+  "memoryDigest": null,
+  "storyTurns": 3,
+  "currentStory": "",
+  "eventChoices": [],
+  "generationState": {
+    "id": null,
+    "source": "none",
+    "status": "idle",
+    "phase": "idle",
+    "startedAt": 0,
+    "updatedAt": 0,
+    "sourceChoice": "",
+    "lastError": null,
+    "storySnapshot": "",
+    "choicesSnapshot": [],
+    "loadingMessageId": null,
+    "attempts": 0
+  },
+  "generationHistory": [],
+  "starterRewards": {
+    "fivePullClaimed": false,
+    "claimedAt": 0
+  },
+  "statusEffects": [],
+  "alive": true,
+  "createdAt": 1775044557652,
+  "spawnLocation": "敦煌",
+  "spawnRegion": "西域沙海",
+  "spawnDifficulty": 2
+}

@@ -469,11 +469,11 @@ function buildSellables(player, worldDay = 1) {
       .slice(0, 2);
     for (const skill of skillEntries) {
       const base = 60 + Math.floor(skill.proficiency / 25);
-      const realmBonus = /宗師|傳說/.test(skill.realm) ? 70 : /大師/.test(skill.realm) ? 35 : 10;
+      const realmBonus = /頂尖|傳說/.test(skill.realm) ? 70 : /大師/.test(skill.realm) ? 35 : 10;
       sellables.push({
         type: 'skill_license',
         name: `${skill.name}授權卷`,
-        rarity: /宗師|傳說/.test(skill.realm) ? '史詩' : /大師/.test(skill.realm) ? '稀有' : '精良',
+        rarity: /頂尖|傳說/.test(skill.realm) ? '史詩' : /大師/.test(skill.realm) ? '稀有' : '精良',
         value: base + realmBonus
       });
     }

@@ -5,7 +5,8 @@
   "main": "bot.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "reindex:memory": "node tools/reindex-memory-index.js"
+    "reindex:memory": "node tools/reindex-memory-index.js",
+    "backup:world": "node tools/run-world-backup.js"
   },
   "keywords": [],
   "author": "",

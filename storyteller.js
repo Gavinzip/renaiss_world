@@ -32,22 +32,22 @@ const RENAISS_LOCATIONS = { ...LOCATION_DESCRIPTIONS };
 
 const RENAISS_NPCS = {
   '草原部落': [
-    { name: '族長之子', title: '騎兵隊長', level: 15, pet: '赤兔馬', petType: '火系', align: '正派', desc: '英俊瀟灑，武藝高強' },
-    { name: '老祭司', title: '長老', level: 20, pet: '雪狼', petType: '冰系', align: '正派', desc: '智慧長者，守護傳統' },
-    { name: '沙漠商人', title: '商隊領袖', level: 8, pet: '駱駝獸', petType: '地系', align: '中立', desc: '見多識廣，消息靈通' }
+    { name: '凱爾', title: '巡航隊長', level: 15, pet: '熾蹄獸', petType: '熱能', align: '信標聯盟', desc: '擅長地形導航與護送任務' },
+    { name: '薩伊', title: '生態監測員', level: 20, pet: '霜尾狼', petType: '低溫', align: '信標聯盟', desc: '負責氣候與資源穩定' },
+    { name: '阿列姆', title: '補給商隊領航', level: 8, pet: '載重駝機', petType: '地脈', align: '中立', desc: '熟悉跨區物流路線' }
   ],
   '襄陽城': [
-    { name: '林工程師', title: '機械師', level: 15, pet: '齒輪獸', petType: '機甲', align: '正派', desc: '發明家，專門製作機械助手' },
-    { name: '蘇醫生', title: '細胞治療師', level: 20, pet: '治愈水母', petType: '水系', align: '正派', desc: '懸壺濟世，救人無數' },
-    { name: '黑影商人', title: '情報贩子', level: 8, pet: '隱幽鼠', petType: '暗系', align: '中立', desc: '什麼都賣，什麼都買' }
+    { name: '林工程師', title: '機械整備師', level: 15, pet: '齒輪獸', petType: '機甲', align: '信標聯盟', desc: '專門修復戰鬥模組與部件' },
+    { name: '蘇醫生', title: '細胞治療師', level: 20, pet: '治癒水母', petType: '液態', align: '信標聯盟', desc: '精通生體修復與中毒處理' },
+    { name: '黑影商人', title: '訊息中介', level: 8, pet: '隱幽鼠', petType: '暗域', align: '中立', desc: '情報與稀有貨品都能談' }
   ],
   '大都': [
-    { name: '皇太子', title: '未來統治者', level: 25, pet: '金焰獅', petType: '火系', align: '正派', desc: '權力核心，但心懷天下' },
-    { name: '間諜Q', title: '情報局長', level: 18, pet: '數據烏鴉', petType: '數據系', align: '中立', desc: '神出鬼沒，情報無雙' },
-    { name: '牡丹夫人', title: '社交名媛', level: 12, pet: '花仙蝶', petType: '草系', align: '正派', desc: '交際花，八面玲瓏' }
+    { name: '阿爾文', title: '節點執行官', level: 25, pet: '金焰獅', petType: '熱能', align: '信標聯盟', desc: '主導大型區域治理與調度' },
+    { name: 'Q', title: '情資網路管理者', level: 18, pet: '數據烏鴉', petType: '數據', align: '中立', desc: '擅長追蹤異常訊號與假消息' },
+    { name: '牡丹', title: '公共關係顧問', level: 12, pet: '花仙蝶', petType: '生質', align: '信標聯盟', desc: '精於社交協商與多方協調' }
   ],
   '蓬萊仙島': [
-    { name: '白蓮花仙', title: '島主', level: 30, pet: '蓮花靈', petType: '靈系', align: '正派', desc: '守護仙境，神秘莫測' }
+    { name: '蓮白', title: '觀測站負責人', level: 30, pet: '蓮芯靈', petType: '共鳴', align: '信標聯盟', desc: '管理高維訊號觀測與封存' }
   ]
 };
 
@@ -68,8 +68,45 @@ const STORY_TIMEOUT_MS = Math.max(10000, Number(process.env.STORY_TIMEOUT_MS || 
 const CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.CHOICE_TIMEOUT_MS || 26000));
 const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000));
 
+const FACTION_DISPLAY_MAP = Object.freeze({
+  '正派': '信標聯盟',
+  '機變派': '灰域協定',
+  '反派': '灰域協定'
+});
+
+const NARRATIVE_TERM_REPLACEMENTS = [
+  [/\b寶可夢\b/gi, '晶獸'],
+  [/\b數碼寶貝\b/gi, '碼獸'],
+  [/\b斗羅大陸\b/gi, '星核紀元'],
+  [/江湖/g, '星域網路'],
+  [/俠客|俠士|俠義|大俠/g, '探索者'],
+  [/武林/g, '探索圈'],
+  [/門派/g, '陣營'],
+  [/武功|武學/g, '戰技模組'],
+  [/內力/g, '能量'],
+  [/打坐/g, '靜態校準'],
+  [/修煉/g, '同步校準'],
+  [/劍/g, '刃械'],
+  [/掌法|拳法/g, '近戰模組'],
+  [/師父|道長|掌門/g, '導師'],
+  [/寺廟/g, '中繼站']
+];
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function mapFactionLabel(raw = '') {
+  const key = String(raw || '').trim();
+  return FACTION_DISPLAY_MAP[key] || key || '信標聯盟';
+}
+
+function sanitizeNarrativeText(text = '') {
+  let output = String(text || '');
+  for (const [pattern, replacement] of NARRATIVE_TERM_REPLACEMENTS) {
+    output = output.replace(pattern, replacement);
+  }
+  return output;
 }
 
 function sanitizeAIContent(content) {
@@ -102,9 +139,10 @@ function sanitizeAIContent(content) {
 function normalizeOutputByLanguage(text, playerLang = 'zh-TW') {
   const source = typeof text === 'string' ? text : String(text || '');
   if (!source) return '';
-  if (playerLang === 'zh-TW') return convertCNToTW(source);
-  if (playerLang === 'zh-CN') return convertTWToCN(source);
-  return source;
+  const sanitized = sanitizeNarrativeText(source);
+  if (playerLang === 'zh-TW') return convertCNToTW(sanitized);
+  if (playerLang === 'zh-CN') return convertTWToCN(sanitized);
+  return sanitized;
 }
 
 function normalizeChoiceByLanguage(choice, playerLang = 'zh-TW') {
@@ -192,6 +230,7 @@ async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', locati
   if (!actionSpec) throw new Error(`Unsupported system choice action: ${action}`);
 
   const prompt = `你在設計 Renaiss 遊戲中的互動選項，請回傳 JSON 物件，不要任何額外文字。
+風格限制：原創科幻生態敘事，禁止武俠語氣與既有 IP 名詞。
 
 語言：${playerLang}（${langInstruction}）
 行動代碼：${action}
@@ -203,6 +242,7 @@ ${actionSpec}
 規則：
 1. 不能使用通用空話，不要「隨便逛逛」「先看看」。
 2. 內容要有畫面感，且和 Renaiss 世界觀一致。
+3. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐。
 3. 直接輸出 JSON。`;
 
   const response = await callAI(prompt, 0.9, {
@@ -233,6 +273,7 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '') 
   }[playerLang] || '請用繁體中文';
 
   const prompt = `你要生成 Renaiss 遊戲的市場選項，請回傳 JSON 陣列，不要任何額外文字。
+風格限制：原創科幻生態敘事，禁止武俠語氣與既有 IP 名詞。
 
 語言：${playerLang}（${langInstruction}）
 地點：${location || '未知地點'}
@@ -250,6 +291,7 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '') 
 規則：
 1. 內容要具體，不要套句。
 2. 兩筆語氣必須明顯不同。
+3. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐。
 3. 直接輸出 JSON。`;
 
   const response = await callAI(prompt, 0.92, {
@@ -716,12 +758,12 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
 // ========== 生成故事（帶記憶）============
 async function generateStory(event, player, pet, previousChoice, memoryContext = '') {
   const startedAt = Date.now();
-  const location = player.location || '襄陽城';
+  const location = player.location || '河港鎮';
   const playerName = player.name || '冒險者';
   const petName = pet?.name || '寵物';
-  const petType = pet?.type || '正派';
+  const petType = mapFactionLabel(pet?.type || '正派');
   const alignmentRaw = player.alignment || '正派';
-  const alignment = alignmentRaw === '反派' ? '機變派' : alignmentRaw;
+  const alignment = mapFactionLabel(alignmentRaw);
   const mainStoryBrief = MAIN_STORY.getMainStoryBrief(player);
   const loreSnippet = WORLD_LORE.getLorePromptSnippet();
   
@@ -772,7 +814,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const focusedMemory = summarizeContext(memoryContext, 980, 12);
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
   
-  const prompt = `你是Renaiss星球的說書人，講故事要有畫面感、節奏感。
+  const prompt = `你是 Renaiss 世界的原創敘事引擎，風格是「生態夥伴 + 數據進化 + 區域事件」。
+禁止武俠腔、禁止借用任何既有作品專有名詞或角色名。
 
 【當前場景】
 位置：${location} - ${locDesc}
@@ -797,12 +840,13 @@ ${previousAction}
 ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼。故事目標長度約 400-500 字。要點：
 1. 有具體的場景（光線、聲音、氣味、溫度、觸感）
 2. 有NPC或環境的互動
-3. 有Renaiss星球的科幻與奇幻元素
+3. 強調原創世界觀：夥伴連線、數據擾動、環境事件、資源博弈
 4. 故事要有懸念，讓人想繼續看
 5. 嚴格使用對應語言，${langInstruction.replace('請用', '全部')}
 6. 若語言設定為 zh-TW，嚴禁使用簡體字
 7. 若【玩家之前的足跡】提到同地點人物/衝突/情緒，優先做出連貫呼應（例如老闆記得你、壞人記得你、你記得天空與環境）
 8. 若角色說出抽象口號（例如「真實的代價」），必須在接下來 1-2 句交代具體含義（要付出什麼代價）
+9. 禁止出現武俠相關詞：江湖、俠客、門派、武功、內力、打坐、修煉等
 
 直接開始講：`;
 
@@ -841,7 +885,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 // ========== AI 生成選項（帶風險標籤+更具體）============
 async function generateChoicesWithAI(player, pet, previousStory, memoryContext = '') {
   const startedAt = Date.now();
-  const location = player.location || '襄陽城';
+  const location = player.location || '河港鎮';
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
   const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
@@ -874,7 +918,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const storyFocus = buildStoryFocusForChoices(previousStory || '');
   const fullStoryText = String(previousStory || '').trim();
   
-  const prompt = `你是Renaiss星球的冒險策劃師，設計的選項要有創意、刺激！
+  const prompt = `你是 Renaiss 世界的冒險策劃師，設計的選項要有創意、刺激。
+風格限制：原創科幻生態敘事，禁止武俠語氣，禁止既有 IP 名詞（寶可夢、數碼寶貝、斗羅大陸等）。
 
 【當前情境】
 位置：${location} - ${locDesc}
@@ -923,6 +968,7 @@ ${storyFocus.closing || '（無）'}
    - 1 個非戰鬥應對選項（例如佈防、談判、撤離、求援）
 
 禁止出現：打坐修煉、隨便逛逛、原地休息這類選項！
+也禁止出現武俠詞彙：江湖、俠客、門派、武功、內力。
 
 ${langInstruction}輸出7個選項，每行一個。例如：
 [⚔️會戰鬥] 衝上去阻止：飛身撲向失控的飛行器（會進入戰鬥）
@@ -1000,7 +1046,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
 // ========== 初始選項生成（開場用）============
 async function generateInitialChoices(player, pet) {
   const startedAt = Date.now();
-  const location = player.location || '襄陽城';
+  const location = player.location || '河港鎮';
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
   const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
@@ -1024,7 +1070,8 @@ async function generateInitialChoices(player, pet) {
     'en': 'Please output in English'
   }[playerLang] || '請用繁體中文輸出';
   
-  const prompt = `你是Renaiss星球的冒險策劃師，設計的开場選項要有吸引力！
+  const prompt = `你是 Renaiss 世界的冒險策劃師，設計開場選項要有吸引力。
+風格限制：原創科幻生態敘事，禁止武俠語氣，禁止既有 IP 名詞（寶可夢、數碼寶貝、斗羅大陸等）。
 
 【開場情境】
 位置：${location} - ${locDesc}
@@ -1041,6 +1088,7 @@ async function generateInitialChoices(player, pet) {
 1. 每個選項要有創意、有畫面感
 2. 不要無聊選項
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
+4. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐
 
 風險標籤：
 - [🔥高風險] - 可能危險

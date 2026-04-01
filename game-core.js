@@ -1,5 +1,5 @@
 /**
- * 🌟 Renaiss World - AI 開放世界武俠 RPG
+ * 🌟 Renaiss World - AI 開放世界科幻 RPG
  * 
  * 核心遊戲引擎
  */
@@ -10,6 +10,7 @@ const https = require('https');
 
 const MEMORY_INDEX = require('./memory-index');
 const FACTION_DIRECTOR = require('./faction-war-director');
+const { sanitizeWorldText } = require('./style-sanitizer');
 const {
   MAP_LOCATIONS,
   LOCATION_PROFILES,
@@ -92,7 +93,7 @@ let world = {
   weather: "晴",
   weatherEffects: {
     "雨": { 火系傷害: -30, 移動速度: -20, 視距: -30 },
-    "雪": { 內功消耗: +20, 移動速度: -30, 視距: -50 },
+    "雪": { 能量消耗: +20, 移動速度: -30, 視距: -50 },
     "霧": { 視距: -60, 偷襲成功率: +20 },
     "晴": { 無影響: 0 }
   },
@@ -1254,7 +1255,7 @@ const NPC_AGENTS = [
   { id: "su_doctor", name: "蘇醫生", title: "細胞治療師", sect: "中立", loc: "襄陽城", align: "good",
     personality: "懸壺濟世，視錢財如糞土",
     stats: { 戰力: 20, 生命: 90, 內力: 40, 智商: 88, 魅力: 85, 運氣: 75, 財富: 60 },
-    skills: { "細胞修復": { realm: "宗師", proficiency: 500 }, "解毒術": { realm: "大師", proficiency: 400 } },
+    skills: { "細胞修復": { realm: "頂尖", proficiency: 500 }, "解毒術": { realm: "大師", proficiency: 400 } },
     inventory: ["治療針劑", "解毒草藥"],
     relationships: { "林工程師": 80, "黑影商人": 30 },
     memory: [] },
@@ -1269,21 +1270,21 @@ const NPC_AGENTS = [
   { id: "crown_prince", name: "皇太子", title: "未來統治者", sect: "皇室", loc: "大都", align: "good",
     personality: "心懷天下，但行事低調",
     stats: { 戰力: 25, 生命: 85, 內力: 30, 智商: 90, 魅力: 88, 運氣: 80, 財富: 100 },
-    skills: { "皇室禮儀": { realm: "宗師", proficiency: 500 }, "能量護盾": { realm: "精通", proficiency: 300 } },
+    skills: { "皇室禮儀": { realm: "頂尖", proficiency: 500 }, "能量護盾": { realm: "精通", proficiency: 300 } },
     inventory: ["皇室印璽", "護身符"],
     relationships: { "將軍王": 90 },
     memory: [] },
   { id: "general_wang", name: "將軍王", title: "邊境守將", sect: "軍隊", loc: "大都", align: "good",
     personality: "戎馬一生，紀律嚴明",
     stats: { 戰力: 95, 生命: 100, 內力: 50, 智商: 75, 魅力: 82, 運氣: 70, 財富: 70 },
-    skills: { "戰甲操控": { realm: "宗師", proficiency: 500 }, "軍事戰略": { realm: "大師", proficiency: 450 } },
+    skills: { "戰甲操控": { realm: "頂尖", proficiency: 500 }, "軍事戰略": { realm: "大師", proficiency: 450 } },
     inventory: ["外骨骼裝甲", "軍事地圖"],
     relationships: { "皇太子": 90, "間諜Q": 20 },
     memory: [] },
   { id: "spy_q", name: "間諜Q", title: "情報頭子", sect: "情報機構", loc: "大都", align: "neutral",
     personality: "為錢辦事，職業素養極高",
     stats: { 戰力: 22, 生命: 75, 內力: 35, 智商: 92, 魅力: 78, 運氣: 65, 財富: 88 },
-    skills: { "數據破解": { realm: "宗師", proficiency: 500 }, "偽裝術": { realm: "大師", proficiency: 400 } },
+    skills: { "數據破解": { realm: "頂尖", proficiency: 500 }, "偽裝術": { realm: "大師", proficiency: 400 } },
     inventory: ["數據晶片", "變聲器"],
     relationships: { "將軍王": 20, "黑影商人": 60 },
     memory: [] },
@@ -1291,14 +1292,14 @@ const NPC_AGENTS = [
   { id: "peony_lady", name: "牡丹夫人", title: "牡丹山莊莊主", sect: "牡丹山莊", loc: "洛陽城", align: "good",
     personality: "洛陽城實際掌控者，八面玲瓏",
     stats: { 戰力: 28, 生命: 82, 內力: 55, 智商: 90, 魅力: 95, 運氣: 75, 財富: 98 },
-    skills: { "花語操控": { realm: "宗師", proficiency: 500 }, "談判術": { realm: "大師", proficiency: 450 } },
+    skills: { "花語操控": { realm: "頂尖", proficiency: 500 }, "談判術": { realm: "大師", proficiency: 450 } },
     inventory: ["牡丹山莊令牌", "基因改造花種"],
     relationships: { "說書人老張": 85, "賞金獵人雷": 60 },
     memory: [] },
-  { id: "storyteller_zhang", name: "說書人老張", title: "江湖百曉生", sect: "中立", loc: "洛陽城", align: "neutral",
+  { id: "storyteller_zhang", name: "說書人老張", title: "情報觀測員", sect: "中立", loc: "洛陽城", align: "neutral",
     personality: "什麼都知道，什麼都說，嘴上沒把門",
     stats: { 戰力: 5, 生命: 60, 內力: 10, 智商: 85, 魅力: 80, 運氣: 55, 財富: 40 },
-    skills: { "情報收集": { realm: "宗師", proficiency: 500 }, "記憶術": { realm: "大師", proficiency: 400 } },
+    skills: { "情報收集": { realm: "頂尖", proficiency: 500 }, "記憶術": { realm: "大師", proficiency: 400 } },
     inventory: ["記錄晶片", "各地地圖"],
     relationships: { "牡丹夫人": 85, "黑影商人": 70 },
     memory: [] },
@@ -1313,14 +1314,14 @@ const NPC_AGENTS = [
   { id: "abu_trader", name: "絲路商人阿布", title: "駝隊首領", sect: "絲路商會", loc: "敦煌", align: "neutral",
     personality: "精明但誠信，沙漠中的老狐狸",
     stats: { 戰力: 12, 生命: 75, 內力: 20, 智商: 85, 魅力: 80, 運氣: 70, 財富: 90 },
-    skills: { "商務談判": { realm: "宗師", proficiency: 500 }, "沙漠生存": { realm: "大師", proficiency: 400 } },
+    skills: { "商務談判": { realm: "頂尖", proficiency: 500 }, "沙漠生存": { realm: "大師", proficiency: 400 } },
     inventory: ["商隊通行證", "沙漠導航儀"],
     relationships: { "敦煌守護者": 40, "沙盜首領": 0 },
     memory: [] },
   { id: "dunhuang_guardian", name: "敦煌守護者", title: "莫高窟長老", sect: "莫高窟", loc: "敦煌", align: "good",
     personality: "據說已活了三百年，對敦煌了如指掌",
     stats: { 戰力: 35, 生命: 95, 內力: 80, 智商: 92, 魅力: 75, 運氣: 60, 財富: 50 },
-    skills: { "壁畫解讀": { realm: "宗師", proficiency: 500 }, "遠古知識": { realm: "宗師", proficiency: 500 } },
+    skills: { "壁畫解讀": { realm: "頂尖", proficiency: 500 }, "遠古知識": { realm: "頂尖", proficiency: 500 } },
     inventory: ["洞窟鑰匙", "壁畫複製品"],
     relationships: { "阿布": 40 },
     memory: [] },
@@ -1332,48 +1333,48 @@ const NPC_AGENTS = [
     relationships: { "阿布": 0, "賞金獵人雷": 80 },
     memory: [] },
   // ===== 海外島嶼 =====
-  { id: "island_master", name: "島主東邪", title: "神秘島主", sect: "桃花島", loc: "桃花島", align: "neutral",
+  { id: "island_master", name: "島主東岚", title: "神秘島主", sect: "桃花島", loc: "桃花島", align: "neutral",
     personality: "脾氣古怪的傳說人物，實力深不可測",
     stats: { 戰力: 99, 生命: 100, 內力: 95, 智商: 95, 魅力: 75, 運氣: 70, 財富: 90 },
-    skills: { "混沌之力": { realm: "傳說", proficiency: 600 }, "機關術": { realm: "宗師", proficiency: 500 } },
+    skills: { "混沌之力": { realm: "傳說", proficiency: 600 }, "機關術": { realm: "頂尖", proficiency: 500 } },
     inventory: ["混沌獸蛋", "島嶼地圖"],
     relationships: {},
     memory: [] },
-  // ===== 俠客島 =====
-  { id: "dragon_wood_master", name: "龍木島主", title: "武學宗師", sect: "俠客島", loc: "俠客島", align: "good",
-    personality: "武功蓋世，低調神秘",
+  // ===== 潮汐試煉島 =====
+  { id: "dragon_wood_master", name: "龍木島主", title: "試煉頂尖", sect: "潮汐試煉島", loc: "潮汐試煉島", align: "good",
+    personality: "戰技超群，低調神秘",
     stats: { 戰力: 100, 生命: 100, 內力: 98, 智商: 90, 魅力: 80, 運氣: 75, 財富: 85 },
-    skills: { "頂尖武學": { realm: "傳說", proficiency: 600 }, "能量操控": { realm: "傳說", proficiency: 600 } },
-    inventory: ["武學秘籍", "島嶼通行證"],
+    skills: { "頂尖戰技": { realm: "傳說", proficiency: 600 }, "能量操控": { realm: "傳說", proficiency: 600 } },
+    inventory: ["高階技術檔案", "島嶼通行證"],
     relationships: { "木島主": 100 },
     memory: [] },
   // ===== 北疆地區 =====
-  { id: "ice_queen", name: "冰雪女王", title: "雪山派掌門", sect: "雪山派", loc: "雪白山莊", align: "good",
+  { id: "ice_queen", name: "冰雪女王", title: "雪山站主理人", sect: "雪山站", loc: "雪白山莊", align: "good",
     personality: "一生只愛冰雪，對外人冷淡",
     stats: { 戰力: 92, 生命: 95, 內力: 90, 智商: 88, 魅力: 85, 運氣: 65, 財富: 80 },
-    skills: { "冰晶操控": { realm: "宗師", proficiency: 500 }, "冰川之力": { realm: "大師", proficiency: 450 } },
+    skills: { "冰晶操控": { realm: "頂尖", proficiency: 500 }, "冰川之力": { realm: "大師", proficiency: 450 } },
     inventory: ["冰晶權杖", "雪山地圖"],
     relationships: { "獵人老陳": 60 },
     memory: [] },
   { id: "hunter_old_chen", name: "獵人老陳", title: "資深雪地獵人", sect: "中立", loc: "雪白山莊", align: "neutral",
     personality: "在雪山生活了五十年，沉默寡言",
     stats: { 戰力: 50, 生命: 85, 內力: 30, 智商: 75, 魅力: 60, 運氣: 70, 財富: 55 },
-    skills: { "雪地追蹤": { realm: "宗師", proficiency: 500 }, "陷阱術": { realm: "大師", proficiency: 400 } },
+    skills: { "雪地追蹤": { realm: "頂尖", proficiency: 500 }, "陷阱術": { realm: "大師", proficiency: 400 } },
     inventory: ["雪狼標本", "獵具"],
     relationships: { "冰雪女王": 60 },
     memory: [] },
   // ===== 草原部落 =====
   { id: "chief_son", name: "族長之子", title: "草原未來領袖", sect: "草原部落", loc: "草原部落", align: "good",
-    personality: "英俊瀟灑，武藝高強，心懷牧民",
+    personality: "英俊瀟灑，戰技高強，心懷牧民",
     stats: { 戰力: 70, 生命: 90, 內力: 45, 智商: 80, 魅力: 92, 運氣: 75, 財富: 70 },
-    skills: { "騎術": { realm: "宗師", proficiency: 500 }, "草原戰": { realm: "大師", proficiency: 450 } },
+    skills: { "騎術": { realm: "頂尖", proficiency: 500 }, "草原戰": { realm: "大師", proficiency: 450 } },
     inventory: ["赤兔馬", "部落令牌"],
     relationships: { "流浪詩人": 80, "馬賊王": 0 },
     memory: [] },
   { id: "wandering_poet", name: "流浪詩人", title: "草原吟遊者", sect: "中立", loc: "草原部落", align: "neutral",
     personality: "走遍天下的吟遊詩人，見多識廣",
     stats: { 戰力: 8, 生命: 65, 內力: 20, 智商: 88, 魅力: 90, 運氣: 80, 財富: 45 },
-    skills: { "情報收集": { realm: "大師", proficiency: 450 }, "演奏術": { realm: "宗師", proficiency: 500 } },
+    skills: { "情報收集": { realm: "大師", proficiency: 450 }, "演奏術": { realm: "頂尖", proficiency: 500 } },
     inventory: ["詩歌手稿", "樂器"],
     relationships: { "族長之子": 80 },
     memory: [] },
@@ -1385,46 +1386,46 @@ const NPC_AGENTS = [
     relationships: { "族長之子": 0, "賞金獵人雷": 90 },
     memory: [] },
   // ===== 光明頂 =====
-  { id: "ming_emperor", name: "教主明皇", title: "明教教主", sect: "明教", loc: "光明頂", align: "good",
+  { id: "ming_emperor", name: "主導者明皇", title: "光焰議會主導者", sect: "光焰議會", loc: "光明頂", align: "good",
     personality: "光明的守護者，理想主義者",
     stats: { 戰力: 95, 生命: 100, 內力: 90, 智商: 88, 魅力: 85, 運氣: 75, 財富: 80 },
-    skills: { "聖火操控": { realm: "宗師", proficiency: 500 }, "光能術": { realm: "大師", proficiency: 450 } },
-    inventory: ["聖火令", "教主印璽"],
+    skills: { "聖火操控": { realm: "頂尖", proficiency: 500 }, "光能術": { realm: "大師", proficiency: 450 } },
+    inventory: ["聖火令", "主導者印璽"],
     relationships: { "火焰使者": 90, "叛教者": 0 },
     memory: [] },
-  { id: "flame_ember", name: "火焰使者", title: "五行旗首領", sect: "明教", loc: "光明頂", align: "good",
+  { id: "flame_ember", name: "火焰使者", title: "前線旗隊首領", sect: "光焰議會", loc: "光明頂", align: "good",
     personality: "火爆脾氣，正義感強",
     stats: { 戰力: 85, 生命: 90, 內力: 75, 智商: 75, 魅力: 70, 運氣: 65, 財富: 60 },
-    skills: { "火焰操控": { realm: "宗師", proficiency: 500 }, "戰鬥術": { realm: "大師", proficiency: 400 } },
+    skills: { "火焰操控": { realm: "頂尖", proficiency: 500 }, "戰鬥術": { realm: "大師", proficiency: 400 } },
     inventory: ["火焰令牌", "五行旗幟"],
-    relationships: { "教主明皇": 90, "叛教者": 0 },
+    relationships: { "主導者明皇": 90, "叛教者": 0 },
     memory: [] },
   { id: "traitor", name: "叛教者", title: "黑暗叛徒", sect: "暗黑組織", loc: "光明頂", align: "evil",
-    personality: "逃離明教的叛徒，充滿怨恨",
+    personality: "逃離光焰議會的叛徒，充滿怨恨",
     stats: { 戰力: 80, 生命: 85, 內力: 70, 智商: 85, 魅力: 60, 運氣: 55, 財富: 75 },
     skills: { "暗能量操控": { realm: "大師", proficiency: 450 }, "背叛術": { realm: "精通", proficiency: 300 } },
     inventory: ["暗黑手冊", "暗能量晶體"],
-    relationships: { "教主明皇": 0, "火焰使者": 0, "總管太監": 80 },
+    relationships: { "主導者明皇": 0, "火焰使者": 0, "總管太監": 80 },
     memory: [] },
   // ===== 黑木崖 =====
-  { id: "chamberlain", name: "總管太監", title: "日月光基地下首領", sect: "日月神教", loc: "黑木崖", align: "evil",
+  { id: "chamberlain", name: "總管太監", title: "日月光基地下首領", sect: "暗潮議會", loc: "黑木崖", align: "evil",
     personality: "權傾朝野的陰謀家，笑裡藏刀",
     stats: { 戰力: 35, 生命: 70, 內力: 65, 智商: 95, 魅力: 80, 運氣: 60, 財富: 100 },
-    skills: { "暗能量操控": { realm: "宗師", proficiency: 500 }, "權謀術": { realm: "宗師", proficiency: 500 } },
-    inventory: ["日月神教令牌", "情報網絡圖"],
+    skills: { "暗能量操控": { realm: "頂尖", proficiency: 500 }, "權謀術": { realm: "頂尖", proficiency: 500 } },
+    inventory: ["暗潮議會令牌", "情報網絡圖"],
     relationships: { "叛教者": 80, "暗影殺手": 100 },
     memory: [] },
-  { id: "shadow_assassin", name: "暗影殺手", title: "日月神教刺客", sect: "日月神教", loc: "黑木崖", align: "evil",
+  { id: "shadow_assassin", name: "暗影殺手", title: "暗潮議會刺客", sect: "暗潮議會", loc: "黑木崖", align: "evil",
     personality: "無聲無息的死亡使者",
     stats: { 戰力: 80, 生命: 80, 內力: 60, 智商: 85, 魅力: 55, 運氣: 50, 財富: 70 },
-    skills: { "隱身術": { realm: "宗師", proficiency: 500 }, "暗殺術": { realm: "大師", proficiency: 450 } },
+    skills: { "隱身術": { realm: "頂尖", proficiency: 500 }, "暗殺術": { realm: "大師", proficiency: 450 } },
     inventory: ["暗殺匕首", "隱身披風"],
     relationships: { "總管太監": 100 },
     memory: [] },
   { id: "double_agent", name: "雙面間諜", title: "多重身份", sect: "未知", loc: "黑木崖", align: "neutral",
     personality: "沒人知道他的真實立場",
     stats: { 戰力: 18, 生命: 70, 內力: 35, 智商: 92, 魅力: 85, 運氣: 75, 財富: 85 },
-    skills: { "偽裝術": { realm: "宗師", proficiency: 500 }, "情報收集": { realm: "大師", proficiency: 450 } },
+    skills: { "偽裝術": { realm: "頂尖", proficiency: 500 }, "情報收集": { realm: "大師", proficiency: 450 } },
     inventory: ["變色面具", "加密通訊器"],
     relationships: { "總管太監": 50, "賞金獵人雷": 60 },
     memory: [] }
@@ -1469,11 +1470,11 @@ async function worldTick(useAI, apiKey) {
   // 每日隨機事件
   if (Math.random() < 0.2) {
     const rumors = [
-      "聽說蒙古大軍在邊境集結",
-      "俠客島的太玄經傳聞再現",
-      "明教正在秘密集結",
-      "華山派又有紛爭",
-      "Renaiss星球出現俠盜劫富濟貧"
+      "聽說北境重裝軍在邊境集結",
+      "潮汐試煉島的古代核心檔案傳聞再現",
+      "光焰議會正在秘密集結",
+      "高山訓練站又有內部紛爭",
+      "Renaiss星球出現匿名義賊回收黑市贓物"
     ];
     world.rumors.push(rumors[Math.floor(Math.random() * rumors.length)]);
     if (world.rumors.length > 10) world.rumors.pop();
@@ -1519,7 +1520,7 @@ async function worldTick(useAI, apiKey) {
       } else if (rand < 0.75) {
         eventType = "搞笑";
       } else if (rand < 0.85) {
-        eventType = "修煉";
+        eventType = "訓練";
       } else {
         eventType = "休息";
       }
@@ -1532,7 +1533,7 @@ async function worldTick(useAI, apiKey) {
         const interactions = [
           `，巧遇${other.name}，二人切磋了一番！`,
           `，與${other.name}把酒言歡！`,
-          `，遇到${other.name}在修煉，駐足觀看！`,
+          `，遇到${other.name}在訓練，駐足觀看！`,
           `，和${other.name}商討Renaiss星球大事！`
         ];
         const interaction = interactions[Math.floor(Math.random() * interactions.length)];
@@ -1582,16 +1583,16 @@ const PLOT_EVENTS = {
   // 战斗类
   "戰鬥": [
     "在路邊教訓了幾個欺負百姓的地痞",
-    "與門派弟子切磋武功，不分上下",
+    "與陣營弟子切磋戰技，不分上下",
     "遭遇埋伏，奮力突圍",
     "路見不平，拔刀相助",
     "與仇家狹路相逢，爆發激戰",
-    "在客棧與人發生衝突",
+    "在中繼旅店與人發生衝突",
     "守護商隊抵禦山賊襲擊"
   ],
   // 奇遇类
   "奇遇": [
-    "在山洞中發現前人留下的武功秘籍",
+    "在山洞中發現前人留下的技術檔案",
     "路邊救了一個重傷的老者，原來是隱世高手",
     "在河邊撿到一個奇怪的玉佩",
     "誤入一片迷霧，發現世外桃源",
@@ -1601,12 +1602,12 @@ const PLOT_EVENTS = {
   ],
   // 社交类
   "社交": [
-    "在酒樓認識了一位俠客相談甚歡",
+    "在情報酒吧認識了一位探索者相談甚歡",
     "路過貧困村莊，資助了村民",
     "遇見以前的恩師",
     "被一群粉絲認出來包圍",
-    "在集市上看到有人在賣假秘籍",
-    "巧遇門派師兄妹",
+    "在集市上看到有人在賣假技術檔案",
+    "巧遇陣營師兄妹",
     "遇見一個奇怪的算命先生"
   ],
   // 任务类
@@ -1649,11 +1650,11 @@ const LOCATION_EVENTS = {
   "廣州": ["在港口觀看飛艇起降", "在基因改造海鮮市場", "與番邦商人交易"],
   "大理": ["遊覽山城風光", "品嚐當地美食", "在基因花園漫步"],
   "桃花島": ["險遇島嶼機關", "在桃花林中迷路", "遠距離觀察島主"],
-  "俠客島": ["在島上發現秘籍壁刻", "遇到前來挑戰的武者", "見證島主的實力"],
-  "雪白山莊": ["在冰晶洞窟探险", "險遇雪山派弟子", "在冰川前感嘆大自然的壯麗"],
+  "潮汐試煉島": ["在島上發現技術檔案壁刻", "遇到前來挑戰的試煉者", "見證島主的實力"],
+  "雪白山莊": ["在冰晶洞窟探险", "險遇雪山站守衛", "在冰川前感嘆大自然的壯麗"],
   "草原部落": ["在部落參加篝火晚會", "與牧民一起放牧", "險遇馬賊團襲擊"],
-  "光明頂": ["觀摩聖火廣場的儀式", "在能量塔下沉思", "見證明教的聖火傳承"],
-  "黑木崖": ["險些被日月神教的人發現", "在深淵邊緣探索", "聽聞組織內部的陰謀"]
+  "光明頂": ["觀摩聖火廣場的儀式", "在能量塔下沉思", "見證光焰議會的聖火傳承"],
+  "黑木崖": ["險些被暗潮議會的人發現", "在深淵邊緣探索", "聽聞組織內部的陰謀"]
 };
 
 // 根據性格和地點生成劇情
@@ -1673,7 +1674,7 @@ function generatePlotEvent(agent, eventType) {
     if (Math.random() < 0.4) event = "幫助了一個需要援手的陌生人";
   }
   if (personality.includes("貪吃") || personality.includes("嗜酒")) {
-    if (Math.random() < 0.3) event = "在酒樓大碗喝酒，大塊吃肉，好不快活";
+    if (Math.random() < 0.3) event = "在情報酒吧大碗喝酒，大塊吃肉，好不快活";
   }
   if (personality.includes("機關算盡") || personality.includes("聰明")) {
     if (Math.random() < 0.3) event = "用計謀解決了一個難題";
@@ -1695,15 +1696,15 @@ function generateCharacterLog(agent, eventType) {
     "戰鬥": [
       `${agent.name}在${loc}路見不平！施展「${skill}」教訓了惡人，俠名遠播！`,
       `${agent.name}在${loc}遭遇偷襲，展開反擊！一番激戰後，擊退了敵人！`,
-      `${agent.name}在${loc}測試新武功，掌風凌厲，周圍的人都看呆了！`
+      `${agent.name}在${loc}測試新戰技，掌風凌厲，周圍的人都看呆了！`
     ],
     "奇遇": [
-      `${agent.name}在${loc}探險時，無意間發現了一本珍貴的秘籍！`,
+      `${agent.name}在${loc}探險時，無意間發現了一本珍貴的技術檔案！`,
       `${agent.name}在${loc}遇見一位神秘老者，交給他一個重要任務！`,
       `${agent.name}在${loc}的懸崖邊，發現了稀世草藥「${['雪蓮','靈芝','人參'][Math.floor(Math.random()*3)]}」！`
     ],
     "社交": [
-      `${agent.name}在${loc}的酒樓認識了幾位俠客相談甚歡！`,
+      `${agent.name}在${loc}的情報酒吧認識了幾位探索者相談甚歡！`,
       `${agent.name}在${loc}資助了一個貧困的家庭，積攢了陰德！`,
       `${agent.name}在${loc}巧遇舊友，把酒言歡到天明！`
     ],
@@ -1714,17 +1715,17 @@ function generateCharacterLog(agent, eventType) {
     ],
     "危險": [
       `${agent.name}在${loc}不小心得罪了當地幫派，被追殺中！僥倖逃脫！`,
-      `${agent.name}在${loc}誤中陷阱，耗費大量內力才脫困！`,
+      `${agent.name}在${loc}誤中陷阱，耗費大量能量才脫困！`,
       `${agent.name}在${loc}遭遇埋伏，受了重傷！`
     ],
     "搞笑": [
-      `${agent.name}在${loc}吃飯忘記帶錢，被迫在客棧洗碗抵債！太丟臉了！`,
+      `${agent.name}在${loc}吃飯忘記帶錢，被迫在中繼旅店洗碗抵債！太丟臉了！`,
       `${agent.name}在${loc}誤把野草當成寶貝，結果...算了不說了！`,
-      `${agent.name}在${loc}被一隻鵝追著跑了三條街！俠客形象全毀！`
+      `${agent.name}在${loc}被一隻鵝追著跑了三條街！探索者形象全毀！`
     ],
-    "修煉": [
-      `${agent.name}在${loc}閉關修煉${skill}，感覺對武功有了新的領悟！`,
-      `${agent.name}在${loc}打坐調息，內力修為提升！`,
+    "訓練": [
+      `${agent.name}在${loc}閉關訓練${skill}，感覺對戰技有了新的領悟！`,
+      `${agent.name}在${loc}調頻調息，能量水位提升！`,
       `${agent.name}在${loc}演練${skill}，招式越來越純熟！`
     ],
     "休息": [
@@ -1761,7 +1762,7 @@ async function agentThink(agent, apiKey) {
   } else if (rand < 0.75) {
     eventType = "搞笑";
   } else if (rand < 0.85) {
-    eventType = "修煉";
+    eventType = "訓練";
   } else {
     eventType = "休息";
   }
@@ -1775,7 +1776,7 @@ async function agentThink(agent, apiKey) {
     const interactions = [
       `，巧遇${other.name}，二人切磋了一番！`,
       `，與${other.name}把酒言歡！`,
-      `，遇到${other.name}在修煉，駐足觀看！`,
+      `，遇到${other.name}在訓練，駐足觀看！`,
       `，和${other.name}商討Renaiss星球大事！`
     ];
     eventDesc += interactions[Math.floor(Math.random() * interactions.length)];
@@ -1895,6 +1896,23 @@ function createPlayer(discordId, name, gender, sect) {
     memories: [],
     memoryDigest: null,
     storyTurns: 0,
+    currentStory: '',
+    eventChoices: [],
+    generationState: {
+      id: null,
+      source: 'none',
+      status: 'idle',
+      phase: 'idle',
+      startedAt: 0,
+      updatedAt: 0,
+      sourceChoice: '',
+      lastError: null,
+      storySnapshot: '',
+      choicesSnapshot: [],
+      loadingMessageId: null,
+      attempts: 0
+    },
+    generationHistory: [],
     starterRewards: {
       fivePullClaimed: false,
       claimedAt: 0
@@ -1982,7 +2000,7 @@ const HERBS = {
   "雪蓮": { 功效: "療傷", 等級: 4, 屬性: { 止血: 8, 溫陽: 4 } },
   "田七": { 功效: "活血化瘀", 等級: 2, 屬性: { 活血: 5, 止血: 3 } },
   "茯苓": { 功效: "利水滲濕", 等級: 2, 屬性: { 利水: 5, 補氣: 2 } },
-  "毒蛇膽": { 功效: "大增內力", 等級: 4, 屬性: { 內力: 15, 毒性: 3 } },
+  "毒蛇膽": { 功效: "大增能量", 等級: 4, 屬性: { 內力: 15, 毒性: 3 } },
   "蜈蚣": { 功效: "以毒攻毒", 等級: 3, 屬性: { 解毒: 8, 毒性: 5 } },
   "蜂蜜": { 功效: "調和藥性", 等級: 1, 屬性: { 調和: 10, 補氣: 1 } },
   "食鹽": { 功效: "消炎", 等級: 1, 屬性: { 消炎: 3 } }
@@ -2013,14 +2031,14 @@ function craftingLogic(ingredients) {
   }
   if (totalProps.補氣 >= 5 && totalProps.毒性 < 3) {
     const level = Math.min(5, Math.floor(totalProps.補氣 / 3));
-    results.push({ name: "補氣丸Lv" + level, desc: "溫和補氣", effect: "內力+" + totalProps.補氣 * 10, success: true });
+    results.push({ name: "補氣丸Lv" + level, desc: "溫和補氣", effect: "能量+" + totalProps.補氣 * 10, success: true });
   }
   if (totalProps.止血 >= 5 || totalProps.清熱 >= 5) {
     const level = Math.min(5, Math.floor((totalProps.止血 + totalProps.清熱) / 4));
     results.push({ name: "療傷藥Lv" + level, desc: "清熱止血", effect: "生命恢復" + Math.floor((totalProps.止血 + totalProps.清熱) * 8), success: true });
   }
   if (totalProps.補氣 >= 10 && totalProps.溫陽 >= 5 && totalProps.毒性 < 2) {
-    results.push({ name: "大還丹", desc: "珍稀丹藥！", effect: "內力+100，生命全滿", legendary: true, success: true });
+    results.push({ name: "大還丹", desc: "珍稀丹藥！", effect: "能量+100，生命全滿", legendary: true, success: true });
   }
   
   return results.length > 0 ? results : [{ name: "失敗的丹藥", desc: "配方不對...", success: false }];
@@ -2054,13 +2072,13 @@ async function negotiationPrompt(npc, player, situation, apiKey) {
   }
 
   const prompt =
-    "你是武俠世界中的NPC，正在和玩家當面互動。\n\n【NPC】\n名字：" + npcName + "\n性格：" + (npc?.personality || '沉穩') + "\n門派：" + (npc?.sect || '中立') +
+    "你是開放世界中的NPC，正在和玩家當面互動。\n\n【NPC】\n名字：" + npcName + "\n性格：" + (npc?.personality || '沉穩') + "\n陣營：" + (npc?.sect || '中立') +
     "\n\n【玩家】\n名字：" + (player?.name || '旅人') + "\n實力：" + (player?.stats?.戰力 || 50) + "\n財富：" + (player?.stats?.財富 || 50) + "\n聲望：" + (player?.reputation || 0) +
     "\n\n【談判情境】\n" + safeSituation +
     "\n\n【NPC記憶（先讀再回覆）】\n" + (npcMemoryContext || '目前沒有可用的私有/公共記憶。') +
     "\n\n【回覆規則】\n1. 50-100字。\n2. 必須明確體現上述性格，不可平淡。\n3. 若記憶裡提到玩家過往互動，需自然引用至少一點。\n4. 只輸出NPC當下會說的內容，不要系統說明、不要模板句。";
 
-  const reply = await callAI(prompt, apiKey);
+  const reply = sanitizeWorldText(await callAI(prompt, apiKey));
   const invalidReply = /^(需要API Key|API Error|連線錯誤|解析錯誤|（無回應）)$/;
   if (!reply || invalidReply.test(String(reply).trim())) {
     throw new Error(`NPC dialogue generation failed: ${reply || 'empty reply'}`);
@@ -2088,7 +2106,7 @@ async function negotiationPrompt(npc, player, situation, apiKey) {
     }
   }
 
-  return reply;
+  return sanitizeWorldText(reply);
 }
 
 // ============== AI API ==============
@@ -2173,7 +2191,7 @@ function resetPlayerGame(playerId) {
   
   return {
     success: true,
-    message: 'Renaiss星球夢醒，一切歸零。你的俠客之路已經重新開始...'
+    message: 'Renaiss星球夢醒，一切歸零。你的探索者之路已經重新開始...'
   };
 }
 

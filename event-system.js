@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getLocationProfile, getNearbyPoints } = require('./world-map');
+const { sanitizeWorldText, sanitizeWorldObject } = require('./style-sanitizer');
 
 // ============== 50+ 事件庫（長敘事版）==============
 const BASE_EVENTS = [
@@ -103,10 +104,10 @@ const BASE_EVENTS = [
   },
   {
     id: 'tavern_gossip',
-    name: '🍺 酒樓聽傳聞',
-    choice: '走進酒樓，找個角落坐下聆聽傳聞',
+    name: '🍺 情報酒吧聽傳聞',
+    choice: '走進情報酒吧，找個角落坐下聆聽傳聞',
     type: 'social',
-    desc: '走進Renaiss星球最熱鬧的酒樓，喧鬧的氣氛迎面而來。各色人等聚集在此——商人冒險者俠客盜賊...他們大聲談笑，分享著各自的經歷和傳聞。你找了個角落的位置坐下，豎起耳朵仔細聆聽...',
+    desc: '走進Renaiss星球最熱鬧的情報酒吧，喧鬧的氣氛迎面而來。各色人等聚集在此——商人冒險者探索者盜賊...他們大聲談笑，分享著各自的經歷和傳聞。你找了個角落的位置坐下，豎起耳朵仔細聆聽...',
     action: 'gossip'
   },
   {
@@ -125,26 +126,26 @@ const BASE_EVENTS = [
   },
   {
     id: 'inn_rest',
-    name: '😴 找客棧休息',
+    name: '😴 找中繼旅店休息',
     type: 'rest',
-    desc: '找了家看起來溫暖舒適的客棧。老闆娘笑臉相迎，帶你參觀了整潔的房間。窗外細雨綿綿，你在柔软的床铺上沉沉睡去，修復著一路走來的疲憊。',
+    desc: '找了家看起來溫暖舒適的中繼旅店。老闆娘笑臉相迎，帶你參觀了整潔的房間。窗外細雨綿綿，你在柔软的床铺上沉沉睡去，修復著一路走來的疲憊。',
     action: 'rest',
     cost: 10,
     heal: 20
   },
   {
     id: 'meditate',
-    name: '🧘 打坐修煉',
+    name: '🧘 調頻訓練',
     type: 'train',
-    desc: '你找了Renaiss星球一處清幽的山洞，盤腿而坐，閉目凝神。感受著周圍濃郁的靈氣，你開始調整呼吸，讓內力在體內緩緩流轉...',
+    desc: '你找了Renaiss星球一處清幽的山洞，盤腿而坐，閉目凝神。感受著周圍的穩定場域，你開始調整呼吸，讓能量回路逐步回穩...',
     action: 'meditate',
     mpGain: 5
   },
   {
     id: 'meet_hero',
-    name: '👤 遇到其他俠客',
+    name: '👤 遇到其他探索者',
     type: 'social',
-    desc: '在Renaiss星球的旅途中，你遇到了一位氣質不凡的俠客。他穿著素色長衫，腰間佩劍，見到你時微微一笑，點頭示意。短暫的交談中，你感受到他身上深厚的內力修為。',
+    desc: '在Renaiss星球的旅途中，你遇到了一位氣質不凡的探索者。他穿著機能外套，腰間配著多用途工具，見到你時微微一笑，點頭示意。短暫的交談中，你感受到他身上穩定而厚實的能量場。',
     action: 'meet'
   },
   {
@@ -242,7 +243,7 @@ const BASE_EVENTS = [
   },
   {
     id: 'teach_newbie',
-    name: '🗡️ 指點新手武藝',
+    name: '🗡️ 指點新手戰技',
     type: 'positive',
     desc: '遇到一個習武的新手',
     action: 'teach',
@@ -348,7 +349,7 @@ const BASE_EVENTS = [
   },
   {
     id: 'secret_manual',
-    name: '📚 發現武功秘籍',
+    name: '📚 發現技術檔案',
     type: 'special',
     desc: '草叢中發現了一本泛黃的書籍...',
     action: 'manual'
@@ -441,40 +442,40 @@ const BASE_EVENTS = [
   }
 ];
 
-// ============== 師父列表 ==============
+// ============== 導師列表 ==============
 const MASTERS = [
-  // 通用師父
-  { id: 'gold_master', name: '💰 金老闆', element: '金', teaches: ['金針刺穴', '暴雨梨花', '金鐘罩'], price: 500, region: '通用', desc: 'Renaiss星球上有名的兵器商，傳聞他的金針功夫出神入化' },
-  { id: 'wood_master', name: '🌿 木道長', element: '木', teaches: ['天女散花', '羅網天蛛', '回春術'], price: 400, region: '通用', desc: '隱居山林的道士，擅長草藥與自然之力' },
-  { id: 'water_master', name: '💧 水娘娘', element: '水', teaches: ['楊枝淨水', '寒冰掌', '洪水滔天'], price: 600, region: '通用', desc: '傳說中的俠女，輕功水上飄' },
-  { id: 'earth_master', name: '🪨 土地公', element: '土', teaches: ['羅漢金剛腿', '落石陷阱', '流沙陣'], price: 450, region: '通用', desc: '當地的守護神，擅長防禦之術' },
+  // 通用導師
+  { id: 'gold_master', name: '💰 合金教官', element: '光譜', teaches: ['脈衝標定', '碎晶風暴', '堡壘力場'], price: 500, region: '通用', desc: '金工與防護領域專家，擅長穩定前線輸出' },
+  { id: 'wood_master', name: '🌿 生質研究員', element: '生質', teaches: ['孢子刃雨', '纖維束縛', '再生矩陣'], price: 400, region: '通用', desc: '研究植物與細胞修補，偏好持久戰' },
+  { id: 'water_master', name: '💧 潮汐醫師', element: '液態', teaches: ['淨化波', '低溫衝擊', '潮汐奇點'], price: 600, region: '通用', desc: '專精淨化與控場，能在混戰中穩住節奏' },
+  { id: 'earth_master', name: '🪨 地脈工程師', element: '地脈', teaches: ['地脈衝撞', '隕塊墜落', '漂砂陷落'], price: 450, region: '通用', desc: '擅長地形干預與防守反擊' },
   
-  // 正派師父
-  { id: 'fire_master_good', name: '🔥 烈火俠', element: '火', teaches: ['烈焰焚天', '赤焰甲'], price: 700, region: '正派', desc: '俠義為先的火系高手', requires: '正派' },
-  { id: 'combo_master', name: '✨ 白蓮花仙', element: '複合', teaches: ['風火燎原', '雷霆萬鈞'], price: 1500, region: '正派', desc: '隱世高人，融合陰陽五行', requires: '正派' },
+  // 正派導師
+  { id: 'fire_master_good', name: '🔥 熱能巡察員', element: '熱能', teaches: ['電漿盛放', '熱盾回路'], price: 700, region: '正派', desc: '以高熱壓制與護盾反制見長', requires: '正派' },
+  { id: 'combo_master', name: '✨ 聚變架構師', element: '複合', teaches: ['風暴聚變', '雷矢超載'], price: 1500, region: '正派', desc: '專長多元素連段與爆發切入', requires: '正派' },
   
-  // 機變派師父（同屬正義，但走捷徑/博弈手段）
-  { id: 'dark_master', name: '🌑 黑影教主', element: '暗', teaches: ['吸星大法', '無形鎖脈', '離魂散'], price: 1000, region: '機變派', desc: '擅長情報與佈局，教你以最小代價換最大成果', requires: '機變派' },
-  { id: 'poison_master', name: '☠️ 毒娘子', element: '毒', teaches: ['七步斷腸散', '化骨水', '蛛絲縛魂'], price: 700, region: '機變派', desc: '以奇襲與反制見長，不主張硬拼', requires: '機變派' },
-  { id: 'evil_fire_master', name: '💀 火雲邪神', element: '火毒', teaches: ['地獄烈火', '爆炸信號彈', '熱砂地獄'], price: 800, region: '機變派', desc: '風險收益派，重視時機與賭注', requires: '機變派' },
+  // 機變派導師（同屬正義，但走捷徑/博弈手段）
+  { id: 'dark_master', name: '🌑 暗域策士', element: '暗域', teaches: ['核心抽離', '故障鎖定', '神經霧化'], price: 1000, region: '機變派', desc: '擅長情報博弈與低成本控制', requires: '機變派' },
+  { id: 'poison_master', name: '☠️ 毒蝕調配師', element: '毒蝕', teaches: ['腐蝕鏈劑', '熔蝕酸流', '黏網拘束'], price: 700, region: '機變派', desc: '偏好奇襲與持續侵蝕，不打硬碰硬', requires: '機變派' },
+  { id: 'evil_fire_master', name: '💀 協議破壞者', element: '熱毒', teaches: ['煉域協議', '連鎖爆訊', '炙砂域'], price: 800, region: '機變派', desc: '高風險高報酬戰術專家', requires: '機變派' },
 
-  // Renaiss 核心（可拜師）
-  { id: 'winchman', name: '🏛️ Winchman', element: '秩序', teaches: ['風火燎原', '雷霆萬鈞', '洪水滔天'], price: 2500, region: 'Renaiss', desc: 'Renaiss 統治者，主張秩序與市場公信' },
-  { id: 'tom', name: '🧠 Tom', element: '策略', teaches: ['雷霆萬鈞', '羅漢金剛腿', '金鐘罩'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長穩定局勢與戰場節奏' },
-  { id: 'harry', name: '🛡️ Harry', element: '守御', teaches: ['金鐘罩', '赤焰甲', '回春術'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長反制與續戰' },
-  { id: 'kathy', name: '✨ Kathy', element: '複合', teaches: ['風火燎原', '火蓮碎', '天女散花'], price: 1400, region: 'Renaiss', desc: '核心幹部，精通爆發與連段' },
-  { id: 'yuzu', name: '🌊 Yuzu', element: '水木', teaches: ['洪水滔天', '寒冰掌', '回春術'], price: 1400, region: 'Renaiss', desc: '核心幹部，擅長控場與回復' },
-  { id: 'leslie', name: '⚡ Leslie', element: '雷火', teaches: ['雷霆萬鈞', '烈焰焚天', '暴雨梨花'], price: 1500, region: 'Renaiss', desc: '核心幹部，高壓進攻與破防專家' },
+  // Renaiss 核心（可拜訪導師）
+  { id: 'winchman', name: '🏛️ Winchman', element: '秩序', teaches: ['風暴聚變', '雷矢超載', '潮汐奇點'], price: 2500, region: 'Renaiss', desc: 'Renaiss 統治者，主張秩序與市場公信' },
+  { id: 'tom', name: '🧠 Tom', element: '策略', teaches: ['雷矢超載', '地脈衝撞', '堡壘力場'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長穩定局勢與戰場節奏' },
+  { id: 'harry', name: '🛡️ Harry', element: '守御', teaches: ['堡壘力場', '熱盾回路', '再生矩陣'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長反制與續戰' },
+  { id: 'kathy', name: '✨ Kathy', element: '複合', teaches: ['風暴聚變', '日核裂解', '孢子刃雨'], price: 1400, region: 'Renaiss', desc: '核心幹部，精通爆發與連段' },
+  { id: 'yuzu', name: '🌊 Yuzu', element: '水木', teaches: ['潮汐奇點', '低溫衝擊', '再生矩陣'], price: 1400, region: 'Renaiss', desc: '核心幹部，擅長控場與回復' },
+  { id: 'leslie', name: '⚡ Leslie', element: '雷火', teaches: ['雷矢超載', '電漿盛放', '碎晶風暴'], price: 1500, region: 'Renaiss', desc: '核心幹部，高壓進攻與破防專家' },
 
-  // 注意：Digital 四大天王是敵對壓力來源，不可拜師。
+  // 注意：Digital 四巨頭是敵對壓力來源，不可拜訪導師。
 ];
 
 // ============== 史詩魔王列表 ==============
 const EPIC_BOSSES = [
-  { id: 'gold_dragon', name: '🐉 黃金龍', hp: 300, attack: 55, moves: 4, reward: { gold: [500, 700], move: true }, region: '通用' },
-  { id: 'abyss_demon', name: '👹 深淵魔', hp: 350, attack: 60, moves: 5, reward: { gold: [700, 900], move: true }, region: '通用' },
-  { id: 'phoenix', name: '🦅 修羅鳳', hp: 280, attack: 65, moves: 4, reward: { gold: [600, 800], move: true }, region: '通用' },
-  { id: 'skeleton_king', name: '💀 骸骨王', hp: 400, attack: 70, moves: 6, reward: { gold: [1000, 1600], move: true }, region: '通用' }
+  { id: 'gold_dragon', name: '🐉 日冕巨蜥', hp: 300, attack: 55, moves: 4, reward: { gold: [500, 700], move: true }, region: '通用' },
+  { id: 'abyss_demon', name: '👹 虛空裂體', hp: 350, attack: 60, moves: 5, reward: { gold: [700, 900], move: true }, region: '通用' },
+  { id: 'phoenix', name: '🦅 熾羽風凰', hp: 280, attack: 65, moves: 4, reward: { gold: [600, 800], move: true }, region: '通用' },
+  { id: 'skeleton_king', name: '💀 白噪君主', hp: 400, attack: 70, moves: 6, reward: { gold: [1000, 1600], move: true }, region: '通用' }
 ];
 
 // ============== 根據玩家生成7個創意按鈕（每次都不同）==============
@@ -541,7 +542,7 @@ function generateEventChoices(player, worldState) {
     choices.push(extraChoices.splice(idx, 1)[0]);
   }
   
-  return choices.slice(0, 7);
+  return sanitizeWorldObject(choices.slice(0, 7));
 }
 
 // 根據地點獲取情境描述
@@ -549,26 +550,26 @@ function getLocationContext(location) {
   const contexts = {
     '襄陽城': { desc: '繁華熱鬧的兵家必爭之地', mood: '緊張', special: '郭大俠' },
     '大都': { desc: '皇城腳下戒備森嚴', mood: '壓抑', special: '皇宮' },
-    '洛陽城': { desc: '牡丹花城繁華似錦', mood: '悠閒', special: '武林高手' },
+    '洛陽城': { desc: '牡丹花城繁華似錦', mood: '悠閒', special: '戰圈高手' },
     '敦煌': { desc: '絲路重鎮風沙漫天', mood: '神秘', special: '商人' },
     '廣州': { desc: '南海港口繁華開放', mood: '活力', special: '番商' },
     '大理': { desc: '四季如春山清水秀', mood: '祥和', special: '少數民族' },
-    '桃花島': { desc: '機關重重世外桃源', mood: '奇幻', special: '東邪' },
-    '俠客島': { desc: '武學聖地壁上刻著秘籍', mood: '莊嚴', special: '秘籍' },
+    '桃花島': { desc: '機關重重的隔離島嶼', mood: '奇幻', special: '島嶼工程師' },
+    '潮汐試煉島': { desc: '高階試煉聖地壁上刻著技術檔案', mood: '莊嚴', special: '技術檔案' },
     '雪白山莊': { desc: '北疆寒門冰封千里', mood: '凜冽', special: '寒冰' },
     '草原部落': { desc: '天蒼蒼野茫茫風吹草低', mood: '開闊', special: '牧民' },
-    '光明頂': { desc: '明教聖火熊熊燃燒', mood: '熱血', special: '教主' },
-    '黑木崖': { desc: '日月神教陰森詭異', mood: '詭譎', special: '任我行' }
+    '光明頂': { desc: '光焰議會的能量火炬長明不滅', mood: '熱血', special: '議會執行官' },
+    '黑木崖': { desc: '暗潮議會在此運作高風險地下交易', mood: '詭譎', special: '匿名經紀人' }
   };
-  if (contexts[location]) return contexts[location];
+  if (contexts[location]) return sanitizeWorldObject(contexts[location]);
   const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
-  if (!profile) return { desc: 'Renaiss星球某處', mood: '平靜', special: '陌生人' };
+  if (!profile) return sanitizeWorldObject({ desc: 'Renaiss星球某處', mood: '平靜', special: '陌生人' });
   const nearby = typeof getNearbyPoints === 'function' ? getNearbyPoints(location, 3) : [];
-  return {
+  return sanitizeWorldObject({
     desc: profile.desc || `${location}附近仍有許多未解謎團`,
     mood: Number(profile.difficulty || 3) >= 4 ? '詭譎' : Number(profile.difficulty || 3) <= 2 ? '活力' : '緊張',
     special: nearby[0] || (Array.isArray(profile.landmarks) ? profile.landmarks[0] : '') || '當地住民'
-  };
+  });
 }
 
 // 根據地點獲取相關事件
@@ -706,9 +707,9 @@ function getInteractionEvents(alignment) {
   return [
     {
       id: ' Tavern',
-      name: '🍺 進入酒樓',
-      choice: '找個位置坐下，點些酒菜，順便聽聽江湖傳聞',
-      desc: '酒樓裡人聲鼎沸，三教九流匯聚於此，正是打探消息的好地方...',
+      name: '🍺 進入情報酒吧',
+      choice: '找個位置坐下，點些酒菜，順便聽聽前線傳聞',
+      desc: '情報酒吧裡人聲鼎沸，三教九流匯聚於此，正是打探消息的好地方...',
       action: 'gossip'
     },
     {
@@ -720,8 +721,8 @@ function getInteractionEvents(alignment) {
     },
     {
       id: 'rest',
-      name: '🏠 找客棧休息',
-      choice: '找一家看起來乾淨舒適的客棧，好好休息一下',
+      name: '🏠 找中繼旅店休息',
+      choice: '找一家看起來乾淨舒適的中繼旅店，好好休息一下',
       desc: '折騰了半天，你感到有些疲憊，決定找個地方歇歇腳...',
       action: 'rest',
       cost: 10,
@@ -729,9 +730,9 @@ function getInteractionEvents(alignment) {
     },
     {
       id: 'train',
-      name: '🧘 找地方修煉',
-      choice: '尋找一處清幽之地，打坐修煉提升內力',
-      desc: '你聽說' + (alignment === '正派' ? '某處風景絕佳' : '某處靈氣充沛') + '，正是修煉的好地方...',
+      name: '🧘 找地方訓練',
+      choice: '尋找一處清幽之地，調頻訓練提升能量',
+      desc: '你聽說' + (alignment === '正派' ? '某處風景絕佳' : '某處靈氣充沛') + '，正是訓練的好地方...',
       action: 'meditate',
       mpGain: 15
     }
@@ -787,7 +788,7 @@ function getSpecialOptions(player) {
       id: 'wm_sighting',
       name: '🌟 聽聞 WM 傳聞',
       choice: '豎起耳朵仔細聆聽，最近 WM 有沒有什麼動靜？',
-      desc: '最近江湖上流傳著一個傳說，說 WM——那個傳奇中的神秘人物——似乎在附近出沒...',
+      desc: '最近星域裡流傳著一個傳說，說 WM——那個傳奇中的神秘人物——似乎在附近出沒...',
       action: 'rumor',
       special: 'wm'
     },
@@ -820,11 +821,11 @@ function generateAIOption(player, luck) {
     const normalOptions = [
       { id: 'ai_walk', name: '🚶 漫步探索', choice: '漫無目的地四處遊逛，看看會有什麼發現', desc: '漫無目的地在Renaiss星球漫步...' },
       { id: 'ai_eat', name: '🍜 尋找美食', choice: '肚子有點餓了，去找些好吃的填飽肚子', desc: '你的肚子開始咕咕叫了...' },
-      { id: 'ai_exercise', name: '🏋️ 鍛煉身體', choice: '找個僻靜處修煉一番，增強實力', desc: '你找了一處空地，開始認真鍛煉...' },
+      { id: 'ai_exercise', name: '🏋️ 鍛煉身體', choice: '找個僻靜處訓練一番，增強實力', desc: '你找了一處空地，開始認真鍛煉...' },
       { id: 'ai_chat', name: '💬 找人聊天', choice: '隨機找個人閒聊幾句打發時間', desc: '你在人群中尋找可以聊天的人...' },
-      { id: 'ai_rest', name: '🛏️ 回客棧休息', choice: '找家客棧好好休息一下恢復體力', desc: '你找了一家客棧，打算好好休息...' }
+      { id: 'ai_rest', name: '🛏️ 回中繼旅店休息', choice: '找家中繼旅店好好休息一下恢復體力', desc: '你找了一家中繼旅店，打算好好休息...' }
     ];
-    return normalOptions[Math.floor(Math.random() * normalOptions.length)];
+    return sanitizeWorldObject(normalOptions[Math.floor(Math.random() * normalOptions.length)]);
   }
   
   // 50% 根據幸運值生成
@@ -832,24 +833,26 @@ function generateAIOption(player, luck) {
   const isGood = Math.random() + luckBonus * 0.1 > 0.4;
   
   if (isGood) {
-    return {
+    return sanitizeWorldObject({
       id: 'ai_lucky',
       name: '✨ 好運降臨',
       choice: '隱約感覺會有好事發生，順其自然地前行',
       desc: '你感到一股暖流湧上心頭，似乎有好事將至...'
-    };
+    });
   } else {
-    return {
+    return sanitizeWorldObject({
       id: 'ai_bad',
       name: '😰 不妙預感',
       choice: '直覺告訴你要小心行事，處處提防',
       desc: '你感到一陣不安，總覺得會有什麼不好的事...'
-    };
+    });
   }
 }
 
 // ============== 執行事件結果 ==============
 function executeEvent(event, player) {
+  const safeEvent = sanitizeWorldObject(event || {});
+  event = safeEvent;
   const luck = player.stats?.運氣 || 50;
   const food = require('./food-system');
   
@@ -1051,7 +1054,7 @@ function getWorldEvents() {
 function addWorldEvent(message, type = 'normal') {
   const data = getWorldEvents();
   data.events.unshift({
-    message,
+    message: sanitizeWorldText(message),
     type,
     timestamp: Date.now()
   });

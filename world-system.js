@@ -46,7 +46,7 @@ const LOCATIONS = {
   "雪嶽山": {
     name: "雪嶽山",
     region: "高句麗",
-    desc: "白雪皚皚的山峰，隱藏著武林秘笈",
+    desc: "白雪皚皚的山峰，隱藏著戰圈秘笈",
     danger: 4,
     resources: { herbs: ["雪蓮", "冰晶草"], wood: ["寒松"], minerals: ["寒鐵"] },
     npcs: ["隱世高人"]
@@ -98,7 +98,7 @@ const LOCATIONS = {
   "少林寺": {
     name: "少林寺",
     region: "中原王朝",
-    desc: "武林至尊，少林七十二絕技名震天下",
+    desc: "戰圈至尊，少林七十二絕技名震天下",
     danger: 2,
     resources: { herbs: ["少林草藥"], wood: ["松木"], minerals: [] },
     npcs: ["方丈大師", "羅漢堂首座"]
@@ -114,10 +114,10 @@ const LOCATIONS = {
   "峨眉山": {
     name: "峨眉山",
     region: "中原王朝",
-    desc: "佛道雙修之地，女性武者聖地",
+    desc: "佛道雙修之地，女性試煉者聖地",
     danger: 2,
     resources: { herbs: ["峨眉草", "雪蓮"], wood: [], minerals: [] },
-    npcs: ["峨眉掌門", "師太"]
+    npcs: ["峨眉主理人", "師太"]
   },
   "華山": {
     name: "華山",
@@ -125,7 +125,7 @@ const LOCATIONS = {
     desc: "天下奇險之一，華山論劍之地",
     danger: 3,
     resources: { herbs: ["華山人參"], wood: [], minerals: ["華山石"] },
-    npcs: ["華山派掌門", "獨孤九劍傳人"]
+    npcs: ["高山訓練站主理人", "獨孤九劍傳人"]
   },
   
   // ===== 金元帝國（美國）=====
@@ -151,7 +151,7 @@ const LOCATIONS = {
     desc: "一望無際的大草原，賞金獵人的天堂",
     danger: 4,
     resources: { herbs: ["仙人掌汁"], wood: ["枯木"], minerals: ["金礦"] },
-    npcs: ["賞金獵人", "西部俠客"]
+    npcs: ["賞金獵人", "西部探索者"]
   },
   
   // ===== 十字教廷（歐洲）=====
@@ -180,17 +180,17 @@ const LOCATIONS = {
     npcs: ["商人總管", "運河刺客"]
   },
   
-  // ===== 俠客島（秘境）=====
-  "俠客島": {
-    name: "俠客島",
+  // ===== 潮汐試煉島（秘境）=====
+  "潮汐試煉島": {
+    name: "潮汐試煉島",
     region: "秘境",
-    desc: "傳說中的俠客島，太玄經所在",
+    desc: "傳說中的潮汐試煉島，古代核心檔案所在",
     danger: 5,
     isSecretRealm: true,
     required: { reputation: 500 },
-    rewards: ["太玄經", "俠客島秘寶"],
+    rewards: ["古代核心檔案", "潮汐試煉島秘寶"],
     resources: { herbs: [], wood: [], minerals: [] },
-    npcs: ["俠客島島主"]
+    npcs: ["潮汐試煉島島主"]
   },
   
   // ===== 野狼谷（危險區）=====
@@ -220,11 +220,11 @@ const LOCATIONS = {
   "活死人墓": {
     name: "活死人墓",
     region: "中原王朝",
-    desc: "古墓派聖地，玉女心經所在",
+    desc: "地底研究站聖地，玉女演算心法所在",
     danger: 4,
     isSecretRealm: true,
-    required: { sect: "古墓派" },
-    rewards: ["玉女心經", "玉蜂漿"],
+    required: { sect: "地底研究站" },
+    rewards: ["玉女演算心法", "玉蜂漿"],
     resources: { herbs: ["玉蜂草"], wood: [], minerals: [] },
     npcs: ["古墓傳人"]
   }
@@ -236,14 +236,14 @@ const ENEMIES = {
     name: "山匪嘍囉",
     type: "bandit",
     stats: { 戰力: 25, 生命: 80, 內力: 10 },
-    loot: ["銀兩10-30", "乾糧"],
+    loot: ["Rns10-30", "乾糧"],
     dropRate: 0.3
   },
   "山匪首領": {
     name: "山匪首領",
     type: "bandit",
     stats: { 戰力: 65, 生命: 200, 內力: 40 },
-    loot: ["銀兩50-100", "黑風刀法秘籍", "山寨地契"],
+    loot: ["Rns50-100", "黑風刀法技術檔案", "山寨地契"],
     dropRate: 0.15
   },
   "野狼王": {
@@ -251,28 +251,28 @@ const ENEMIES = {
     type: "maniac",
     forced: true, // 強制戰鬥
     stats: { 戰力: 88, 生命: 300, 內力: 50 },
-    loot: ["銀兩100-200", "血刀經", "狼牙項鍊"],
+    loot: ["Rns100-200", "血刃協議", "狼牙項鍊"],
     dropRate: 0.05
   },
   "血刀門徒": {
     name: "血刀門徒",
     type: "sect",
     stats: { 戰力: 55, 生命: 150, 內力: 35 },
-    loot: ["銀兩30-60", "血刀秘籍"],
+    loot: ["Rns30-60", "血刀技術檔案"],
     dropRate: 0.2
   },
   "守閣羅漢": {
     name: "守閣羅漢",
     type: "guardian",
     stats: { 戰力: 70, 生命: 250, 內力: 60 },
-    loot: ["銀兩40-80", "易筋經片段"],
+    loot: ["Rns40-80", "強化模組片段"],
     dropRate: 0.1
   },
   "島上守護": {
     name: "島上守護",
     type: "guardian",
     stats: { 戰力: 75, 生命: 280, 內力: 70 },
-    loot: ["銀兩50-100", "太玄經片段"],
+    loot: ["Rns50-100", "古代核心檔案片段"],
     dropRate: 0.08
   }
 };
@@ -441,15 +441,15 @@ function checkEnemyEncounter(location, player) {
 // ===== 秘境界定 =====
 // 定義秘境
 const SECRET_REALMS = {
-  "俠客島": {
-    desc: "俠客島上刻著太玄經，據說看懂就能無敵天下",
-    rewards: ["太玄經", "俠客島寶藏"],
+  "潮汐試煉島": {
+    desc: "潮汐試煉島上刻著古代核心檔案，據說看懂就能無敵天下",
+    rewards: ["古代核心檔案", "潮汐試煉島寶藏"],
     required: { reputation: 500, luck: 60 }
   },
   "活死人墓": {
-    desc: "古墓派禁地，玉女心經就藏在其中",
-    rewards: ["玉女心經", "玉蜂漿"],
-    required: { sect: "古墓派", luck: 50 }
+    desc: "地底研究站禁地，玉女演算心法就藏在其中",
+    rewards: ["玉女演算心法", "玉蜂漿"],
+    required: { sect: "地底研究站", luck: 50 }
   },
   "黑風寨": {
     desc: "黑風寨主收藏了無數寶物，但守護森嚴",

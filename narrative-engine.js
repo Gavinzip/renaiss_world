@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { sanitizeWorldText } = require('./style-sanitizer');
 
 const WORLD_FILE = path.join(__dirname, 'data', 'world.json');
 
@@ -55,11 +56,11 @@ const ACTIVITIES = [
     interactable: false
   },
   {
-    type: "修煉",
+    type: "訓練",
     templates: [
-      "{name}找了個清靜的山洞，閉關修煉內功，感覺對武功有了新的領悟。",
-      "{name}對著瀑布練習掌力，水花飛濺中招式越來越純熟。",
-      "{name}在樹林中演練拳法招式，一招一式越來越嫻熟。"
+      "{name}找了個清靜的山洞，校準能量回路，感覺對戰技有了新的領悟。",
+      "{name}對著瀑布練習衝擊輸出，水花飛濺中動作越來越純熟。",
+      "{name}在樹林中演練近戰模組，節奏與角度越來越穩定。"
     ],
     interactable: true
   },
@@ -67,7 +68,7 @@ const ACTIVITIES = [
     type: "休息",
     templates: [
       "{name}找了個山洞休息，生起火堆取暖，烤得暖洋洋的。",
-      "{name}在客棧要了間房間，好好睡了一覺，精神煥發。",
+      "{name}在中繼旅店要了間房間，好好睡了一覺，精神煥發。",
       "{name}靠著大樹休息了一會兒，做了個很美的夢。"
     ],
     interactable: true
@@ -75,9 +76,9 @@ const ACTIVITIES = [
   {
     type: "社交",
     templates: [
-      "{name}在酒樓認識了幾位俠客，相談甚歡，相談武道。",
+      "{name}在情報酒吧認識了幾位探索者，相談甚歡，交流戰術心得。",
       "{name}幫助了一個困難的旅人，對方感激不盡。",
-      "{name}與當地村民聊得投機，得到了不少江湖情報。"
+      "{name}與當地村民聊得投機，得到了不少區域情報。"
     ],
     interactable: true
   },
@@ -94,7 +95,7 @@ const ACTIVITIES = [
   {
     type: "戰鬥",
     templates: [
-      "{name}施展出看家本領，與敵人激烈交戰！掌風呼嘯，雙方打得難分難解！",
+      "{name}施展出看家本領，與敵人激烈交戰！衝擊波呼嘯，雙方打得難分難解！",
       "{name}抽出兵器迎敵，過了數十招後終於擊退了敵人！"
     ],
     interactable: false,
@@ -129,7 +130,7 @@ const ACTIVITIES = [
   {
     type: "被救命",
     templates: [
-      "{name}被俠客路過出手相救，擊退了追兵！這位恩人真是俠義心腸！",
+      "{name}被探索者路過出手相救，擊退了追兵！這位恩人反應極快、判斷精準！",
       "{name}被村裡的獵戶藏起來，躲過了一劫，獵戶还送了食物。",
       "{name}重傷倒在路邊，一位老醫師用草藥幫包紮傷口，總算撿回一命。"
     ],
@@ -140,8 +141,8 @@ const ACTIVITIES = [
     type: "做夢",
     templates: [
       "{name}睡夢中彷彿見到了故人，醒來時眼角有些濕潤。",
-      "{name}夢到自己武功大進天下無敵，醒來卻發現只是南柯一夢。",
-      "{name}夢到了一片雲海，仙人撫頂傳授功法，醒來若有所悟。"
+      "{name}夢到自己戰技大進天下無敵，醒來卻發現只是南柯一夢。",
+      "{name}夢到了一片雲海，古代導航 AI 上傳了未知模組，醒來若有所悟。"
     ],
     interactable: false
   }
@@ -169,7 +170,7 @@ function generateNarrative(agent) {
   
   // 找到對應模板
   const activity = ACTIVITIES.find(a => a.type === action);
-  if (!activity) return `${agent.name}在江湖中漫無目的地遊走。`;
+  if (!activity) return sanitizeWorldText(`${agent.name}在星域中漫無目的地遊走。`);
   
   // 選擇模板
   let narrative = activity.templates[Math.floor(Math.random() * activity.templates.length)].replace("{name}", agent.name);
@@ -192,10 +193,12 @@ function generateNarrative(agent) {
   if (activity.heals) {
     agent.stats.生命 = Math.min(100, (agent.stats.生命 || 50) + 30);
   }
-  if (action === "修煉") {
+  if (action === "訓練") {
     agent.stats.內力 = Math.min(100, (agent.stats.內力 || 50) + 5);
   }
   
+  narrative = sanitizeWorldText(narrative);
+
   // 記錄記憶
   addMemory(agent.id, narrative);
   
@@ -239,7 +242,7 @@ async function worldTick() {
       narrative.includes("殺") ||
       narrative.includes("救") ||
       narrative.includes("寶") ||
-      narrative.includes("秘籍") ||
+      narrative.includes("技術檔案") ||
       narrative.includes("秘") ||
       narrative.includes("遇");
     

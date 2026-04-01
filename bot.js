@@ -12,6 +12,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { setupWorldStorage } = require('./storage-paths');
 
 // 讀取 .env 檔案
 const envPath = path.join(__dirname, '.env');
@@ -30,8 +31,10 @@ const CONFIG = {
   DISCORD_TOKEN: process.env.DISCORD_TOKEN || '',
   LANGUAGE: 'zh-TW' // 預設語言
 };
+const WORLD_BACKUP_NOTIFY_CHANNEL_ID = 1473923458751660063;
 
-const DATA_DIR = path.join(__dirname, 'data');
+const STORAGE = setupWorldStorage();
+const DATA_DIR = STORAGE.dataDir;
 const PLAYER_THREADS_FILE = path.join(DATA_DIR, 'player_threads.json');
 
 // ============== 初始化 ==============
@@ -59,6 +62,7 @@ const WALLET = require('./wallet-system');
 const WISH = require('./wish-pool-ai');
 const MAIN_STORY = require('./main-story');
 const ECON = require('./economy-system');
+const { startWorldBackupScheduler } = require('./world-backup');
 const {
   ISLAND_MAP_TEXT,
   buildIslandMapAnsi,
@@ -162,6 +166,31 @@ function clearPlayerTempData(userId) {
   delete playerTempData[userId];
 }
 
+async function notifyWorldBackupSuccess(result) {
+  if (!result || !result.ok) return;
+  if (!WORLD_BACKUP_NOTIFY_CHANNEL_ID || WORLD_BACKUP_NOTIFY_CHANNEL_ID <= 0) return;
+
+  try {
+    let channel = CLIENT.channels.cache.get(WORLD_BACKUP_NOTIFY_CHANNEL_ID);
+    if (!channel) {
+      channel = await CLIENT.channels.fetch(WORLD_BACKUP_NOTIFY_CHANNEL_ID);
+    }
+    if (!channel || typeof channel.send !== 'function') return;
+
+    const changedText = result.changed ? '有新變更已推送' : '無新變更（已檢查）';
+    const reasonText = String(result.reason || 'scheduled');
+    const branchText = String(result.branch || 'main');
+    await channel.send(
+      `✅ 成功備份世界資料\n` +
+      `來源：${reasonText}\n` +
+      `分支：${branchText}\n` +
+      `狀態：${changedText}`
+    );
+  } catch (e) {
+    console.log(`[Backup] notify channel failed: ${String(e?.message || e)}`);
+  }
+}
+
 async function findMessageInChannel(channel, messageId) {
   if (!channel || !messageId || typeof messageId !== 'string') return null;
   if (!channel.messages) return null;
@@ -242,6 +271,7 @@ const CUSTOM_INPUT_OPTION_RATE = Math.max(0, Math.min(1, Number(process.env.CUST
 const CUSTOM_INPUT_MAX_LENGTH = 120;
 const EARLY_GAME_GOLD_GUARANTEE_TURNS = Math.max(1, Math.min(10, Number(process.env.EARLY_GAME_GOLD_GUARANTEE_TURNS || 5)));
 const STARTER_FIVE_PULL_COUNT = 5;
+const GENERATION_HISTORY_LIMIT = Math.max(5, Math.min(100, Number(process.env.GENERATION_HISTORY_LIMIT || 20)));
 const RISK_CATEGORY_WEIGHTS = Object.freeze({
   high_risk: 10,
   spend: 10,
@@ -618,6 +648,257 @@ function grantStarterFivePullIfNeeded(playerId) {
   };
 }
 
+function cloneChoiceSnapshot(choices = []) {
+  if (!Array.isArray(choices)) return [];
+  return choices
+    .filter(choice => choice && typeof choice === 'object')
+    .slice(0, CHOICE_DISPLAY_COUNT)
+    .map(choice => ({ ...choice }));
+}
+
+function normalizeGenerationStatus(status) {
+  const value = String(status || 'idle');
+  if (value === 'pending' || value === 'done' || value === 'failed' || value === 'idle') {
+    return value;
+  }
+  return 'idle';
+}
+
+function ensurePlayerGenerationSchema(player) {
+  if (!player || typeof player !== 'object') return false;
+  let mutated = false;
+
+  if (typeof player.currentStory !== 'string') {
+    player.currentStory = player.currentStory ? String(player.currentStory) : '';
+    mutated = true;
+  }
+  if (!Array.isArray(player.eventChoices)) {
+    player.eventChoices = [];
+    mutated = true;
+  }
+  if (!Array.isArray(player.generationHistory)) {
+    player.generationHistory = [];
+    mutated = true;
+  }
+
+  const rawState = player.generationState && typeof player.generationState === 'object'
+    ? player.generationState
+    : {};
+  if (player.generationState !== rawState) mutated = true;
+
+  const normalizedState = {
+    id: rawState.id ? String(rawState.id) : null,
+    source: rawState.source ? String(rawState.source) : 'none',
+    status: normalizeGenerationStatus(rawState.status),
+    phase: rawState.phase ? String(rawState.phase) : 'idle',
+    startedAt: Number(rawState.startedAt) || 0,
+    updatedAt: Number(rawState.updatedAt) || 0,
+    sourceChoice: rawState.sourceChoice ? String(rawState.sourceChoice) : '',
+    lastError: rawState.lastError || null,
+    storySnapshot: rawState.storySnapshot ? String(rawState.storySnapshot) : '',
+    choicesSnapshot: cloneChoiceSnapshot(rawState.choicesSnapshot),
+    loadingMessageId: rawState.loadingMessageId ? String(rawState.loadingMessageId) : null,
+    attempts: Math.max(0, Number(rawState.attempts) || 0)
+  };
+
+  if (JSON.stringify(player.generationState || {}) !== JSON.stringify(normalizedState)) {
+    player.generationState = normalizedState;
+    mutated = true;
+  }
+
+  const history = [];
+  for (const item of player.generationHistory) {
+    if (!item || typeof item !== 'object') continue;
+    history.push({
+      id: item.id ? String(item.id) : null,
+      source: item.source ? String(item.source) : 'unknown',
+      status: normalizeGenerationStatus(item.status),
+      phase: item.phase ? String(item.phase) : '',
+      startedAt: Number(item.startedAt) || 0,
+      endedAt: Number(item.endedAt) || 0,
+      sourceChoice: item.sourceChoice ? String(item.sourceChoice) : '',
+      story: item.story ? String(item.story) : '',
+      choices: cloneChoiceSnapshot(item.choices),
+      error: item.error ? String(item.error) : '',
+      location: item.location ? String(item.location) : ''
+    });
+  }
+
+  const trimmed = history.slice(-GENERATION_HISTORY_LIMIT);
+  if (JSON.stringify(player.generationHistory) !== JSON.stringify(trimmed)) {
+    player.generationHistory = trimmed;
+    mutated = true;
+  }
+
+  if (!player.generationState || typeof player.generationState !== 'object') {
+    player.generationState = normalizedState;
+    mutated = true;
+  }
+
+  return mutated;
+}
+
+function pushGenerationHistory(player, record = {}) {
+  ensurePlayerGenerationSchema(player);
+  const history = Array.isArray(player.generationHistory) ? player.generationHistory : [];
+  history.push({
+    id: record.id ? String(record.id) : null,
+    source: record.source ? String(record.source) : 'unknown',
+    status: normalizeGenerationStatus(record.status),
+    phase: record.phase ? String(record.phase) : '',
+    startedAt: Number(record.startedAt) || 0,
+    endedAt: Number(record.endedAt) || Date.now(),
+    sourceChoice: record.sourceChoice ? String(record.sourceChoice) : '',
+    story: record.story ? String(record.story) : '',
+    choices: cloneChoiceSnapshot(record.choices),
+    error: record.error ? String(record.error) : '',
+    location: record.location ? String(record.location) : ''
+  });
+  player.generationHistory = history.slice(-GENERATION_HISTORY_LIMIT);
+}
+
+function startGenerationState(player, metadata = {}) {
+  ensurePlayerGenerationSchema(player);
+  const now = Date.now();
+  const nextAttempt = Math.max(1, Number(metadata.attempts) || Number(player.generationState?.attempts || 0) + 1);
+  const nextId = `${player?.id || 'player'}-${now}-${Math.random().toString(36).slice(2, 7)}`;
+  player.generationState = {
+    id: nextId,
+    source: metadata.source ? String(metadata.source) : 'unknown',
+    status: 'pending',
+    phase: metadata.phase ? String(metadata.phase) : 'init',
+    startedAt: now,
+    updatedAt: now,
+    sourceChoice: metadata.sourceChoice ? String(metadata.sourceChoice) : '',
+    lastError: null,
+    storySnapshot: metadata.storySnapshot ? String(metadata.storySnapshot) : '',
+    choicesSnapshot: cloneChoiceSnapshot(metadata.choicesSnapshot),
+    loadingMessageId: metadata.loadingMessageId ? String(metadata.loadingMessageId) : null,
+    attempts: nextAttempt
+  };
+  return player.generationState;
+}
+
+function updateGenerationState(player, patch = {}) {
+  ensurePlayerGenerationSchema(player);
+  const state = player.generationState || {};
+  if (patch.source !== undefined) state.source = patch.source ? String(patch.source) : state.source;
+  if (patch.phase !== undefined) state.phase = patch.phase ? String(patch.phase) : state.phase;
+  if (patch.status !== undefined) state.status = normalizeGenerationStatus(patch.status);
+  if (patch.sourceChoice !== undefined) state.sourceChoice = patch.sourceChoice ? String(patch.sourceChoice) : '';
+  if (patch.loadingMessageId !== undefined) {
+    state.loadingMessageId = patch.loadingMessageId ? String(patch.loadingMessageId) : null;
+  }
+  if (patch.storySnapshot !== undefined) {
+    state.storySnapshot = patch.storySnapshot ? String(patch.storySnapshot) : '';
+  }
+  if (patch.choicesSnapshot !== undefined) {
+    state.choicesSnapshot = cloneChoiceSnapshot(patch.choicesSnapshot);
+  }
+  if (patch.lastError !== undefined) {
+    state.lastError = patch.lastError || null;
+  }
+  state.updatedAt = Date.now();
+  player.generationState = state;
+  return state;
+}
+
+function finishGenerationState(player, status, extras = {}) {
+  ensurePlayerGenerationSchema(player);
+  const state = player.generationState || {};
+  const endedAt = Date.now();
+  const finalStatus = normalizeGenerationStatus(status);
+  state.status = finalStatus;
+  state.phase = extras.phase ? String(extras.phase) : state.phase || 'done';
+  state.updatedAt = endedAt;
+
+  if (extras.storySnapshot !== undefined) {
+    state.storySnapshot = extras.storySnapshot ? String(extras.storySnapshot) : '';
+  } else if (String(player.currentStory || '').trim()) {
+    state.storySnapshot = String(player.currentStory || '');
+  }
+  if (extras.choicesSnapshot !== undefined) {
+    state.choicesSnapshot = cloneChoiceSnapshot(extras.choicesSnapshot);
+  } else if (Array.isArray(player.eventChoices) && player.eventChoices.length > 0) {
+    state.choicesSnapshot = cloneChoiceSnapshot(player.eventChoices);
+  }
+
+  if (finalStatus === 'failed') {
+    const message = extras.error ? String(extras.error) : 'unknown error';
+    state.lastError = {
+      message,
+      at: endedAt,
+      phase: state.phase || ''
+    };
+  } else {
+    state.lastError = null;
+  }
+
+  player.generationState = state;
+  pushGenerationHistory(player, {
+    id: state.id,
+    source: state.source,
+    status: finalStatus,
+    phase: state.phase,
+    startedAt: Number(state.startedAt) || endedAt,
+    endedAt,
+    sourceChoice: state.sourceChoice || '',
+    story: state.storySnapshot || '',
+    choices: state.choicesSnapshot || [],
+    error: finalStatus === 'failed' ? (state.lastError?.message || '') : '',
+    location: player?.location || ''
+  });
+  return state;
+}
+
+function restoreStoryFromGenerationState(player) {
+  ensurePlayerGenerationSchema(player);
+  const existingStory = String(player.currentStory || '').trim();
+  if (existingStory) return false;
+
+  const fromState = String(player.generationState?.storySnapshot || '').trim();
+  if (fromState) {
+    player.currentStory = fromState;
+    return true;
+  }
+
+  const history = Array.isArray(player.generationHistory) ? player.generationHistory : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const story = String(history[i]?.story || '').trim();
+    if (!story) continue;
+    player.currentStory = story;
+    return true;
+  }
+
+  return false;
+}
+
+function restoreChoicesFromGenerationState(player) {
+  ensurePlayerGenerationSchema(player);
+  if (Array.isArray(player.eventChoices) && player.eventChoices.length > 0) return false;
+  const story = String(player.currentStory || '').trim();
+  if (!story) return false;
+
+  const state = player.generationState || {};
+  const stateChoices = cloneChoiceSnapshot(state.choicesSnapshot);
+  if (stateChoices.length > 0 && String(state.storySnapshot || '').trim() === story) {
+    player.eventChoices = stateChoices;
+    return true;
+  }
+
+  const history = Array.isArray(player.generationHistory) ? player.generationHistory : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const item = history[i];
+    if (String(item?.story || '').trim() !== story) continue;
+    const choices = cloneChoiceSnapshot(item?.choices);
+    if (choices.length === 0) continue;
+    player.eventChoices = choices;
+    return true;
+  }
+
+  return false;
+}
+
 function rememberPlayer(player, memory) {
   if (!player || !memory || !memory.content) return;
   CORE.appendPlayerMemory(player, memory);
@@ -652,7 +933,7 @@ function isLikelyHumanoidEnemyName(name = '') {
   if (!n) return false;
   const explicitMonster = /(哥布林|狼人|殭屍|飛龍|地精|鼠王|怪|獸|骸骨|魔|鬼|龍|鳳)/u;
   if (explicitMonster.test(n)) return false;
-  const humanoid = /(人物|斥候|刺客|巡行|商人|學徒|伏擊者|旅人|隊長|俠|武者|護衛|士兵|盜匪|殺手)/u;
+  const humanoid = /(人物|斥候|刺客|巡行|商人|學徒|伏擊者|旅人|隊長|試煉者|護衛|士兵|盜匪|殺手)/u;
   return humanoid.test(n);
 }
 
@@ -815,6 +1096,16 @@ const HUMAN_COMBAT_MOVE = {
   desc: '你親自出手，硬碰硬地壓制對手'
 };
 
+const WAIT_COMBAT_MOVE = {
+  id: 'battle_wait',
+  name: '蓄能待機',
+  element: '策略',
+  tier: 1,
+  baseDamage: 0,
+  effect: { wait: true },
+  desc: '本回合不攻擊，保留節奏與能量'
+};
+
 function formatDurationShort(ms = 0) {
   const safe = Math.max(0, Number(ms) || 0);
   const totalMinutes = Math.ceil(safe / 60000);
@@ -885,26 +1176,46 @@ function getBattleFighterType(player, pet) {
   return CORE.canPetFight(pet) ? 'pet' : 'player';
 }
 
+function cloneStatusState(status) {
+  if (!status || typeof status !== 'object') return {};
+  try {
+    return JSON.parse(JSON.stringify(status));
+  } catch {
+    return { ...status };
+  }
+}
+
 function buildHumanCombatant(player) {
+  const saved = player?.battleState?.humanState || {};
+  const hpFromState = Number(saved?.hp);
+  const hpFromPlayer = Number(player?.stats?.生命 || 0);
+  const resolvedHp = Number.isFinite(hpFromState) ? hpFromState : hpFromPlayer;
   return {
     id: `human_${player.id}`,
     name: player.name || '冒險者',
     isHuman: true,
     level: player.level || 1,
-    hp: Math.max(0, player?.stats?.生命 || 0),
+    hp: Math.max(0, resolvedHp),
     maxHp: Math.max(1, player?.maxStats?.生命 || 100),
     attack: 10,
     defense: Math.max(5, Math.floor((player?.stats?.戰力 || 30) * 0.12)),
-    moves: [HUMAN_COMBAT_MOVE]
+    moves: [HUMAN_COMBAT_MOVE],
+    status: cloneStatusState(saved?.status)
   };
 }
 
 function getActiveCombatant(player, pet) {
   const fighterType = getBattleFighterType(player, pet);
   if (fighterType === 'player') return buildHumanCombatant(player);
+  const saved = player?.battleState?.petState || {};
+  const hpFromState = Number(saved?.hp);
+  const hpFromPet = Number(pet?.hp || 0);
+  const resolvedHp = Number.isFinite(hpFromState) ? hpFromState : hpFromPet;
   return {
     ...pet,
-    isHuman: false
+    hp: Math.max(0, resolvedHp),
+    isHuman: false,
+    status: cloneStatusState(saved?.status)
   };
 }
 
@@ -916,13 +1227,26 @@ function getCombatantMoves(combatant, pet) {
 
 function persistCombatantState(player, pet, combatant) {
   if (!player || !combatant) return;
+  const statusSnapshot = cloneStatusState(combatant.status);
   if (combatant.isHuman) {
     const maxHp = Math.max(1, player?.maxStats?.生命 || 100);
     player.stats.生命 = Math.max(0, Math.min(maxHp, combatant.hp));
+    if (player.battleState) {
+      player.battleState.humanState = {
+        hp: player.stats.生命,
+        status: statusSnapshot
+      };
+    }
     return;
   }
   if (pet) {
     pet.hp = Math.max(0, combatant.hp);
+    if (player.battleState) {
+      player.battleState.petState = {
+        hp: pet.hp,
+        status: statusSnapshot
+      };
+    }
   }
 }
 
@@ -933,7 +1257,8 @@ function cloneCombatantForEstimate(combatant) {
     hp: Number(combatant.hp || 1),
     maxHp: Number(combatant.maxHp || combatant.hp || 1),
     defense: Number(combatant.defense || 0),
-    attack: Number(combatant.attack || 0)
+    attack: Number(combatant.attack || 0),
+    status: cloneStatusState(combatant.status)
   };
 }
 
@@ -945,24 +1270,9 @@ function cloneEnemyForEstimate(enemy) {
     maxHp: Number(enemy.maxHp || enemy.hp || 1),
     defense: Number(enemy.defense || 0),
     attack: Number(enemy.attack || 10),
-    moves: Array.isArray(enemy.moves) ? [...enemy.moves] : []
+    moves: Array.isArray(enemy.moves) ? [...enemy.moves] : [],
+    status: cloneStatusState(enemy.status)
   };
-}
-
-function normalizeEnemyMovesForEstimate(enemy) {
-  const fallback = [{ name: '攻擊', damage: Number(enemy?.attack || 10), effect: {} }];
-  if (!Array.isArray(enemy?.moves) || enemy.moves.length === 0) return fallback;
-  const normalized = enemy.moves.map((move) => {
-    if (typeof move === 'string') {
-      return { name: move, damage: Number(enemy?.attack || 10), effect: {} };
-    }
-    return {
-      name: String(move?.name || '攻擊'),
-      damage: Number(move?.damage || enemy?.attack || 10),
-      effect: move?.effect || {}
-    };
-  }).filter(Boolean);
-  return normalized.length > 0 ? normalized : fallback;
 }
 
 function simulateBattleOnceForEstimate(player, pet, enemy, fighterType = null) {
@@ -970,37 +1280,47 @@ function simulateBattleOnceForEstimate(player, pet, enemy, fighterType = null) {
   const baseCombatant = resolvedType === 'player' ? buildHumanCombatant(player) : getActiveCombatant(player, pet);
   const combatant = cloneCombatantForEstimate(baseCombatant);
   const targetEnemy = cloneEnemyForEstimate(enemy);
-  const enemyMoves = normalizeEnemyMovesForEstimate(targetEnemy);
   if (!combatant || !targetEnemy) {
     return { win: false, rounds: 0, totalPlayerDamage: 0, totalEnemyDamage: 0 };
   }
 
+  const simulationPlayer = {
+    ...player,
+    id: `sim_${player?.id || 'player'}`,
+    stats: { ...(player?.stats || {}) }
+  };
+
   let rounds = 0;
   let totalPlayerDamage = 0;
   let totalEnemyDamage = 0;
+  let energy = 2;
 
   for (let turn = 1; turn <= BATTLE_ESTIMATE_MAX_TURNS; turn++) {
     rounds = turn;
-    const bestMove = pickBestMoveForAI(player, pet, targetEnemy, combatant);
-    if (!bestMove) {
-      return { win: false, rounds, totalPlayerDamage, totalEnemyDamage };
-    }
+    const bestMove = pickBestMoveForAI(player, pet, targetEnemy, combatant, energy);
+    const selectedMove = bestMove || WAIT_COMBAT_MOVE;
+    const moveCost = bestMove ? BATTLE.getMoveEnergyCost(bestMove) : 0;
+    const enemyMove = BATTLE.enemyChooseMove(targetEnemy);
+    const enemyHpBefore = targetEnemy.hp;
+    const playerHpBefore = combatant.hp;
 
-    const moveDmg = BATTLE.calculatePlayerMoveDamage(bestMove, player, combatant);
-    const playerDamage = moveDmg.total > 0
-      ? Math.max(1, (moveDmg.total || 0) - (targetEnemy.defense || 0))
-      : 0;
-    targetEnemy.hp -= playerDamage;
-    totalPlayerDamage += Math.max(0, playerDamage);
-    if (targetEnemy.hp <= 0) {
+    const roundResult = BATTLE.executeBattleRound(
+      simulationPlayer,
+      combatant,
+      targetEnemy,
+      selectedMove,
+      enemyMove,
+      { dryRun: true }
+    );
+
+    totalPlayerDamage += Math.max(0, enemyHpBefore - targetEnemy.hp);
+    totalEnemyDamage += Math.max(0, playerHpBefore - combatant.hp);
+    energy = Math.max(0, energy - moveCost) + 2;
+
+    if (roundResult.victory === true || targetEnemy.hp <= 0) {
       return { win: true, rounds, totalPlayerDamage, totalEnemyDamage };
     }
-
-    const enemyMove = enemyMoves[Math.floor(Math.random() * enemyMoves.length)] || enemyMoves[0];
-    const enemyDamage = Math.max(1, Number(enemyMove.damage || targetEnemy.attack || 10) - (combatant.defense || 5));
-    combatant.hp -= enemyDamage;
-    totalEnemyDamage += Math.max(0, enemyDamage);
-    if (combatant.hp <= 0) {
+    if (roundResult.victory === false || combatant.hp <= 0) {
       return { win: false, rounds, totalPlayerDamage, totalEnemyDamage };
     }
   }
@@ -1081,16 +1401,23 @@ function estimateBattleOutcome(player, pet, enemy, fighterType = null) {
   };
 }
 
-function pickBestMoveForAI(player, pet, enemy, combatant = null) {
+function pickBestMoveForAI(player, pet, enemy, combatant = null, availableEnergy = Number.POSITIVE_INFINITY) {
   const activeCombatant = combatant || getActiveCombatant(player, pet);
   const candidateMoves = getCombatantMoves(activeCombatant, pet);
   if (candidateMoves.length === 0) return null;
 
-  let best = candidateMoves[0];
+  const affordableMoves = candidateMoves.filter((move) => BATTLE.getMoveEnergyCost(move) <= availableEnergy);
+  if (affordableMoves.length === 0) return null;
+
+  let best = affordableMoves[0];
   let bestScore = -1;
-  for (const move of candidateMoves) {
+  for (const move of affordableMoves) {
+    const cost = BATTLE.getMoveEnergyCost(move);
     const dmg = BATTLE.calculatePlayerMoveDamage(move, player, activeCombatant);
-    const score = Math.max(1, (dmg.total || 0) - (enemy?.defense || 0));
+    const netDamage = Math.max(1, (dmg.total || 0) - (enemy?.defense || 0));
+    const killBonus = (enemy?.hp || 0) <= netDamage ? 120 : 0;
+    const efficiencyBonus = Math.max(0, 4 - cost) * 2;
+    const score = netDamage + killBonus + efficiencyBonus;
     if (score > bestScore) {
       best = move;
       bestScore = score;
@@ -1382,35 +1709,53 @@ function buildRetryGenerationComponents() {
   ];
 }
 
+async function editOrSendFallback(channel, targetMessage, payload, context = 'story_update') {
+  if (targetMessage && typeof targetMessage.edit === 'function') {
+    try {
+      const edited = await targetMessage.edit(payload);
+      return edited || targetMessage;
+    } catch (e) {
+      console.log(`[UI][${context}] message edit failed, fallback send:`, e?.message || e);
+    }
+  }
+  if (!channel || typeof channel.send !== 'function') return null;
+  try {
+    return await channel.send(payload);
+  } catch (e) {
+    console.log(`[UI][${context}] fallback send failed:`, e?.message || e);
+    return null;
+  }
+}
+
 // ============== 語言文字取得 ==============
 function getLanguageText(lang) {
   const texts = {
     'zh-TW': {
       welcome: '歡迎來到 Renaiss 星球！',
-      welcomeDesc: '在這個世界，你需要：\n• 選擇你的流派（正派/機變派）\n• 培養你的寵物\n• 探索世界、戰鬥、任務',
+      welcomeDesc: '在這個世界，你需要：\n• 選擇你的陣營（信標聯盟/灰域協定）\n• 培養你的夥伴\n• 探索區域事件、戰鬥與任務',
       choosePathHint: '請選擇你的流派：',
-      positive: '正派',
-      positiveDesc: '光明正面，守秩序與公信\n招式：治療、護盾、正義之擊',
-      negative: '機變派',
-      negativeDesc: '同屬正義，但更擅策略與博弈\n風格：灰階手段，不主動作惡'
+      positive: '信標聯盟',
+      positiveDesc: '重視秩序、透明與區域穩定\n特色：防護、修復、控場',
+      negative: '灰域協定',
+      negativeDesc: '偏向高風險高回報的策略路線\n特色：干擾、侵蝕、爆發'
     },
     'zh-CN': {
       welcome: '欢迎来到 Renaiss 星球！',
-      welcomeDesc: '在这个世界，你需要：\n• 选择你的流派（正派/机变派）\n• 培养你的宠物\n• 探索世界、战斗、任务',
+      welcomeDesc: '在这个世界，你需要：\n• 选择你的阵营（信标联盟/灰域协定）\n• 培养你的伙伴\n• 探索区域事件、战斗与任务',
       choosePathHint: '请选择你的流派：',
-      positive: '正派',
-      positiveDesc: '光明正面，守秩序与公信\n招式：治疗、护盾、正义之击',
-      negative: '机变派',
-      negativeDesc: '同属正义，但更擅策略与博弈\n风格：灰阶手段，不主动作恶'
+      positive: '信标联盟',
+      positiveDesc: '重视秩序、透明与区域稳定\n特色：防护、修复、控场',
+      negative: '灰域协定',
+      negativeDesc: '偏向高风险高回报的策略路线\n特色：干扰、侵蚀、爆发'
     },
     'en': {
       welcome: 'Welcome to Renaiss Planet!',
-      welcomeDesc: 'In this world, you need to:\n• Choose your style (Order/Tactician)\n• Raise your pet\n• Explore, battle, and complete quests',
+      welcomeDesc: 'In this world, you need to:\n• Choose your faction (Beacon Union / Gray Accord)\n• Raise your partner\n• Explore regional events, battle, and complete quests',
       choosePathHint: 'Please choose your style:',
-      positive: 'Hero',
-      positiveDesc: 'Protect the innocent, spread kindness\nMoves: Heal, Shield, Justice Strike',
-      negative: 'Tactician',
-      negativeDesc: 'Still righteous, but prefers shortcuts and schemes\nStory: more betrayal and market mind-games'
+      positive: 'Beacon Union',
+      positiveDesc: 'Order-first route focused on stability and trust\nSpecialty: shields, sustain, control',
+      negative: 'Gray Accord',
+      negativeDesc: 'High-risk route focused on disruption and burst\nSpecialty: sabotage, pressure, payoff'
     }
   };
   return texts[lang] || texts['zh-TW'];
@@ -1421,19 +1766,19 @@ function getWorldIntroTemplate(lang = 'zh-TW') {
     'zh-TW': [
       '你身在 Renaiss 海域，這裡同時被「秩序市場 Renaiss」與「混亂市場 Digital」拉扯。',
       '這是開放世界，沒有固定主線按鈕；你的行動會被動觸發章節、流言、戰爭與終局分歧。',
-      '你能培養寵物、拜師學招、追逐財富，也可能被蒙面殺手與四大天王盯上。',
+      '你能培養夥伴、解鎖技能模組、追逐財富，也可能被暗網獵手與高階頭目盯上。',
       '世界會記住你做過的事，並把影響擴散到其他玩家可見的傳聞中。'
     ].join('\n'),
     'zh-CN': [
       '你身在 Renaiss 海域，这里同时被「秩序市场 Renaiss」与「混乱市场 Digital」拉扯。',
       '这是开放世界，没有固定主线按钮；你的行动会被动触发章节、流言、战争与终局分歧。',
-      '你能培养宠物、拜师学招、追逐财富，也可能被蒙面杀手与四大天王盯上。',
+      '你能培养伙伴、解锁技能模组、追逐财富，也可能被暗网猎手与高阶头目盯上。',
       '世界会记住你做过的事，并把影响扩散到其他玩家可见的传闻中。'
     ].join('\n'),
     'en': [
       'You are in the Renaiss Sea, pulled between the Order Market (Renaiss) and the Chaos Market (Digital).',
       'This is an open world with no fixed main-story button; your actions passively trigger chapters, rumors, wars, and endings.',
-      'You can raise pets, train under masters, chase wealth, and still be hunted by masked killers and the Four Kings.',
+      'You can raise partners, unlock skill modules, chase wealth, and still be hunted by darknet hunters and elite bosses.',
       'The world remembers what you do, then spreads those consequences as public rumors.'
     ].join('\n')
   };
@@ -1452,12 +1797,17 @@ function normalizePlayerAlignment(alignment) {
   const text = String(alignment || '').trim();
   if (!text) return '正派';
   if (text === '反派') return '機變派';
+  if (text === '信標聯盟' || text === 'Beacon Union') return '正派';
+  if (text === '灰域協定' || text === 'Gray Accord') return '機變派';
   if (text === '正派' || text === '機變派') return text;
   return text;
 }
 
 function formatAlignmentLabel(alignment) {
-  return normalizePlayerAlignment(alignment);
+  const normalized = normalizePlayerAlignment(alignment);
+  if (normalized === '正派') return '信標聯盟';
+  if (normalized === '機變派') return '灰域協定';
+  return normalized;
 }
 
 function getAlignmentColor(alignment) {
@@ -1571,9 +1921,19 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   
   const { commandName, user } = interaction;
-  
-  if (commandName === 'start') await handleStart(interaction, user);
-  if (commandName === 'warstatus') await handleWarStatus(interaction);
+
+  try {
+    if (commandName === 'start') await handleStart(interaction, user);
+    if (commandName === 'warstatus') await handleWarStatus(interaction);
+  } catch (err) {
+    console.error(`[Slash] 指令處理失敗 ${commandName}:`, err?.message || err);
+    const msg = `❌ 指令執行失敗：${err?.message || err}`;
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
+    } else {
+      await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+    }
+  }
 });
 
 function formatFactionWinnerLabel(winner) {
@@ -1659,7 +2019,20 @@ async function handleStart(interaction, user) {
   }
   
   // 關閉舊 thread 並創建新的
-  const thread = await createNewThread(channel, user);
+  let thread = null;
+  try {
+    thread = await createNewThread(channel, user);
+  } catch (err) {
+    console.error('[start] createNewThread 失敗:', err?.message || err);
+    const reason = String(err?.message || err || '未知錯誤');
+    await interaction.followUp({
+      content:
+        `❌ 無法建立遊戲討論串：${reason}\n` +
+        '請確認機器人在此頻道有「檢視頻道 / 發送訊息 / 建立公開討論串 / 傳送訊息於討論串」權限。',
+      ephemeral: true
+    }).catch(() => {});
+    return;
+  }
   
   // 檢查是否有存檔
   const player = CORE.loadPlayer(user.id);
@@ -1668,6 +2041,7 @@ async function handleStart(interaction, user) {
   // Bug Fix: 新 thread 啟動時清除舊的 activeMessageId，避免新按鈕被判斷為過期
   if (player) {
     MAIN_STORY.ensureMainStoryState(player);
+    ensurePlayerGenerationSchema(player);
     player.activeMessageId = null;
     player.activeThreadId = null;
     CORE.savePlayer(player);
@@ -2214,6 +2588,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     await handleUseMove(interaction, user, idx);
     return;
   }
+
+  if (customId === 'battle_wait') {
+    await handleBattleWait(interaction, user);
+    return;
+  }
   
   // ===== 逃跑 =====
   if (customId.startsWith('flee_')) {
@@ -2712,7 +3091,7 @@ async function handleNameSubmit(interaction, user) {
   // 如果名字太長或太短，隨機給一個
   if (!name || name.length < 1 || name.length > 6) {
     name = pet.type === '正派' 
-      ? ['小白', '小青', '俠仔', '靈兒', '阿正'][Math.floor(Math.random() * 5)]
+      ? ['小白', '小青', '阿拓', '靈兒', '阿正'][Math.floor(Math.random() * 5)]
       : ['小黑', '邪仔', '夜影', '惡獸', '阿修'][Math.floor(Math.random() * 5)];
   }
   
@@ -2773,7 +3152,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (!pet || !pet.waitingForName) return;
   
   const name = pet.type === '正派' 
-    ? ['小白', '小青', '俠仔', '靈兒', '阿正'][Math.floor(Math.random() * 5)]
+    ? ['小白', '小青', '阿拓', '靈兒', '阿正'][Math.floor(Math.random() * 5)]
     : ['小黑', '邪仔', '夜影', '惡獸', '阿修'][Math.floor(Math.random() * 5)];
   
   pet.name = name;
@@ -2825,6 +3204,27 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   if (interaction && !interaction.deferred && !interaction.replied) {
     await interaction.deferUpdate().catch(() => {});
   }
+
+  let stateMutated = ensurePlayerGenerationSchema(player);
+  if (restoreStoryFromGenerationState(player)) stateMutated = true;
+  if (restoreChoicesFromGenerationState(player)) stateMutated = true;
+  if (
+    (player.generationState?.status === 'pending' || player.generationState?.status === 'failed') &&
+    String(player.currentStory || '').trim() &&
+    Array.isArray(player.eventChoices) &&
+    player.eventChoices.length > 0
+  ) {
+    finishGenerationState(player, 'done', {
+      phase: 'recovered_snapshot',
+      storySnapshot: player.currentStory,
+      choicesSnapshot: player.eventChoices
+    });
+    stateMutated = true;
+  }
+  if (stateMutated) {
+    CORE.savePlayer(player);
+  }
+
   const worldIntro = consumeWorldIntroOnce(player);
   const worldIntroBlock = worldIntro ? `🌍 **世界背景導讀**\n${worldIntro}\n\n` : '';
   const portalGuideBlock = player?.portalMenuOpen ? `\n\n${buildPortalUsageGuide(player)}` : '';
@@ -2835,18 +3235,35 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   // ============================================================
   if (player.currentStory && player.eventChoices && player.eventChoices.length > 0) {
     // 直接顯示上次的故事 + 選項（不做任何 AI 呼叫）
+    let persisted = false;
     const choices = ensureEarlyGameIncomeChoice(player, normalizeEventChoices(player.eventChoices));
     if (
       choices.length !== player.eventChoices.length ||
       choices.some((choice, idx) => choice !== player.eventChoices[idx])
     ) {
       player.eventChoices = choices;
+      persisted = true;
+    }
+    if (player.generationState?.status === 'pending' || player.generationState?.status === 'failed') {
+      updateGenerationState(player, {
+        phase: 'resume_cached',
+        storySnapshot: player.currentStory,
+        choicesSnapshot: choices
+      });
+      finishGenerationState(player, 'done', {
+        phase: 'resume_cached',
+        storySnapshot: player.currentStory,
+        choicesSnapshot: choices
+      });
+      persisted = true;
+    }
+    if (persisted) {
       CORE.savePlayer(player);
     }
     const storyText = player.currentStory;
     
     player.stats.飽腹度 = player.stats.飽腹度 || 100;
-    const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 內力 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
+    const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
     
     const optionsText = buildChoiceOptionsText(choices, { player, pet });
     
@@ -2909,13 +3326,28 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     player.eventChoices = [];
     CORE.savePlayer(player);
   }
+
+  const hasRecoverableStoryOnly =
+    String(player.currentStory || '').trim().length > 0 &&
+    (!Array.isArray(player.eventChoices) || player.eventChoices.length === 0);
+  startGenerationState(player, {
+    source: hasRecoverableStoryOnly ? 'main_menu_recover_choices' : 'main_menu',
+    phase: 'loading',
+    sourceChoice: hasRecoverableStoryOnly ? '補齊上次中斷選項' : '主選單生成',
+    storySnapshot: hasRecoverableStoryOnly ? player.currentStory : '',
+    choicesSnapshot: []
+  });
+  CORE.savePlayer(player);
   
   // ===== 狀態列 =====
   player.stats.飽腹度 = player.stats.飽腹度 || 100;
-  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 內力 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
+  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
 
   // 先用 Loading 訊息回覆（先故事、後選項）
-  const loadingDesc = `${worldIntroBlock}**狀態：【${statusBar}】**\n\n⏳ *AI 說書人正在構思故事...*${portalGuideBlock}`;
+  const loadingHint = hasRecoverableStoryOnly
+    ? 'AI 說書人正在補齊上次中斷的選項...'
+    : 'AI 說書人正在構思故事...';
+  const loadingDesc = `${worldIntroBlock}**狀態：【${statusBar}】**\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
   
   const loadingEmbed = new EmbedBuilder()
     .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -2941,7 +3373,9 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   // 發送 Loading 訊息到 thread
   const loadingMsg = await thread.send({ embeds: [loadingEmbed], components });
   trackActiveGameMessage(player, thread.id, loadingMsg.id);
-  const stopLoadingAnimation = startLoadingAnimation(loadingMsg, 'AI 說書人正在構思故事');
+  updateGenerationState(player, { loadingMessageId: loadingMsg.id });
+  CORE.savePlayer(player);
+  const stopLoadingAnimation = startLoadingAnimation(loadingMsg, loadingHint);
   const stopTypingIndicator = startTypingIndicator(thread);
 
   // 如果有 interaction（按鈕觸發），立即確認避免超時
@@ -2952,6 +3386,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   // 背景 AI 生成：先出故事，再補按鈕
   (async () => {
     try {
+      updateGenerationState(player, { phase: 'memory_context' });
+      CORE.savePlayer(player);
       let memoryContext = '';
       try {
         const memoryQueryText = [
@@ -2978,33 +3414,63 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         }
       } catch (memErr) {
         stopLoadingAnimation();
-        await loadingMsg.edit({
-          content: `❌ 記憶系統錯誤：${memErr.message}\n請檢查 OpenAI Embedding 設定（此模式不會自動降級）。`,
+        finishGenerationState(player, 'failed', {
+          phase: 'memory_failed',
+          error: memErr?.message || memErr,
+          storySnapshot: player.currentStory,
+          choicesSnapshot: player.eventChoices
+        });
+        CORE.savePlayer(player);
+        const memoryErrMsg = await editOrSendFallback(thread, loadingMsg, {
+          content: `❌ 記憶系統錯誤：${memErr.message}\n請檢查 OpenAI Embedding 設定（此模式不會自動降級）。若剛更新 .env，請重啟機器人後再試。`,
           embeds: [],
           components: buildRetryGenerationComponents()
-        }).catch(() => {});
-        trackActiveGameMessage(player, thread.id, loadingMsg.id);
+        }, 'main_menu.memory_error');
+        if (memoryErrMsg?.id) {
+          trackActiveGameMessage(player, thread.id, memoryErrMsg.id);
+        }
         return;
       }
-      const storyText = await STORY.generateStory(null, player, pet, null, memoryContext);
-      if (!storyText) {
-        stopLoadingAnimation();
-        await loadingMsg.edit({
-          content: '❌ AI 故事生成失敗，請點「重新生成」再試。',
-          embeds: [],
-          components: buildRetryGenerationComponents()
-        }).catch(() => {});
-        trackActiveGameMessage(player, thread.id, loadingMsg.id);
-        return;
-      }
+      let storyText = hasRecoverableStoryOnly ? String(player.currentStory || '').trim() : '';
+      if (!hasRecoverableStoryOnly) {
+        updateGenerationState(player, { phase: 'generating_story' });
+        CORE.savePlayer(player);
+        storyText = await STORY.generateStory(null, player, pet, null, memoryContext);
+        if (!storyText) {
+          stopLoadingAnimation();
+          finishGenerationState(player, 'failed', {
+            phase: 'story_empty',
+            error: 'AI story generation failed (empty result)',
+            storySnapshot: player.currentStory,
+            choicesSnapshot: []
+          });
+          CORE.savePlayer(player);
+          const failStoryMsg = await editOrSendFallback(thread, loadingMsg, {
+            content: '❌ AI 故事生成失敗，請點「重新生成」再試。',
+            embeds: [],
+            components: buildRetryGenerationComponents()
+          }, 'main_menu.story_empty');
+          if (failStoryMsg?.id) {
+            trackActiveGameMessage(player, thread.id, failStoryMsg.id);
+          }
+          return;
+        }
 
-      player.currentStory = storyText;
-      player.eventChoices = [];
-      CORE.savePlayer(player);
+        player.currentStory = storyText;
+        player.eventChoices = [];
+        updateGenerationState(player, {
+          phase: 'story_ready',
+          storySnapshot: storyText,
+          choicesSnapshot: []
+        });
+        CORE.savePlayer(player);
+      }
 
       const storyFirstDesc =
         `${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n` +
-        `⏳ *故事已送達，正在生成選項...*`;
+        (hasRecoverableStoryOnly
+          ? '⏳ *已恢復上次故事，正在補齊選項...*'
+          : '⏳ *故事已送達，正在生成選項...*');
 
       const storyFirstEmbed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -3012,17 +3478,38 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         .setDescription(storyFirstDesc);
 
       stopLoadingAnimation();
-      await loadingMsg.edit({ content: null, embeds: [storyFirstEmbed], components: [] }).catch(() => {});
-      trackActiveGameMessage(player, thread.id, loadingMsg.id);
+      const storyOnlyMsg = await editOrSendFallback(
+        thread,
+        loadingMsg,
+        { content: null, embeds: [storyFirstEmbed], components: [] },
+        'main_menu.story_only'
+      );
+      if (storyOnlyMsg?.id) {
+        trackActiveGameMessage(player, thread.id, storyOnlyMsg.id);
+      }
 
+      updateGenerationState(player, {
+        phase: 'generating_choices',
+        loadingMessageId: storyOnlyMsg?.id || loadingMsg?.id || null
+      });
+      CORE.savePlayer(player);
       const newChoices = await STORY.generateChoicesWithAI(player, pet, storyText, memoryContext);
       if (!newChoices || newChoices.length === 0) {
-        await loadingMsg.edit({
+        finishGenerationState(player, 'failed', {
+          phase: 'choice_empty',
+          error: 'AI choice generation failed (empty result)',
+          storySnapshot: storyText,
+          choicesSnapshot: []
+        });
+        CORE.savePlayer(player);
+        const failChoicesMsg = await editOrSendFallback(thread, storyOnlyMsg || loadingMsg, {
           content: '⚠️ 故事已生成，但選項生成失敗，請點「重新生成」。',
           embeds: [storyFirstEmbed],
           components: buildRetryGenerationComponents()
-        }).catch(() => {});
-        trackActiveGameMessage(player, thread.id, loadingMsg.id);
+        }, 'main_menu.choice_empty');
+        if (failChoicesMsg?.id) {
+          trackActiveGameMessage(player, thread.id, failChoicesMsg.id);
+        }
         return;
       }
 
@@ -3031,6 +3518,16 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         maybeInjectRareCustomInputChoice(normalizeEventChoices(newChoices))
       );
       player.eventChoices = normalizedNewChoices;
+      updateGenerationState(player, {
+        phase: 'choices_ready',
+        storySnapshot: storyText,
+        choicesSnapshot: normalizedNewChoices
+      });
+      finishGenerationState(player, 'done', {
+        phase: 'completed',
+        storySnapshot: storyText,
+        choicesSnapshot: normalizedNewChoices
+      });
       CORE.savePlayer(player);
 
       const newOptionsText = buildChoiceOptionsText(normalizedNewChoices, { player, pet });
@@ -3057,17 +3554,33 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         .setColor(0x00ff00)
         .setDescription(aiDesc);
 
-      await loadingMsg.edit({ content: null, embeds: [aiEmbed], components: newComponents }).catch(e => console.log('[發送錯誤]', e.message));
-      trackActiveGameMessage(player, thread.id, loadingMsg.id);
+      const finalMenuMsg = await editOrSendFallback(
+        thread,
+        storyOnlyMsg || loadingMsg,
+        { content: null, embeds: [aiEmbed], components: newComponents },
+        'main_menu.final_menu'
+      );
+      if (finalMenuMsg?.id) {
+        trackActiveGameMessage(player, thread.id, finalMenuMsg.id);
+      }
     } catch (err) {
       stopLoadingAnimation();
       console.log('[AI] 故事生成失敗:', err.message);
-      await loadingMsg.edit({
+      finishGenerationState(player, 'failed', {
+        phase: 'exception',
+        error: err?.message || err,
+        storySnapshot: player.currentStory,
+        choicesSnapshot: player.eventChoices
+      });
+      CORE.savePlayer(player);
+      const aiFailMsg = await editOrSendFallback(thread, loadingMsg, {
         content: `❌ AI 失敗：${err.message}\n請點「重新生成」再試。`,
         embeds: [],
         components: buildRetryGenerationComponents()
-      }).catch(() => {});
-      trackActiveGameMessage(player, thread.id, loadingMsg.id);
+      }, 'main_menu.ai_fail');
+      if (aiFailMsg?.id) {
+        trackActiveGameMessage(player, thread.id, aiFailMsg.id);
+      }
     } finally {
       stopTypingIndicator();
       releaseStoryLock(playerId);
@@ -3078,6 +3591,13 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   return;
   } catch (err) {
     console.log('[主選單] 生成失敗:', err?.message || err);
+    finishGenerationState(player, 'failed', {
+      phase: 'outer_exception',
+      error: err?.message || err,
+      storySnapshot: player.currentStory,
+      choicesSnapshot: player.eventChoices
+    });
+    CORE.savePlayer(player);
     const failMsg = await thread.send({
       content: `❌ 主選單生成失敗：${err?.message || err}\n請點「重新生成」再試。`,
       components: buildRetryGenerationComponents()
@@ -3444,6 +3964,42 @@ async function showCharacter(interaction, user) {
   await interaction.update({ embeds: [embed], components: [row] });
 }
 
+function describeMoveEffects(effect = {}) {
+  if (!effect || typeof effect !== 'object') return '無效果';
+  const notes = [];
+  if (effect.burn) notes.push(`灼燒${effect.burn}回（每回約22%持續傷害）`);
+  if (effect.poison) notes.push(`中毒${effect.poison}回（每回約16%持續傷害）`);
+  if (effect.trap) notes.push(`陷阱${effect.trap}回（每回約18%持續傷害）`);
+  if (effect.bleed) notes.push(`流血${effect.bleed}回（每回約24%持續傷害）`);
+  if (effect.dot) notes.push(`持續干擾（2回，每回${effect.dot}）`);
+  if (effect.stun) notes.push(`暈眩${effect.stun}回（無法行動）`);
+  if (effect.freeze) notes.push(`凍結${effect.freeze}回（無法行動）`);
+  if (effect.bind) notes.push(`束縛${effect.bind}回（無法逃跑）`);
+  if (effect.slow) notes.push(`緩速${effect.slow}回（輸出-20%）`);
+  if (effect.fear) notes.push(`恐懼${effect.fear}回（約28%失手）`);
+  if (effect.confuse) notes.push(`混亂${effect.confuse}回（約30%失手且自傷）`);
+  if (effect.blind) notes.push(`致盲${effect.blind}回（約35%失手）`);
+  if (effect.missNext) notes.push(`使對手下次攻擊落空`);
+  if (effect.defenseDown || effect.defDown) notes.push(`降防${effect.defenseDown || effect.defDown}回（防禦約-30%）`);
+  if (effect.shield) notes.push(`護盾${effect.shield}回（每次受擊減傷）`);
+  if (effect.dodge) notes.push(`閃避${effect.dodge}回（約45%躲招）`);
+  if (effect.reflect) notes.push(`反射${effect.reflect}回（回彈35%）`);
+  if (effect.thorns) notes.push(`反刺${effect.thorns}回（回彈20%）`);
+  if (effect.heal) notes.push(`治療${effect.heal}`);
+  if (effect.cleanse) notes.push('淨化負面狀態');
+  if (effect.drain) notes.push(`汲取回復（上限${effect.drain}）`);
+  if (effect.selfDamage) notes.push(`自損${effect.selfDamage}`);
+  if (effect.splash) notes.push('範圍衝擊（本擊+20%）');
+  if (effect.armorBreak) notes.push('破甲（大幅降低對方防禦）');
+  if (effect.ignoreResistance) notes.push('無視防禦');
+  if (effect.spreadPoison) notes.push('擴散毒化（附加中毒）');
+  if (effect.debuff === 'all') notes.push('全體弱化（緩速+降防+致盲）');
+  if (effect.summon) notes.push(`幻像干擾${effect.summon}回（失手率上升）`);
+  if (effect.flee) notes.push('逃跑技能');
+  if (effect.wait) notes.push('待機蓄能（不攻擊）');
+  return notes.length > 0 ? notes.join('；') : '無效果';
+}
+
 // ============== 招式列表 ==============
 async function showMovesList(interaction, user) {
   const player = CORE.loadPlayer(user.id);
@@ -3457,37 +4013,15 @@ async function showMovesList(interaction, user) {
   // 只顯示已解鎖的招式
   const unlockedMoves = pet.moves.map((m, i) => {
     const dmg = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
+    const energyCost = BATTLE.getMoveEnergyCost(m);
     
     // 等級標示
     const tierEmoji = m.tier === 3 ? '🔮' : m.tier === 2 ? '💠' : '⚪';
     const tierName = m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通';
     
-    let effectStr = '';
-    if (m.effect.burn) effectStr += '燃燒' + m.effect.burn + '回合 ';
-    if (m.effect.poison) effectStr += '中毒' + m.effect.poison + '回合 ';
-    if (m.effect.stun) effectStr += '暈眩' + m.effect.stun + '回合 ';
-    if (m.effect.freeze) effectStr += '凍結' + m.effect.freeze + '回合 ';
-    if (m.effect.bind) effectStr += '困綁' + m.effect.bind + '回合 ';
-    if (m.effect.shield) effectStr += '護盾' + m.effect.shield + '回合 ';
-    if (m.effect.heal) effectStr += '治療' + m.effect.heal + ' ';
-    if (m.effect.drain) effectStr += '吸血' + m.effect.drain + ' ';
-    if (m.effect.selfDamage) effectStr += '自損' + m.effect.selfDamage + ' ';
-    if (m.effect.reflect) effectStr += '反傷' + m.effect.reflect + '回合 ';
-    if (m.effect.armorBreak) effectStr += '無視防禦 ';
-    if (m.effect.missNext) effectStr += '攻擊落空 ';
-    if (m.effect.slow) effectStr += '緩速' + m.effect.slow + '回合 ';
-    if (m.effect.bleed) effectStr += '流血' + m.effect.bleed + '回合 ';
-    if (m.effect.confuse) effectStr += '混亂' + m.effect.confuse + '回合 ';
-    if (m.effect.defenseDown) effectStr += '防禦下降' + m.effect.defenseDown + '回合 ';
-    if (m.effect.trap) effectStr += '陷阱' + m.effect.trap + '回合 ';
-    if (m.effect.ignoreResistance) effectStr += '無視抗性 ';
-    if (m.effect.dot) effectStr += '持續傷害' + m.effect.dot + ' ';
-    if (m.effect.blind) effectStr += '致盲' + m.effect.blind + '回合 ';
-    if (m.effect.taunt) effectStr += '嘲諷' + m.effect.taunt + '回合 ';
-    if (m.effect.thorns) effectStr += '反傷' + m.effect.thorns + '回合 ';
-    if (m.effect.flee) effectStr += '100%逃跑 ';
+    const effectStr = describeMoveEffects(m.effect || {});
     
-    return `${tierEmoji} ${i+1}. **${m.name}** (${m.element}/${tierName})\n   💥 ${dmg.total}dmg | ${effectStr || '無效果'}`;
+    return `${tierEmoji} ${i+1}. **${m.name}** (${m.element}/${tierName})\n   💥 ${dmg.total}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
   }).join('\n\n');
   
   const embed = new EmbedBuilder()
@@ -3568,6 +4102,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   if (!player || !pet) {
     await respondError('❌ 請重新開始！');
     return;
+  }
+  if (ensurePlayerGenerationSchema(player)) {
+    CORE.savePlayer(player);
   }
   ECON.ensurePlayerEconomy(player);
   if (!Array.isArray(player.herbs)) player.herbs = [];
@@ -4002,8 +4539,12 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       fighter: fighterType,
       mode: null,
       fleeAttempts: 0,
+      energy: 2,
+      turn: 1,
       startedAt: Date.now(),
-      sourceChoice: selectedChoice
+      sourceChoice: selectedChoice,
+      humanState: null,
+      petState: null
     };
     queueMemory({
       type: '戰鬥',
@@ -4028,6 +4569,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         `⚔️ 敵方攻擊：${enemy.attack}\n` +
         `${enemyPetLine}` +
         `${fighterLabel} 出戰\n` +
+        `⚡ 戰鬥能量規則：每回合 +2，可結轉到下一回合\n` +
         `${beginnerGuardText}\n` +
         `${beginnerDangerText}` +
         `📊 **勝率預估：${battleEstimate.rank}（約 ${battleEstimate.winRate}%）**（模擬 ${battleEstimate.simulations || BATTLE_ESTIMATE_SIMULATIONS} 場）\n` +
@@ -4048,6 +4590,13 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   }
   
   flushMemories();
+  startGenerationState(player, {
+    source: 'event',
+    phase: 'memory_context',
+    sourceChoice: selectedChoice,
+    storySnapshot: player.currentStory || '',
+    choicesSnapshot: []
+  });
   CORE.savePlayer(player);
   
   // 取得記憶上下文
@@ -4078,7 +4627,14 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       memoryContext = [memoryContext, npcMemoryContext].filter(Boolean).join('\n\n');
     }
   } catch (memErr) {
-    const failMsg = `❌ 記憶系統錯誤：${memErr.message}\n請檢查 OpenAI Embedding 設定（此模式不會自動降級）。`;
+    finishGenerationState(player, 'failed', {
+      phase: 'memory_failed',
+      error: memErr?.message || memErr,
+      storySnapshot: player.currentStory,
+      choicesSnapshot: player.eventChoices
+    });
+    CORE.savePlayer(player);
+    const failMsg = `❌ 記憶系統錯誤：${memErr.message}\n請檢查 OpenAI Embedding 設定（此模式不會自動降級）。若剛更新 .env，請重啟機器人後再試。`;
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp({ content: failMsg, ephemeral: true }).catch(() => {});
     } else {
@@ -4087,7 +4643,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   }
   
-  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 內力 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
+  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns ${player.stats.財富} | ${player.location}`;
   
   // 立即確認按鈕（避免 Discord 顯示失敗）
   await interaction.deferUpdate().catch(() => {});
@@ -4107,26 +4663,47 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   });
 
   trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+  updateGenerationState(player, {
+    phase: 'loading',
+    loadingMessageId: loadingMsg.id
+  });
+  CORE.savePlayer(player);
   const stopLoadingAnimation = startLoadingAnimation(loadingMsg, 'AI 說書人正在構思新故事');
   const stopTypingIndicator = startTypingIndicator(interaction.channel);
   
   // 背景 AI 生成：先出故事，再補按鈕
   (async () => {
     try {
+      updateGenerationState(player, { phase: 'generating_story' });
+      CORE.savePlayer(player);
       const storyText = await STORY.generateStory(event, player, pet, event, memoryContext);
       if (!storyText) {
         stopLoadingAnimation();
-        await loadingMsg.edit({
+        finishGenerationState(player, 'failed', {
+          phase: 'story_empty',
+          error: 'AI story generation failed (empty result)',
+          storySnapshot: player.currentStory,
+          choicesSnapshot: []
+        });
+        CORE.savePlayer(player);
+        const failStoryMsg = await editOrSendFallback(interaction.channel, loadingMsg, {
           content: '❌ AI 生成失敗，請點「重新生成」再試。',
           embeds: [],
           components: buildRetryGenerationComponents()
-        }).catch(() => {});
-        trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+        }, 'event.story_empty');
+        if (failStoryMsg?.id) {
+          trackActiveGameMessage(player, interaction.channel?.id, failStoryMsg.id);
+        }
         return;
       }
 
       player.currentStory = storyText;
       player.eventChoices = [];
+      updateGenerationState(player, {
+        phase: 'story_ready',
+        storySnapshot: storyText,
+        choicesSnapshot: []
+      });
       CORE.savePlayer(player);
 
       const rewardText = [];
@@ -4165,17 +4742,38 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         );
 
       stopLoadingAnimation();
-      await loadingMsg.edit({ content: null, embeds: [storyOnlyEmbed], components: [] }).catch(() => {});
-      trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+      const storyOnlyMsg = await editOrSendFallback(
+        interaction.channel,
+        loadingMsg,
+        { content: null, embeds: [storyOnlyEmbed], components: [] },
+        'event.story_only'
+      );
+      if (storyOnlyMsg?.id) {
+        trackActiveGameMessage(player, interaction.channel?.id, storyOnlyMsg.id);
+      }
 
+      updateGenerationState(player, {
+        phase: 'generating_choices',
+        loadingMessageId: storyOnlyMsg?.id || loadingMsg?.id || null
+      });
+      CORE.savePlayer(player);
       const aiChoices = await STORY.generateChoicesWithAI(player, pet, storyText, memoryContext);
       if (!aiChoices || aiChoices.length === 0) {
-        await loadingMsg.edit({
+        finishGenerationState(player, 'failed', {
+          phase: 'choice_empty',
+          error: 'AI choice generation failed (empty result)',
+          storySnapshot: storyText,
+          choicesSnapshot: []
+        });
+        CORE.savePlayer(player);
+        const failChoicesMsg = await editOrSendFallback(interaction.channel, storyOnlyMsg || loadingMsg, {
           content: '⚠️ 故事已生成，但選項生成失敗，請點「重新生成」。',
           embeds: [storyOnlyEmbed],
           components: buildRetryGenerationComponents()
-        }).catch(() => {});
-        trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+        }, 'event.choice_empty');
+        if (failChoicesMsg?.id) {
+          trackActiveGameMessage(player, interaction.channel?.id, failChoicesMsg.id);
+        }
         return;
       }
 
@@ -4183,6 +4781,16 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         player,
         maybeInjectRareCustomInputChoice(normalizeEventChoices(aiChoices))
       );
+      updateGenerationState(player, {
+        phase: 'choices_ready',
+        storySnapshot: storyText,
+        choicesSnapshot: player.eventChoices
+      });
+      finishGenerationState(player, 'done', {
+        phase: 'completed',
+        storySnapshot: storyText,
+        choicesSnapshot: player.eventChoices
+      });
       CORE.savePlayer(player);
 
       const newChoices = player.eventChoices;
@@ -4218,17 +4826,33 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
       }
 
-      await loadingMsg.edit({ content: null, embeds: [embed], components }).catch(() => {});
-      trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+      const finalStoryMsg = await editOrSendFallback(
+        interaction.channel,
+        storyOnlyMsg || loadingMsg,
+        { content: null, embeds: [embed], components },
+        'event.final_story'
+      );
+      if (finalStoryMsg?.id) {
+        trackActiveGameMessage(player, interaction.channel?.id, finalStoryMsg.id);
+      }
     } catch (err) {
       stopLoadingAnimation();
       console.error('[事件] 處理失敗:', err);
-      await loadingMsg.edit({
+      finishGenerationState(player, 'failed', {
+        phase: 'exception',
+        error: err?.message || err,
+        storySnapshot: player.currentStory,
+        choicesSnapshot: player.eventChoices
+      });
+      CORE.savePlayer(player);
+      const eventFailMsg = await editOrSendFallback(interaction.channel, loadingMsg, {
         content: `❌ 事件處理失敗：${err?.message || err}\n請點「重新生成」再試。`,
         embeds: [],
         components: buildRetryGenerationComponents()
-      }).catch(() => {});
-      trackActiveGameMessage(player, interaction.channel?.id, loadingMsg.id);
+      }, 'event.fail');
+      if (eventFailMsg?.id) {
+        trackActiveGameMessage(player, interaction.channel?.id, eventFailMsg.id);
+      }
     } finally {
       stopTypingIndicator();
       releaseStoryLock(playerId);
@@ -4246,23 +4870,44 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
 
 // ============== 戰鬥 ==============
 function buildBattleMoveDetails(player, pet, combatant) {
+  const battleState = player?.battleState || {};
+  const currentEnergy = Number.isFinite(Number(battleState.energy)) ? Number(battleState.energy) : 2;
   return getCombatantMoves(combatant, pet).map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, player, combatant);
-    let effectStr = '';
-    if (m.effect?.burn) effectStr += `燃燒${m.effect.burn}回合 `;
-    if (m.effect?.poison) effectStr += `中毒${m.effect.poison}回合 `;
-    if (m.effect?.stun) effectStr += `暈眩${m.effect.stun}回合 `;
-    if (m.effect?.freeze) effectStr += `凍結${m.effect.freeze}回合 `;
-    if (m.effect?.bind) effectStr += `困綁${m.effect.bind}回合 `;
-    if (m.effect?.shield) effectStr += `護盾${m.effect.shield}回合 `;
-    if (m.effect?.heal) effectStr += `治療${m.effect.heal} `;
-    if (m.effect?.drain) effectStr += `吸血${m.effect.drain} `;
-    return `⚔️ ${m.name} | ${d.total} dmg | ${effectStr || '無'}`;
+    const energyCost = BATTLE.getMoveEnergyCost(m);
+    const canUse = currentEnergy >= energyCost;
+    const effectStr = describeMoveEffects(m.effect || {});
+    return `⚔️ ${m.name} | ${d.total} dmg | ⚡${energyCost} | ${canUse ? '可用' : '能量不足'} | ${effectStr || '無'}`;
   }).join('\n');
 }
 
+function ensureBattleEnergyState(player) {
+  if (!player?.battleState) return { energy: 0, turn: 1 };
+  if (!Number.isFinite(Number(player.battleState.energy))) player.battleState.energy = 2;
+  if (!Number.isFinite(Number(player.battleState.turn)) || Number(player.battleState.turn) < 1) player.battleState.turn = 1;
+  return {
+    energy: Number(player.battleState.energy),
+    turn: Number(player.battleState.turn)
+  };
+}
+
+function advanceBattleTurnEnergy(player, spentCost = 0) {
+  if (!player?.battleState) return { energy: 0, turn: 1 };
+  const state = ensureBattleEnergyState(player);
+  const spent = Math.max(0, Number(spentCost) || 0);
+  const remaining = Math.max(0, state.energy - spent);
+  player.battleState.energy = remaining + 2;
+  player.battleState.turn = Math.max(1, state.turn) + 1;
+  return {
+    energy: player.battleState.energy,
+    turn: player.battleState.turn
+  };
+}
+
 function buildBattleActionRows(player, pet, combatant) {
+  const state = ensureBattleEnergyState(player);
   const battleState = player.battleState || {};
+  const currentEnergy = state.energy;
   const indexedMoves = getCombatantMoves(combatant, pet)
     .map((m, i) => ({ move: m, index: i }))
     .slice(0, 4);
@@ -4270,10 +4915,13 @@ function buildBattleActionRows(player, pet, combatant) {
   const moveButtons = indexedMoves.map(({ move, index }) => {
     const m = move;
     const d = BATTLE.calculatePlayerMoveDamage(m, player, combatant);
+    const energyCost = BATTLE.getMoveEnergyCost(m);
+    const canUse = currentEnergy >= energyCost;
     return new ButtonBuilder()
       .setCustomId(`use_move_${index}`)
-      .setLabel(`${m.name} (${d.total})`)
-      .setStyle(ButtonStyle.Danger);
+      .setLabel(`${m.name} ⚡${energyCost}`)
+      .setStyle(canUse ? ButtonStyle.Danger : ButtonStyle.Secondary)
+      .setDisabled(!canUse);
   });
 
   const moveRow = new ActionRowBuilder().addComponents(
@@ -4283,6 +4931,7 @@ function buildBattleActionRows(player, pet, combatant) {
   );
   const fleeTry = battleState.fleeAttempts || 0;
   const actionRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('battle_wait').setLabel('⚡ 蓄能待機').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`flee_${fleeTry}`).setLabel(`${t('flee')} (70%×2)`).setStyle(ButtonStyle.Secondary)
   );
   return [moveRow, actionRow];
@@ -4304,6 +4953,7 @@ function buildAIBattleStory(rounds, combatant, enemy, finalResult) {
       `**第 ${r.turn} 回合**\n` +
       `${icon} ${combatant.name}使出「${r.playerMove}」，${hitText}。\n` +
       `👹 ${enemy.name}立刻以「${r.enemyMove}」回應，${takenText}。\n` +
+      `⚡ 能量：${r.energyBefore ?? '-'} -> ${r.energyAfter ?? '-'}（消耗 ${r.energyCost ?? 0}）\n` +
       `📉 戰況：${combatant.name} ${r.petHp}/${r.petMaxHp} ｜ ${enemy.name} ${r.enemyHp}/${r.enemyMaxHp}`
     );
   }
@@ -4326,6 +4976,7 @@ async function renderManualBattle(interaction, player, pet, roundMessage = '') {
   }
 
   const combatant = getActiveCombatant(player, pet);
+  const state = ensureBattleEnergyState(player);
   const [moveRow, actionRow] = buildBattleActionRows(player, pet, combatant);
   const dmgInfo = buildBattleMoveDetails(player, pet, combatant);
   const roundText = roundMessage ? `\n\n${roundMessage}\n` : '\n';
@@ -4334,6 +4985,7 @@ async function renderManualBattle(interaction, player, pet, roundMessage = '') {
   await interaction.update({
     content:
       `⚔️ **戰鬥中：${fighterLabel} vs ${enemy.name}**${roundText}\n` +
+      `回合：${state.turn} | ⚡ 能量：${state.energy}（每回合 +2，可結轉）\n` +
       `敵人 HP: ${enemy.hp}/${enemy.maxHp} | ATK: ${enemy.attack}\n` +
       `你的 ${combatant.name} HP: ${combatant.hp}/${combatant.maxHp}\n\n` +
       `**招式：**\n${dmgInfo}`,
@@ -4400,6 +5052,7 @@ async function continueBattleWithHuman(interaction, user) {
   player.battleState.fighter = 'player';
   player.battleState.mode = 'manual';
   player.battleState.fleeAttempts = 0;
+  ensureBattleEnergyState(player);
   rememberPlayer(player, {
     type: '戰鬥',
     content: `改由 ${player.name} 親自上場`,
@@ -4434,8 +5087,12 @@ async function startManualBattle(interaction, user) {
       fighter: CORE.canPetFight(pet) ? 'pet' : 'player',
       mode: 'manual',
       fleeAttempts: 0,
+      energy: 2,
+      turn: 1,
       startedAt: Date.now(),
-      sourceChoice: '突發戰鬥'
+      sourceChoice: '突發戰鬥',
+      humanState: null,
+      petState: null
     };
     createdBattle = true;
   } else {
@@ -4454,6 +5111,7 @@ async function startManualBattle(interaction, user) {
       tags: ['battle', 'manual_start']
     });
   }
+  ensureBattleEnergyState(player);
   CORE.savePlayer(player);
   await handleFight(interaction, user);
 }
@@ -4474,8 +5132,12 @@ async function startAutoBattle(interaction, user) {
       fighter: CORE.canPetFight(pet) ? 'pet' : 'player',
       mode: 'ai',
       fleeAttempts: 0,
+      energy: 2,
+      turn: 1,
       startedAt: Date.now(),
-      sourceChoice: '突發戰鬥'
+      sourceChoice: '突發戰鬥',
+      humanState: null,
+      petState: null
     };
     createdBattle = true;
   } else {
@@ -4494,6 +5156,7 @@ async function startAutoBattle(interaction, user) {
       tags: ['battle', 'ai_start']
     });
   }
+  ensureBattleEnergyState(player);
   CORE.savePlayer(player);
 
   const enemy = player.battleState.enemy;
@@ -4507,25 +5170,33 @@ async function startAutoBattle(interaction, user) {
   const rounds = [];
   let finalResult = null;
   const maxTurns = 12;
+  ensureBattleEnergyState(player);
 
   for (let turn = 1; turn <= maxTurns; turn++) {
-    const aiMove = pickBestMoveForAI(player, pet, enemy, combatant);
-    if (!aiMove) break;
+    const energyBefore = ensureBattleEnergyState(player).energy;
+    const aiMove = pickBestMoveForAI(player, pet, enemy, combatant, energyBefore);
+    const selectedMove = aiMove || WAIT_COMBAT_MOVE;
+    const energyCost = aiMove ? BATTLE.getMoveEnergyCost(aiMove) : 0;
     const enemyMove = BATTLE.enemyChooseMove(enemy);
     const enemyHpBefore = enemy.hp;
     const petHpBefore = combatant.hp;
-    const roundResult = BATTLE.executeBattleRound(player, combatant, enemy, aiMove, enemyMove);
+    const roundResult = BATTLE.executeBattleRound(player, combatant, enemy, selectedMove, enemyMove);
+    const nextEnergy = Math.max(0, energyBefore - energyCost) + 2;
     rounds.push({
       turn,
-      playerMove: aiMove.name || '普通攻擊',
+      playerMove: selectedMove.name || '普通攻擊',
       enemyMove: enemyMove?.name || '普通攻擊',
       playerDamage: Math.max(0, enemyHpBefore - enemy.hp),
       enemyDamage: Math.max(0, petHpBefore - combatant.hp),
       petHp: combatant.hp,
       petMaxHp: combatant.maxHp,
       enemyHp: enemy.hp,
-      enemyMaxHp: enemy.maxHp
+      enemyMaxHp: enemy.maxHp,
+      energyBefore,
+      energyCost,
+      energyAfter: nextEnergy
     });
+    advanceBattleTurnEnergy(player, energyCost);
     if (roundResult.victory !== null) {
       finalResult = roundResult;
       break;
@@ -4602,14 +5273,19 @@ async function handleFight(interaction, user) {
       fighter: CORE.canPetFight(pet) ? 'pet' : 'player',
       mode: 'manual',
       fleeAttempts: 0,
+      energy: 2,
+      turn: 1,
       startedAt: Date.now(),
-      sourceChoice: '突發戰鬥'
+      sourceChoice: '突發戰鬥',
+      humanState: null,
+      petState: null
     };
   } else if (player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
     player.battleState.fighter = 'player';
     player.battleState.mode = 'manual';
     player.battleState.fleeAttempts = 0;
   }
+  ensureBattleEnergyState(player);
 
   CORE.savePlayer(player);
   await renderManualBattle(interaction, player, pet);
@@ -4629,6 +5305,17 @@ async function handleUseMove(interaction, user, moveIndex) {
     return;
   }
   ECON.ensurePlayerEconomy(player);
+  const state = ensureBattleEnergyState(player);
+  const energyCost = BATTLE.getMoveEnergyCost(chosenMove);
+  if (state.energy < energyCost) {
+    await renderManualBattle(
+      interaction,
+      player,
+      pet,
+      `⚠️ 能量不足：${chosenMove.name} 需要 ⚡${energyCost}，目前只有 ⚡${state.energy}。`
+    );
+    return;
+  }
 
   if (chosenMove?.effect?.flee) {
     await renderManualBattle(interaction, player, pet, '⚠️ 請使用下方「逃跑」按鈕，不是招式按鈕。');
@@ -4684,8 +5371,88 @@ async function handleUseMove(interaction, user, moveIndex) {
 
   player.battleState.enemy = enemy;
   player.battleState.mode = 'manual';
+  const next = advanceBattleTurnEnergy(player, energyCost);
   CORE.savePlayer(player);
-  await renderManualBattle(interaction, player, pet, result.message);
+  await renderManualBattle(
+    interaction,
+    player,
+    pet,
+    `${result.message}\n⚡ 消耗：${chosenMove.name} -${energyCost} 能量，下一回合能量 ${next.energy}`
+  );
+}
+
+async function handleBattleWait(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const pet = PET.loadPet(user.id);
+  const enemy = player?.battleState?.enemy;
+  const combatant = getActiveCombatant(player, pet);
+
+  if (!player || !pet || !enemy || !combatant) {
+    await interaction.update({ content: '❌ 目前不在有效戰鬥狀態。', components: [] });
+    return;
+  }
+
+  const state = ensureBattleEnergyState(player);
+  const beforeEnergy = state.energy;
+  const enemyMove = BATTLE.enemyChooseMove(enemy);
+  const result = BATTLE.executeBattleRound(player, combatant, enemy, WAIT_COMBAT_MOVE, enemyMove);
+
+  persistCombatantState(player, pet, combatant);
+  PET.savePet(pet);
+
+  if (result.victory === true) {
+    player.stats.財富 += result.gold;
+    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    ECON.addTradeGood(player, battleLoot);
+    player.battleState = null;
+    rememberPlayer(player, {
+      type: '戰鬥',
+      content: `蓄能待機後反殺 ${enemy.name}`,
+      outcome: `獲得 ${result.gold} Rns，掉落 ${battleLoot.name}`,
+      importance: 3,
+      tags: ['battle', 'victory', 'wait_turn']
+    });
+    CORE.savePlayer(player);
+
+    const embed = new EmbedBuilder()
+      .setTitle(t('victory'))
+      .setColor(0x00ff00)
+      .setDescription(result.message)
+      .addFields(
+        { name: t('gold'), value: `${result.gold}`, inline: true },
+        { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns）`, inline: false }
+      );
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+    );
+    await interaction.update({ embeds: [embed], components: [row] });
+    return;
+  }
+
+  if (result.victory === false || combatant.hp <= 0) {
+    CORE.savePlayer(player);
+    if (combatant.isHuman) {
+      player.battleState = null;
+      CORE.savePlayer(player);
+      await showTrueGameOver(interaction, user, result.message || `💀 你在蓄能時被 ${enemy.name} 擊倒...`);
+      return;
+    }
+    await showPetDefeatedTransition(interaction, player, pet, result.message || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`);
+    return;
+  }
+
+  player.battleState.enemy = enemy;
+  player.battleState.mode = 'manual';
+  const next = advanceBattleTurnEnergy(player, 0);
+  CORE.savePlayer(player);
+
+  await renderManualBattle(
+    interaction,
+    player,
+    pet,
+    `${result.message}\n⚡ 能量 ${beforeEnergy} → ${next.energy}（+2）`
+  );
 }
 
 // ============== 逃跑 ==============
@@ -4701,7 +5468,15 @@ async function handleFlee(interaction, user, attemptNum) {
   }
 
   const currentAttempt = (player.battleState.fleeAttempts || 0) + 1;
-  const result = BATTLE.attemptFlee(player, pet, enemy, currentAttempt);
+  const result = BATTLE.attemptFlee(player, pet, enemy, currentAttempt, combatant);
+
+  if (result.blocked) {
+    persistCombatantState(player, pet, combatant);
+    PET.savePet(pet);
+    CORE.savePlayer(player);
+    await renderManualBattle(interaction, player, pet, result.message);
+    return;
+  }
 
   if (result.success) {
     player.battleState = null;
@@ -4760,6 +5535,9 @@ async function handleFlee(interaction, user, attemptNum) {
 
 // ============== 斜線指令註冊 ==============
 CLIENT.on('ready', async () => {
+  console.log(`[Storage] APP_ENV=${STORAGE.appEnv} data=${STORAGE.dataDir} worldRoot=${STORAGE.worldDataRoot}`);
+  startWorldBackupScheduler(notifyWorldBackupSuccess);
+
   const commands = [
     { name: 'start', description: '開始你的Renaiss星球冒險！（有存檔則繼續）' },
     { name: 'warstatus', description: '查看正派與 Digital 張力、勢力值與最近三次衝突' }

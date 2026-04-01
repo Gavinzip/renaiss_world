@@ -3,12 +3,14 @@
  * 不提供固定主線按鈕，隨玩家遊玩行為自然推進。
  */
 
+const { sanitizeWorldObject } = require('./style-sanitizer');
+
 const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',
   2: 'Act 2 流言（Whispers）',
   3: 'Act 3 狩獵（Marked）',
   4: 'Act 4 市場戰爭（War）',
-  5: 'Act 5 四大天王（Endgame）',
+  5: 'Act 5 四巨頭（Endgame）',
   6: 'Act 6 Winchman 抉擇'
 };
 
@@ -119,11 +121,11 @@ function finalizeEnding(state, player) {
 }
 
 function buildMaskedAssassinEncounter() {
-  return {
+  return sanitizeWorldObject({
     type: 'combat',
-    message: '💀 你被 Digital 注意到了。蒙面殺手夜襲而來，先試你深淺。',
+    message: '💀 你被 Digital 注意到了。覆面獵手夜襲而來，先試你深淺。',
     enemy: {
-      name: '蒙面殺手',
+      name: '覆面獵手',
       hp: 130,
       attack: 32,
       moves: ['突襲', '奪包', '煙霧'],
@@ -133,16 +135,16 @@ function buildMaskedAssassinEncounter() {
     canFlee: true,
     fleeRate: 0.7,
     fleeAttempts: 2
-  };
+  });
 }
 
 function buildKingEncounter() {
   const king = DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
-  return {
+  return sanitizeWorldObject({
     king,
     encounter: {
       type: 'combat',
-      message: `👑 四大天王「${king}」現身，變異寵物在你面前失控咆哮。`,
+      message: `👑 四巨頭「${king}」現身，變異寵物在你面前失控咆哮。`,
       enemy: {
         name: king,
         hp: 180,
@@ -156,7 +158,7 @@ function buildKingEncounter() {
       fleeRate: 0.7,
       fleeAttempts: 2
     }
-  };
+  });
 }
 
 function maybeTriggerPassiveStory(player, context = {}) {
@@ -200,8 +202,8 @@ function maybeTriggerPassiveStory(player, context = {}) {
   if (state.node === 'act3_marked' && count >= 8) {
     markNode(state, 4, 'act4_war', 'Act4 -> 蒙面狩獵觸發');
     triggered.overrideResult = buildMaskedAssassinEncounter();
-    triggered.announcement = `💀 ${player.name}遭遇了 Digital 蒙面殺手的狩獵測試。`;
-    triggered.memory = '蒙面殺手突襲了你。';
+    triggered.announcement = `💀 ${player.name}遭遇了 Digital 覆面獵手的狩獵測試。`;
+    triggered.memory = '覆面獵手突襲了你。';
     return triggered;
   }
 
@@ -220,8 +222,8 @@ function maybeTriggerPassiveStory(player, context = {}) {
     const kingData = buildKingEncounter();
     markNode(state, 6, 'act6_winchman', `Act6 前置 -> 對決 ${kingData.king}`);
     triggered.overrideResult = kingData.encounter;
-    triggered.announcement = `👑 ${player.name}已與四大天王「${kingData.king}」交鋒。`;
-    triggered.memory = `你與四大天王 ${kingData.king} 交手。`;
+    triggered.announcement = `👑 ${player.name}已與四巨頭「${kingData.king}」交鋒。`;
+    triggered.memory = `你與四巨頭 ${kingData.king} 交手。`;
     return triggered;
   }
 

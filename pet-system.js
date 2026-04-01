@@ -1,6 +1,6 @@
 /**
- * 🐾 Renaiss World - 寵物系統 v3
- * 修正：複合招式 = 總傷害攤分到每回合
+ * 🐾 Renaiss World - 寵物系統 v4
+ * 世界觀改版：原創「生態共鳴 + 數據進化」風格
  */
 
 const fs = require('fs');
@@ -9,73 +9,68 @@ const path = require('path');
 const PET_FILE = path.join(__dirname, 'data', 'pets.json');
 const PET_RECOVER_MS = 48 * 60 * 60 * 1000; // 2天
 
-// ============== 正派招式（17招）- 平衡版 + 等級分類 ==============
+// ============== 聯盟系招式池（原創） ==============
 const POSITIVE_MOVES = [
-  // ===== 普通級 (Tier 1) - 初期孵化常見 =====
-  // 金系
-  { id: 'golden_needle', name: '金針刺穴', element: '金', type: 'positive', tier: 1, baseDamage: 12, effect: { stun: 1 }, desc: '以金針刺入敵人穴位' },
-  { id: 'iron_palm', name: '鐵砂掌', element: '金', type: 'positive', tier: 1, baseDamage: 10, effect: {}, desc: '基礎掌法，扎實有力' },
-  { id: 'shield_stance', name: '抱元守一', element: '金', type: 'positive', tier: 1, baseDamage: 5, effect: { shield: 1 }, desc: '防守姿態，固守元氣' },
-  
-  // 木系
-  { id: 'spider_net', name: '羅網天蛛', element: '木', type: 'positive', tier: 1, baseDamage: 8, effect: { bind: 1 }, desc: '以蛛絲織成天羅地網' },
-  { id: 'grass_cloak', name: '草藥披身', element: '木', type: 'positive', tier: 1, baseDamage: 0, effect: { heal: 10 }, desc: '利用草藥簡單療傷' },
-  { id: 'root_trap', name: '藤蔓絆足', element: '木', type: 'positive', tier: 1, baseDamage: 9, effect: { slow: 1 }, desc: '操縱藤蔓阻擋敵人' },
-  
-  // 水系
-  { id: 'willow_water', name: '楊枝淨水', element: '水', type: 'positive', tier: 1, baseDamage: 7, effect: { cleanse: true, heal: 10 }, desc: '觀音楊枝灑下淨水' },
-  { id: 'water_splash', name: '水濺一擊', element: '水', type: 'positive', tier: 1, baseDamage: 11, effect: {}, desc: '以水氣凝聚攻擊' },
-  { id: 'mist_step', name: '雲霧步', element: '水', type: 'positive', tier: 1, baseDamage: 0, effect: { dodge: 1 }, desc: '腳步如霧，難以捉摸' },
-  
-  // ===== 稀有級 (Tier 2) - 中期較強 =====
-  { id: 'needle_rain', name: '暴雨梨花', element: '金', type: 'positive', tier: 2, baseDamage: 22, effect: { bleed: 1 }, desc: '暗器如暴雨般傾瀉' },
-  { id: 'golden_bell', name: '金鐘罩', element: '金', type: 'positive', tier: 2, baseDamage: 15, effect: { shield: 2 }, desc: '體表形成金鐘護罩' },
-  { id: 'heavenly_flowers', name: '天女散花', element: '木', type: 'positive', tier: 2, baseDamage: 20, effect: { poison: 1 }, desc: '花瓣如利刃般切割' },
-  { id: 'ice_palm', name: '寒冰掌', element: '水', type: 'positive', tier: 2, baseDamage: 20, effect: { freeze: 1 }, desc: '寒冰內力凝聚於掌間' },
-  { id: 'blaze_sky', name: '烈焰焚天', element: '火', type: 'positive', tier: 2, baseDamage: 25, effect: { burn: 1 }, desc: '體內真氣化為烈焰' },
-  { id: 'flame_armor', name: '赤焰甲', element: '火', type: 'positive', tier: 2, baseDamage: 12, effect: { reflect: 1 }, desc: '赤焰纏身，攻擊者必受反噬' },
-  { id: 'rejuvenation', name: '回春術', element: '木', type: 'positive', tier: 2, baseDamage: 0, effect: { heal: 30 }, desc: '以內力催動生機，恢復生命' },
-  
-  // ===== 史詩級 (Tier 3) - 極稀有，初期很難獲得 =====
-  { id: 'flood_torrent', name: '洪水滔天', element: '水', type: 'positive', tier: 3, baseDamage: 35, effect: { splash: true }, desc: '洪水如千軍萬馬般奔騰' },
-  { id: 'fire_lotus', name: '火蓮碎', element: '火', type: 'positive', tier: 3, baseDamage: 40, effect: { selfDamage: 10 }, desc: '凝聚全身功力於一招' },
-  { id: 'arhat_kick', name: '羅漢金剛腿', element: '土', type: 'positive', tier: 3, baseDamage: 38, effect: { armorBreak: true }, desc: '少林金剛腿，降魔衛道' },
-  { id: 'wind_fire_blade', name: '風火燎原', element: '複合', type: 'positive', tier: 3, baseDamage: 45, effect: { burn: 2, stun: 1 }, desc: '風助火勢，火借風威' },
-  { id: 'thunder_crash', name: '雷霆萬鈞', element: '複合', type: 'positive', tier: 3, baseDamage: 48, effect: { stun: 1, armorBreak: true }, desc: '九天神雷降世' },
-  { id: 'rock_trap', name: '落石陷阱', element: '土', type: 'positive', tier: 2, baseDamage: 22, effect: { missNext: 1 }, desc: '引動山石，從天而降' },
-  { id: 'quicksand', name: '流沙陣', element: '土', type: 'positive', tier: 2, baseDamage: 18, effect: { slow: 2 }, desc: '以氣功引動流沙' }
+  // ===== Tier 1 =====
+  { id: 'golden_needle', name: '脈衝標定', element: '光譜', type: 'positive', tier: 1, baseDamage: 12, effect: { stun: 1 }, desc: '以高頻脈衝鎖定目標，短暫造成停滯' },
+  { id: 'iron_palm', name: '合金撞擊', element: '合金', type: 'positive', tier: 1, baseDamage: 10, effect: {}, desc: '用強化外殼發動直接衝撞' },
+  { id: 'shield_stance', name: '稜鏡護層', element: '光譜', type: 'positive', tier: 1, baseDamage: 5, effect: { shield: 1 }, desc: '張開短時護層，吸收部分衝擊' },
+
+  { id: 'spider_net', name: '纖維束縛', element: '生質', type: 'positive', tier: 1, baseDamage: 8, effect: { bind: 1 }, desc: '釋放可收縮纖維纏住對手' },
+  { id: 'grass_cloak', name: '生物修補', element: '生質', type: 'positive', tier: 1, baseDamage: 0, effect: { heal: 10 }, desc: '啟動自癒模組，快速縫補損傷' },
+  { id: 'root_trap', name: '根網干擾', element: '生質', type: 'positive', tier: 1, baseDamage: 9, effect: { slow: 1 }, desc: '在地面展開根網降低移動效率' },
+
+  { id: 'willow_water', name: '淨化波', element: '液態', type: 'positive', tier: 1, baseDamage: 7, effect: { cleanse: true, heal: 10 }, desc: '釋放淨化液波，同步去除負面狀態' },
+  { id: 'water_splash', name: '水壓脈衝', element: '液態', type: 'positive', tier: 1, baseDamage: 11, effect: {}, desc: '壓縮液流形成瞬間衝擊' },
+  { id: 'mist_step', name: '霧相位移', element: '液態', type: 'positive', tier: 1, baseDamage: 0, effect: { dodge: 1 }, desc: '將身形霧化，短暫提高閃避' },
+
+  // ===== Tier 2 =====
+  { id: 'needle_rain', name: '碎晶風暴', element: '合金', type: 'positive', tier: 2, baseDamage: 22, effect: { bleed: 1 }, desc: '多段碎晶彈幕造成連續割裂' },
+  { id: 'golden_bell', name: '堡壘力場', element: '光譜', type: 'positive', tier: 2, baseDamage: 15, effect: { shield: 2 }, desc: '生成雙層防護力場穩住前線' },
+  { id: 'heavenly_flowers', name: '孢子刃雨', element: '生質', type: 'positive', tier: 2, baseDamage: 20, effect: { poison: 1 }, desc: '灑出微型孢子刃，造成中毒與切割' },
+  { id: 'ice_palm', name: '低溫衝擊', element: '液態', type: 'positive', tier: 2, baseDamage: 20, effect: { freeze: 1 }, desc: '瞬降溫度凍結目標關節' },
+  { id: 'blaze_sky', name: '電漿盛放', element: '熱能', type: 'positive', tier: 2, baseDamage: 25, effect: { burn: 1 }, desc: '點燃電漿雲團，造成灼燒' },
+  { id: 'flame_armor', name: '熱盾回路', element: '熱能', type: 'positive', tier: 2, baseDamage: 12, effect: { reflect: 1 }, desc: '外層熱盾回彈部分攻擊傷害' },
+  { id: 'rejuvenation', name: '再生矩陣', element: '生質', type: 'positive', tier: 2, baseDamage: 0, effect: { heal: 30 }, desc: '啟動深層修復矩陣恢復大量生命' },
+  { id: 'rock_trap', name: '隕塊墜落', element: '地脈', type: 'positive', tier: 2, baseDamage: 22, effect: { missNext: 1 }, desc: '牽引隕塊砸落，打亂敵方節奏' },
+  { id: 'quicksand', name: '漂砂陷落', element: '地脈', type: 'positive', tier: 2, baseDamage: 18, effect: { slow: 2 }, desc: '製造局部陷落區域持續牽制' },
+
+  // ===== Tier 3 =====
+  { id: 'flood_torrent', name: '潮汐奇點', element: '液態', type: 'positive', tier: 3, baseDamage: 35, effect: { splash: true }, desc: '引爆潮汐奇點，形成範圍壓制' },
+  { id: 'fire_lotus', name: '日核裂解', element: '熱能', type: 'positive', tier: 3, baseDamage: 40, effect: { selfDamage: 10 }, desc: '超載核心換取高爆發輸出' },
+  { id: 'arhat_kick', name: '地脈衝撞', element: '地脈', type: 'positive', tier: 3, baseDamage: 38, effect: { armorBreak: true }, desc: '共振地脈形成重擊並破甲' },
+  { id: 'wind_fire_blade', name: '風暴聚變', element: '混相', type: 'positive', tier: 3, baseDamage: 45, effect: { burn: 2, stun: 1 }, desc: '高壓氣流與熱能聚變，兼具灼燒與震盪' },
+  { id: 'thunder_crash', name: '雷矢超載', element: '混相', type: 'positive', tier: 3, baseDamage: 48, effect: { stun: 1, armorBreak: true }, desc: '雷矢束流貫穿護甲並造成失衡' }
 ];
 
-// ============== 機變派招式（17招）- 平衡版 + 等級分類 ==============
+// ============== 協定系招式池（原創） ==============
 const NEGATIVE_MOVES = [
-  // ===== 普通級 (Tier 1) - 初期孵化常見 =====
-  // 暗系
-  { id: 'shadow_slash', name: '暗影劈', element: '暗', type: 'negative', tier: 1, baseDamage: 10, effect: {}, desc: '黑暗中突襲' },
-  { id: 'shadow_lock', name: '無形鎖脈', element: '暗', type: 'negative', tier: 1, baseDamage: 8, effect: { bind: 1 }, desc: '暗中偷襲，封住敵人穴道' },
-  { id: 'fear_presence', name: '懼意籠罩', element: '暗', type: 'negative', tier: 1, baseDamage: 0, effect: { fear: 1 }, desc: '散發恐懼氣息' },
-  
-  // 毒系
-  { id: 'spider_silk', name: '蛛絲縛魂', element: '毒', type: 'negative', tier: 1, baseDamage: 7, effect: { trap: 1 }, desc: '以毒蛛絲纏繞敵人' },
-  { id: 'minor_poison', name: '小毒散', element: '毒', type: 'negative', tier: 1, baseDamage: 9, effect: { poison: 1 }, desc: '基礎毒藥' },
-  { id: 'curse_word', name: '咒言術', element: '暗', type: 'negative', tier: 1, baseDamage: 6, effect: { confuse: 1 }, desc: '口中唸唸有詞詛咒敵人' },
-  
-  // ===== 稀有級 (Tier 2) - 中期較強 =====
-  { id: 'soul_drain', name: '吸星大法', element: '暗', type: 'negative', tier: 2, baseDamage: 18, effect: { drain: 15 }, desc: '以詭異內功吸取敵人精華' },
-  { id: 'soul_scatter', name: '離魂散', element: '暗', type: 'negative', tier: 2, baseDamage: 20, effect: { confuse: 2 }, desc: '以迷藥散播恐懼' },
-  { id: 'seven_step_poison', name: '七步斷腸散', element: '毒', type: 'negative', tier: 2, baseDamage: 16, effect: { poison: 2 }, desc: '武林第一毒藥' },
-  { id: 'bone_dissolver', name: '化骨水', element: '毒', type: 'negative', tier: 2, baseDamage: 25, effect: { defenseDown: 2 }, desc: '腐蝕一切，骨骼盡化' },
-  { id: 'hot_sand_hell', name: '熱砂地獄', element: '火毒', type: 'negative', tier: 2, baseDamage: 22, effect: { slow: 2, burn: 1 }, desc: '滾燙沙粒如刀刃' },
-  { id: 'plague_cloud', name: '瘟疫毒霧', element: '毒', type: 'negative', tier: 2, baseDamage: 18, effect: { spreadPoison: true }, desc: '釋放毒霧纏繞敵人' },
-  
-  // ===== 史詩級 (Tier 3) - 極稀有，初期很難獲得 =====
-  { id: 'hell_fire', name: '地獄烈火', element: '火毒', type: 'negative', tier: 3, baseDamage: 32, effect: { burn: 2, poison: 1 }, desc: '地獄之火燃燒' },
-  { id: 'explosive_pill', name: '爆炸信號彈', element: '火毒', type: 'negative', tier: 3, baseDamage: 38, effect: { selfDamage: 10 }, desc: '以毒火引爆' },
-  { id: 'ghost_fire', name: '幽冥鬼火', element: '暗火', type: 'negative', tier: 3, baseDamage: 35, effect: { ignoreResistance: true }, desc: '鬼火纏身，無法熄滅' },
-  { id: 'silver_snake', name: '金蛇纏絲', element: '暗金', type: 'negative', tier: 3, baseDamage: 28, effect: { bind: 2, dot: 3 }, desc: '金蛇飛舞，絲線纏繞' },
-  { id: 'ice_toxin', name: '寒冰毒蛙', element: '水毒', type: 'negative', tier: 3, baseDamage: 26, effect: { freeze: 1, poison: 2 }, desc: '寒冰與毒液並存' },
-  { id: 'mud_fire_lotus', name: '污泥火蓮', element: '水毒火', type: 'negative', tier: 3, baseDamage: 30, effect: { blind: 1, burn: 2 }, desc: '污泥覆蓋視線，火焰趁機焚身' },
-  { id: 'ultimate_dark', name: '天魔解体大法', element: '暗', type: 'negative', tier: 3, baseDamage: 45, effect: { selfDamage: 20 }, desc: '燃燒生命換取毀滅力量' },
-  { id: 'iron_thorn', name: '玄鐵荊棘', element: '金', type: 'negative', tier: 2, baseDamage: 22, effect: { thorns: 2 }, desc: '全身長出荊棘，傷敵一千自損八百' }
+  // ===== Tier 1 =====
+  { id: 'shadow_slash', name: '影域切割', element: '暗域', type: 'negative', tier: 1, baseDamage: 10, effect: {}, desc: '利用暗域偏振完成斜向切割' },
+  { id: 'shadow_lock', name: '故障鎖定', element: '暗域', type: 'negative', tier: 1, baseDamage: 8, effect: { bind: 1 }, desc: '注入干擾碼鎖住目標行動' },
+  { id: 'fear_presence', name: '恐懼脈衝', element: '暗域', type: 'negative', tier: 1, baseDamage: 0, effect: { fear: 1 }, desc: '放大對手感測噪音產生遲疑' },
+
+  { id: 'spider_silk', name: '黏網拘束', element: '毒蝕', type: 'negative', tier: 1, baseDamage: 7, effect: { trap: 1 }, desc: '噴射高黏性網膜限制移動' },
+  { id: 'minor_poison', name: '毒霧火花', element: '毒蝕', type: 'negative', tier: 1, baseDamage: 9, effect: { poison: 1 }, desc: '微量毒霧穿透護層造成侵蝕' },
+  { id: 'curse_word', name: '靜電咒訊', element: '暗域', type: 'negative', tier: 1, baseDamage: 6, effect: { confuse: 1 }, desc: '發送錯位訊號擾亂判讀' },
+
+  // ===== Tier 2 =====
+  { id: 'soul_drain', name: '核心抽離', element: '暗域', type: 'negative', tier: 2, baseDamage: 18, effect: { drain: 15 }, desc: '從目標能量核心抽取可用輸出' },
+  { id: 'soul_scatter', name: '神經霧化', element: '暗域', type: 'negative', tier: 2, baseDamage: 20, effect: { confuse: 2 }, desc: '釋放神經霧化流造成判斷錯亂' },
+  { id: 'seven_step_poison', name: '腐蝕鏈劑', element: '毒蝕', type: 'negative', tier: 2, baseDamage: 16, effect: { poison: 2 }, desc: '連鎖腐蝕劑持續侵蝕系統' },
+  { id: 'bone_dissolver', name: '熔蝕酸流', element: '毒蝕', type: 'negative', tier: 2, baseDamage: 25, effect: { defenseDown: 2 }, desc: '高溫酸流削弱防禦層' },
+  { id: 'hot_sand_hell', name: '炙砂域', element: '熱毒', type: 'negative', tier: 2, baseDamage: 22, effect: { slow: 2, burn: 1 }, desc: '熱砂雲域造成減速與灼燒' },
+  { id: 'plague_cloud', name: '疫霧群', element: '毒蝕', type: 'negative', tier: 2, baseDamage: 18, effect: { spreadPoison: true }, desc: '擴散型毒霧可在接觸後傳染' },
+  { id: 'iron_thorn', name: '棘甲反刺', element: '合金', type: 'negative', tier: 2, baseDamage: 22, effect: { thorns: 2 }, desc: '激活棘甲在受擊時反向回刺' },
+
+  // ===== Tier 3 =====
+  { id: 'hell_fire', name: '煉域協議', element: '熱毒', type: 'negative', tier: 3, baseDamage: 32, effect: { burn: 2, poison: 1 }, desc: '啟動高危協議，輸出灼燒與毒侵' },
+  { id: 'explosive_pill', name: '連鎖爆訊', element: '熱毒', type: 'negative', tier: 3, baseDamage: 38, effect: { selfDamage: 10 }, desc: '以自損換取鏈式爆震' },
+  { id: 'ghost_fire', name: '幽格炙流', element: '暗熱', type: 'negative', tier: 3, baseDamage: 35, effect: { ignoreResistance: true }, desc: '炙流穿透護甲與抗性直接灼傷' },
+  { id: 'silver_snake', name: '銀鏈束陣', element: '暗金', type: 'negative', tier: 3, baseDamage: 28, effect: { bind: 2, dot: 3 }, desc: '展開銀鏈束陣並持續放電' },
+  { id: 'ice_toxin', name: '冰毒脈衝', element: '凍毒', type: 'negative', tier: 3, baseDamage: 26, effect: { freeze: 1, poison: 2 }, desc: '低溫毒流同步凍結與侵蝕' },
+  { id: 'mud_fire_lotus', name: '泥焰遮幕', element: '混毒熱', type: 'negative', tier: 3, baseDamage: 30, effect: { blind: 1, burn: 2 }, desc: '泥焰遮幕降低視野並持續焚灼' },
+  { id: 'ultimate_dark', name: '零界崩解', element: '暗域', type: 'negative', tier: 3, baseDamage: 45, effect: { selfDamage: 20 }, desc: '引爆零界反應器，代價極高' }
 ];
 
 // ============== 初始技能 ==============
@@ -83,6 +78,79 @@ const INITIAL_MOVES = [
   { id: 'head_butt', name: '頭槌', element: '普通', type: 'normal', tier: 1, baseDamage: 8, effect: {}, desc: '寵物本能攻擊' },
   { id: 'flee', name: '逃跑', element: '普通', type: 'normal', tier: 1, baseDamage: 0, effect: { flee: true }, desc: '100%逃脫' }
 ];
+
+const ALL_MOVES = [...POSITIVE_MOVES, ...NEGATIVE_MOVES, ...INITIAL_MOVES];
+const MOVE_BY_ID = new Map(ALL_MOVES.map((m) => [m.id, m]));
+const LEGACY_MOVE_NAME_TO_ID = {
+  '金針刺穴': 'golden_needle',
+  '暴雨梨花': 'needle_rain',
+  '金鐘罩': 'golden_bell',
+  '天女散花': 'heavenly_flowers',
+  '羅網天蛛': 'spider_net',
+  '回春術': 'rejuvenation',
+  '楊枝淨水': 'willow_water',
+  '寒冰掌': 'ice_palm',
+  '洪水滔天': 'flood_torrent',
+  '羅漢金剛腿': 'arhat_kick',
+  '落石陷阱': 'rock_trap',
+  '流沙陣': 'quicksand',
+  '烈焰焚天': 'blaze_sky',
+  '赤焰甲': 'flame_armor',
+  '風火燎原': 'wind_fire_blade',
+  '雷霆萬鈞': 'thunder_crash',
+  '吸星大法': 'soul_drain',
+  '無形鎖脈': 'shadow_lock',
+  '離魂散': 'soul_scatter',
+  '七步斷腸散': 'seven_step_poison',
+  '化骨水': 'bone_dissolver',
+  '蛛絲縛魂': 'spider_silk',
+  '地獄烈火': 'hell_fire',
+  '爆炸信號彈': 'explosive_pill',
+  '熱砂地獄': 'hot_sand_hell',
+  '火蓮碎': 'fire_lotus'
+};
+
+function cloneMoveTemplate(template) {
+  if (!template) return null;
+  return {
+    ...template,
+    effect: { ...(template.effect || {}) }
+  };
+}
+
+function normalizeLoadedMove(move) {
+  if (!move || typeof move !== 'object') return { move, changed: false };
+
+  const legacyId = LEGACY_MOVE_NAME_TO_ID[String(move.name || '').trim()];
+  const targetId = move.id || legacyId;
+  const template = targetId ? MOVE_BY_ID.get(targetId) : null;
+  if (!template) return { move, changed: false };
+
+  const normalized = cloneMoveTemplate(template);
+  normalized.currentProficiency = Number(move.currentProficiency || 0);
+  if (move.cooldown !== undefined) normalized.cooldown = move.cooldown;
+
+  const changed =
+    move.id !== normalized.id ||
+    move.name !== normalized.name ||
+    move.element !== normalized.element ||
+    move.type !== normalized.type ||
+    Number(move.baseDamage || 0) !== Number(normalized.baseDamage || 0) ||
+    JSON.stringify(move.effect || {}) !== JSON.stringify(normalized.effect || {});
+
+  return { move: normalized, changed };
+}
+
+function normalizePetMoves(pet) {
+  if (!pet || !Array.isArray(pet.moves)) return false;
+  let changed = false;
+  pet.moves = pet.moves.map((m) => {
+    const result = normalizeLoadedMove(m);
+    if (result.changed) changed = true;
+    return result.move;
+  });
+  return changed;
+}
 
 // ============== 計算招式總傷害（用於顯示）==============
 function calculateMoveDamage(move, level, attack) {
@@ -117,7 +185,7 @@ function createPetEgg(playerId, type) {
   return {
     id: `pet_${playerId}_${Date.now()}`,
     ownerId: playerId,
-    name: type === '正派' ? '俠寵蛋' : '魔寵蛋',
+    name: type === '正派' ? '聯盟夥伴蛋' : '協定夥伴蛋',
     type: type,
     level: 1,
     exp: 0,
@@ -144,12 +212,12 @@ function hatchEgg(pet) {
   pet.reviveAt = null;
   pet.lastDownAt = null;
   
-  const names = pet.type === '正派' 
-    ? ['小白', '小青', '小俠', '俠仔', '阿正', '靈兒']
-    : ['小黑', '小魔', '邪仔', '惡獸', '阿修', '夜影'];
+  const names = pet.type === '正派'
+    ? ['Nova', 'Luma', 'Aria', 'Pico', 'Melo', 'Kite']
+    : ['Vex', 'Nyx', 'Rift', 'Echo', 'Gloom', 'Raze'];
   
   pet.name = names[Math.floor(Math.random() * names.length)];
-  pet.appearance = `一隻剛孵化的${pet.type}寵物，模樣可愛，眼神${pet.type === '正派' ? '清澈' : '詭異'}`;
+  pet.appearance = `一隻剛孵化的${pet.type}夥伴，外殼仍帶著微光紋路，眼神${pet.type === '正派' ? '穩定專注' : '敏銳機警'}`;
   
   // 初始招式：頭槌 + 逃跑
   pet.moves = [
@@ -260,6 +328,7 @@ function updateAppearance(pet) {
 // ============== 存讀檔 ==============
 function savePet(pet) {
   const pets = loadAllPets();
+  normalizePetMoves(pet);
   pets[pet.id] = pet;
   fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
 }
@@ -269,8 +338,9 @@ function loadPet(playerId) {
   const pet = Object.values(pets).find(p => p.ownerId === playerId) || null;
   if (!pet) return null;
 
+  const normalizedChanged = normalizePetMoves(pet);
   const synced = syncPetRecovery(pet);
-  if (synced.changed) {
+  if (synced.changed || normalizedChanged) {
     savePet(synced.pet);
   }
 
@@ -302,7 +372,15 @@ function getPetById(petId) {
 function loadAllPets() {
   if (!fs.existsSync(PET_FILE)) return {};
   try {
-    return JSON.parse(fs.readFileSync(PET_FILE, 'utf8'));
+    const pets = JSON.parse(fs.readFileSync(PET_FILE, 'utf8'));
+    let changed = false;
+    for (const pet of Object.values(pets)) {
+      if (normalizePetMoves(pet)) changed = true;
+    }
+    if (changed) {
+      fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
+    }
+    return pets;
   } catch (e) {
     return {};
   }

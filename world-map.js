@@ -20,7 +20,7 @@ const ISLAND_MAP_TEXT = `                     ~ ~ ~ 雲海航道 ~ ~ ~
 ~   鳴沙廢城   砂輪遺站             海潮碼頭           霧雨古祭壇            ~
 ~                                                                      ~
 ~  【群島航線 D2-4】             【隱秘深域 D4-5】                         ~
-~   星潮港─珊瑚環礁─桃花島─俠客島    光明頂─無光礦坑─黑木崖─天機遺都          ~
+~   星潮港─珊瑚環礁─桃花島─潮汐試煉島    光明頂─無光礦坑─黑木崖─天機遺都          ~
 ~          \        \      /             \                 /           ~
 ~            ~~~ 蓬萊仙島 ~~~               ~~~ 死亡之海 ~~~             ~
 ~                                                                      ~
@@ -60,7 +60,7 @@ const REGION_CATALOG = [
     name: '群島航線',
     difficultyRange: 'D2-D4',
     theme: '海路跳島、機關島鏈與靈氣島嶼',
-    locations: ['星潮港', '珊瑚環礁', '桃花島', '俠客島', '蓬萊仙島']
+    locations: ['星潮港', '珊瑚環礁', '桃花島', '潮汐試煉島', '蓬萊仙島']
   },
   {
     id: 'hidden_deeps',
@@ -84,7 +84,7 @@ const LOCATION_PROFILES = {
   '襄陽城': {
     region: '中原核心',
     difficulty: 1,
-    desc: '繁華熱鬧的科技城，商隊與俠客在此交會。',
+    desc: '繁華熱鬧的科技城，商隊與探索者在此交會。',
     nearby: ['機械工坊街', '城南市集', '北門巡邏線'],
     landmarks: ['能量補充站', '城防塔'],
     resources: ['鐵礦', '藥草', '低階裝備'],
@@ -273,7 +273,7 @@ const LOCATION_PROFILES = {
   '雪白山莊': {
     region: '北境高原',
     difficulty: 3,
-    desc: '積雪山莊，適合閉關修煉也常遇強敵試探。',
+    desc: '積雪山莊，適合閉關訓練也常遇強敵試探。',
     nearby: ['冰橋', '雪松林', '山莊內院'],
     landmarks: ['寒玉演武台'],
     resources: ['冰蓮', '雪參'],
@@ -315,7 +315,7 @@ const LOCATION_PROFILES = {
     resources: ['靈芝', '奇花'],
     starterEligible: false
   },
-  '俠客島': {
+  '潮汐試煉島': {
     region: '群島航線',
     difficulty: 4,
     desc: '碑刻武學聖地，高手雲集，試煉殘酷。',
@@ -385,6 +385,10 @@ const MAP_LOCATIONS = REGION_CATALOG.flatMap(region => region.locations);
 const LOCATION_DESCRIPTIONS = Object.fromEntries(
   Object.entries(LOCATION_PROFILES).map(([name, profile]) => [name, profile.desc])
 );
+
+const LEGACY_LOCATION_ALIASES = {
+  '\u4fe0\u5ba2\u5cf6': '潮汐試煉島'
+};
 
 const REGION_PORTAL_HUBS = {
   central_core: '襄陽城',
@@ -466,9 +470,10 @@ function colorizeAll(text, token, colorCode) {
 
 function buildIslandMapAnsi(currentLocation = '') {
   let colored = ISLAND_MAP_TEXT;
+  const normalized = LEGACY_LOCATION_ALIASES[currentLocation] || currentLocation;
 
-  if (currentLocation && MAP_LOCATIONS.includes(currentLocation)) {
-    colored = colorizeAll(colored, currentLocation, ANSI.brightYellow);
+  if (normalized && MAP_LOCATIONS.includes(normalized)) {
+    colored = colorizeAll(colored, normalized, ANSI.brightYellow);
   }
 
   return colored;
@@ -476,15 +481,17 @@ function buildIslandMapAnsi(currentLocation = '') {
 
 function getPortalDestinations(location) {
   if (!location) return [];
-  return Array.isArray(PORTAL_CONNECTIONS[location]) ? [...PORTAL_CONNECTIONS[location]] : [];
+  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  return Array.isArray(PORTAL_CONNECTIONS[normalized]) ? [...PORTAL_CONNECTIONS[normalized]] : [];
 }
 
 function getLocationProfile(location) {
   if (!location) return null;
-  const profile = LOCATION_PROFILES[location];
+  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const profile = LOCATION_PROFILES[normalized];
   if (!profile) return null;
   return {
-    name: location,
+    name: normalized,
     ...profile,
     nearby: Array.isArray(profile.nearby) ? [...profile.nearby] : [],
     landmarks: Array.isArray(profile.landmarks) ? [...profile.landmarks] : [],
