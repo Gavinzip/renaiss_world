@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PET_FILE = path.join(__dirname, 'data', 'pets.json');
+const PET_RECOVER_MS = 48 * 60 * 60 * 1000; // 2天
 
 // ============== 正派招式（17招）- 平衡版 + 等級分類 ==============
 const POSITIVE_MOVES = [
@@ -45,7 +46,7 @@ const POSITIVE_MOVES = [
   { id: 'quicksand', name: '流沙陣', element: '土', type: 'positive', tier: 2, baseDamage: 18, effect: { slow: 2 }, desc: '以氣功引動流沙' }
 ];
 
-// ============== 反派招式（17招）- 平衡版 + 等級分類 ==============
+// ============== 機變派招式（17招）- 平衡版 + 等級分類 ==============
 const NEGATIVE_MOVES = [
   // ===== 普通級 (Tier 1) - 初期孵化常見 =====
   // 暗系
@@ -140,6 +141,8 @@ function createPetEgg(playerId, type) {
 function hatchEgg(pet) {
   pet.hatched = true;
   pet.status = '正常';
+  pet.reviveAt = null;
+  pet.lastDownAt = null;
   
   const names = pet.type === '正派' 
     ? ['小白', '小青', '小俠', '俠仔', '阿正', '靈兒']
@@ -175,6 +178,39 @@ function hatchEgg(pet) {
   pet.moves.push({ ...starterMove, currentProficiency: 0 });
   
   return pet;
+}
+
+function markPetDefeated(pet, reason = '戰鬥失敗') {
+  if (!pet) return pet;
+  pet.hp = 0;
+  pet.status = '死亡';
+  pet.lastDownReason = reason;
+  pet.lastDownAt = Date.now();
+  pet.reviveAt = Date.now() + PET_RECOVER_MS;
+  return pet;
+}
+
+function syncPetRecovery(pet) {
+  if (!pet) return { pet, revived: false, changed: false };
+
+  let changed = false;
+  let revived = false;
+
+  if (pet.status === '死亡' && pet.reviveAt && Date.now() >= pet.reviveAt) {
+    pet.status = '正常';
+    pet.hp = pet.maxHp || 100;
+    pet.lastRevivedAt = Date.now();
+    pet.reviveAt = null;
+    changed = true;
+    revived = true;
+  }
+
+  return { pet, revived, changed };
+}
+
+function getPetRecoveryRemainingMs(pet) {
+  if (!pet || pet.status !== '死亡' || !pet.reviveAt) return 0;
+  return Math.max(0, pet.reviveAt - Date.now());
 }
 
 // ============== 學習招式 ==============
@@ -230,7 +266,15 @@ function savePet(pet) {
 
 function loadPet(playerId) {
   const pets = loadAllPets();
-  return Object.values(pets).find(p => p.ownerId === playerId) || null;
+  const pet = Object.values(pets).find(p => p.ownerId === playerId) || null;
+  if (!pet) return null;
+
+  const synced = syncPetRecovery(pet);
+  if (synced.changed) {
+    savePet(synced.pet);
+  }
+
+  return synced.pet;
 }
 
 function deletePetByOwner(playerId) {
@@ -274,6 +318,9 @@ module.exports = {
   forgetMove,
   updateAppearance,
   calculateMoveDamage,
+  markPetDefeated,
+  syncPetRecovery,
+  getPetRecoveryRemainingMs,
   savePet,
   loadPet,
   deletePetByOwner,

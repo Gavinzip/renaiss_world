@@ -1,5 +1,5 @@
 /**
- * 🗡️ 刀鋒 BLADE - AI 開放世界武俠 RPG
+ * 🌟 Renaiss World - AI 開放世界武俠 RPG
  * 
  * 核心遊戲引擎
  */
@@ -8,8 +8,14 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-// ============== 武學系統 ==============
-const martial = require('./martial-arts');
+const MEMORY_INDEX = require('./memory-index');
+const FACTION_DIRECTOR = require('./faction-war-director');
+const {
+  MAP_LOCATIONS,
+  LOCATION_PROFILES,
+  REGION_CATALOG,
+  getBeginnerSpawnLocations
+} = require('./world-map');
 
 // ============== 設定 ==============
 const DATA_DIR = path.join(__dirname, 'data');
@@ -21,65 +27,61 @@ const CRAFTING_FILE = path.join(DATA_DIR, 'crafting.json');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(PLAYERS_DIR)) fs.mkdirSync(PLAYERS_DIR, { recursive: true });
 
-// ============== Renaiss星球地圖 ==============
+// ============== Renaiss星球地圖（統一來源） ==============
 const WORLD_MAP = {
-  regions: [
-    {
-      name: "中原地區",
-      cities: [
-        { name: "襄陽城", desc: "兵家必爭之地，繁華熱鬧", resources: ["鐵礦", "藥草"], difficulty: 1 },
-        { name: "大都", desc: "繁華都市，各路商賈雲集", resources: ["�綢", "珠寶"], difficulty: 2 },
-        { name: "洛陽城", desc: "千年古都，文化薈萃", resources: ["古籍", "書法"], difficulty: 1 }
-      ]
-    },
-    {
-      name: "西域地區",
-      cities: [
-        { name: "敦煌", desc: "絲路重鎮，莫高窟神秘莫測", resources: ["香料", "寶石"], difficulty: 3 },
-        { name: "喀什爾", desc: "沙漠綠洲，商人聚集", resources: ["棉花", "乾果"], difficulty: 2 }
-      ]
-    },
-    {
-      name: "南方地區",
-      cities: [
-        { name: "廣州", desc: "海港城市，對外貿易發達", resources: ["茶葉", "瓷器"], difficulty: 2 },
-        { name: "大理", desc: "山城風光，少數民族文化", resources: ["茶葉", "藥材"], difficulty: 1 }
-      ]
-    },
-    {
-      name: "海外島嶼",
-      cities: [
-        { name: "桃花島", desc: "世外桃源，機關重重", resources: ["靈芝", "奇花"], difficulty: 4 },
-        { name: "俠客島", desc: "傳說中的武林聖地", resources: ["秘笈", "寶藏"], difficulty: 5 }
-      ]
-    },
-    {
-      name: "北疆地區",
-      cities: [
-        { name: "雪白山莊", desc: "終年積雪，適合閉關修煉", resources: ["冰蓮", "雪參"], difficulty: 3 },
-        { name: "草原部落", desc: "遊牧民族，騎術精湛", resources: ["馬匹", "皮革"], difficulty: 2 }
-      ]
-    },
-    {
-      name: "隱秘地區",
-      cities: [
-        { name: "光明頂", desc: "明教總壇，氣勢恢宏", resources: ["聖火", "經書"], difficulty: 4 },
-        { name: "黑木崖", desc: "日月神教根據地，深淵中的浮空城市", resources: ["暗能量", "情報"], difficulty: 4 }
-      ]
-    }
-  ],
+  regions: REGION_CATALOG.map(region => ({
+    name: region.name,
+    difficultyRange: region.difficultyRange,
+    theme: region.theme,
+    cities: region.locations.map((locationName) => {
+      const profile = LOCATION_PROFILES[locationName] || {};
+      return {
+        name: locationName,
+        desc: profile.desc || '',
+        resources: Array.isArray(profile.resources) ? [...profile.resources] : [],
+        nearby: Array.isArray(profile.nearby) ? [...profile.nearby] : [],
+        landmarks: Array.isArray(profile.landmarks) ? [...profile.landmarks] : [],
+        difficulty: Number(profile.difficulty || 3),
+        starterEligible: profile.starterEligible !== false
+      };
+    })
+  })),
   getAllCities: function() {
     const cities = [];
-    this.regions.forEach(r => r.cities.forEach(c => cities.push({ ...c, region: r.name })));
+    this.regions.forEach(r => {
+      r.cities.forEach(c => cities.push({ ...c, region: r.name }));
+    });
     return cities;
+  },
+  getBeginnerCities: function() {
+    const beginnerSet = new Set(
+      (typeof getBeginnerSpawnLocations === 'function' ? getBeginnerSpawnLocations() : [])
+        .filter(Boolean)
+    );
+    const allCities = this.getAllCities();
+    if (beginnerSet.size === 0) {
+      return allCities.filter(c => Number(c.difficulty || 3) <= 2);
+    }
+    return allCities.filter(c => beginnerSet.has(c.name));
   },
   getRandomCity: function() {
     const cities = this.getAllCities();
+    if (cities.length === 0) {
+      const fallbackName = MAP_LOCATIONS[0] || '襄陽城';
+      return { name: fallbackName, desc: '', resources: [], difficulty: 1, region: '未知' };
+    }
     return cities[Math.floor(Math.random() * cities.length)];
+  },
+  getRandomBeginnerCity: function() {
+    const beginnerCities = this.getBeginnerCities();
+    if (beginnerCities.length === 0) {
+      return this.getRandomCity();
+    }
+    return beginnerCities[Math.floor(Math.random() * beginnerCities.length)];
   },
   getCityByName: function(name) {
     const cities = this.getAllCities();
-    return cities.find(c => c.name === name);
+    return cities.find(c => c.name === name) || null;
   }
 };
 
@@ -99,36 +101,953 @@ let world = {
   npcStatus: {}    // NPC 生死狀態 { npcId: { alive: true, killedBy: null, killedAt: null } }
 };
 
+const FACTION_WAR_CONFIG = {
+  minIntervalDays: 2,
+  maxIntervalDays: 5,
+  minPower: 35,
+  maxPower: 65,
+  maxGap: 12,
+  minTension: 30,
+  maxTension: 90,
+  historyLimit: 32
+};
+
+const FACTION_PRESENCE_CONFIG = {
+  orderDailyMin: 2,
+  orderDailyMax: 4,
+  chaosDailyMin: 1,
+  chaosDailyMax: 3,
+  lowTierOrderSpawnDayRate: 0.35
+};
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value) || 0));
+}
+
+function randInt(min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
+}
+
+function pickRandomItem(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function pickWeightedUniqueLocations(pool, count) {
+  if (!Array.isArray(pool) || pool.length === 0 || count <= 0) return [];
+  const draft = pool
+    .map(item => ({
+      name: item.name,
+      weight: Math.max(0.01, Number(item.weight || 0.01))
+    }))
+    .filter(item => item.name);
+  const picked = [];
+
+  while (draft.length > 0 && picked.length < count) {
+    const total = draft.reduce((sum, item) => sum + item.weight, 0);
+    let roll = Math.random() * total;
+    let idx = 0;
+    for (let i = 0; i < draft.length; i++) {
+      roll -= draft[i].weight;
+      if (roll <= 0) {
+        idx = i;
+        break;
+      }
+    }
+    picked.push(draft[idx].name);
+    draft.splice(idx, 1);
+  }
+
+  return picked;
+}
+
+function buildFactionPresencePools() {
+  const entries = MAP_LOCATIONS
+    .map((name) => {
+      const profile = LOCATION_PROFILES[name] || {};
+      return {
+        name,
+        difficulty: Number(profile.difficulty || 3)
+      };
+    })
+    .filter(item => item.name);
+
+  const orderLow = [];
+  const orderHigh = [];
+  const chaosHigh = [];
+
+  for (const entry of entries) {
+    const diff = entry.difficulty;
+    if (diff <= 2) {
+      orderLow.push({
+        name: entry.name,
+        weight: diff <= 1 ? 0.25 : 0.4
+      });
+    } else {
+      orderHigh.push({
+        name: entry.name,
+        weight: 0.8 + (diff - 2) * 0.35
+      });
+    }
+
+    if (diff >= 4) {
+      chaosHigh.push({
+        name: entry.name,
+        weight: diff >= 5 ? 1.45 : 1.0
+      });
+    }
+  }
+
+  return { orderLow, orderHigh, chaosHigh };
+}
+
+function maybeGenerateFactionPresenceForDay() {
+  if (!world.factionPresence || typeof world.factionPresence !== 'object') {
+    world.factionPresence = {
+      day: 0,
+      orderLocations: [],
+      chaosLocations: [],
+      generatedAt: 0
+    };
+  }
+
+  const state = world.factionPresence;
+  if (Number(state.day || 0) === Number(world.day)) {
+    return state;
+  }
+
+  const pools = buildFactionPresencePools();
+  const orderCount = randInt(FACTION_PRESENCE_CONFIG.orderDailyMin, FACTION_PRESENCE_CONFIG.orderDailyMax);
+  const chaosCount = randInt(FACTION_PRESENCE_CONFIG.chaosDailyMin, FACTION_PRESENCE_CONFIG.chaosDailyMax);
+
+  const lowTierSlots = Math.random() < FACTION_PRESENCE_CONFIG.lowTierOrderSpawnDayRate ? 1 : 0;
+  const orderLowPicked = pickWeightedUniqueLocations(pools.orderLow, Math.min(lowTierSlots, orderCount));
+  const pickedLowSet = new Set(orderLowPicked);
+  const orderHighPool = pools.orderHigh.filter(item => !pickedLowSet.has(item.name));
+  const orderHighPicked = pickWeightedUniqueLocations(orderHighPool, Math.max(0, orderCount - orderLowPicked.length));
+  const orderLocations = [...orderHighPicked, ...orderLowPicked];
+
+  const chaosLocations = pickWeightedUniqueLocations(pools.chaosHigh, chaosCount);
+
+  state.day = world.day;
+  state.orderLocations = orderLocations;
+  state.chaosLocations = chaosLocations;
+  state.generatedAt = Date.now();
+  state.policy = {
+    chaosOnlyHighDifficulty: true,
+    orderLowDifficultyReduced: true
+  };
+
+  const orderText = orderLocations.length > 0 ? orderLocations.join('、') : '暫無目擊';
+  const chaosText = chaosLocations.length > 0 ? chaosLocations.join('、') : '暫無目擊';
+  pushWorldEvent({
+    day: world.day,
+    type: 'faction_presence',
+    message: `🛰️ 勢力目擊：正派行動於 ${orderText}；Digital 蹤跡僅見高危區 ${chaosText}。`,
+    timestamp: Date.now(),
+    meta: {
+      orderLocations: [...orderLocations],
+      chaosLocations: [...chaosLocations]
+    }
+  });
+
+  const rumor = `第${world.day}日傳聞：正派在多地巡行，Digital 勢力只在高危地帶活動。`;
+  world.rumors.unshift(rumor);
+  if (world.rumors.length > 12) world.rumors.length = 12;
+
+  return state;
+}
+
+function pickFactionSkirmishLocation(lastLocation = '') {
+  const cities = WORLD_MAP.getAllCities().map(c => c.name).filter(Boolean);
+  const pool = cities.filter(name => name !== lastLocation);
+  return pickRandomItem(pool.length > 0 ? pool : cities) || '襄陽城';
+}
+
+function calcNextSkirmishInterval(tension) {
+  const base = randInt(FACTION_WAR_CONFIG.minIntervalDays, FACTION_WAR_CONFIG.maxIntervalDays);
+  if (tension >= 75) return Math.max(FACTION_WAR_CONFIG.minIntervalDays, base - 1);
+  if (tension <= 40) return Math.min(FACTION_WAR_CONFIG.maxIntervalDays, base + 1);
+  return base;
+}
+
+function ensureFactionWarState() {
+  if (!world.factionWar || typeof world.factionWar !== 'object') {
+    world.factionWar = {
+      orderPower: 50,
+      chaosPower: 50,
+      tension: 55,
+      skirmishCount: 0,
+      lastSkirmishDay: 0,
+      nextSkirmishDay: world.day + randInt(FACTION_WAR_CONFIG.minIntervalDays, FACTION_WAR_CONFIG.maxIntervalDays),
+      lastLocation: '',
+      lastWinner: '',
+      history: [],
+      updatedAt: Date.now()
+    };
+  }
+
+  const state = world.factionWar;
+  state.orderPower = clampNumber(state.orderPower, FACTION_WAR_CONFIG.minPower, FACTION_WAR_CONFIG.maxPower);
+  state.chaosPower = clampNumber(state.chaosPower, FACTION_WAR_CONFIG.minPower, FACTION_WAR_CONFIG.maxPower);
+  state.tension = clampNumber(state.tension, FACTION_WAR_CONFIG.minTension, FACTION_WAR_CONFIG.maxTension);
+  state.skirmishCount = Math.max(0, Number(state.skirmishCount || 0));
+  state.lastSkirmishDay = Math.max(0, Number(state.lastSkirmishDay || 0));
+  state.lastLocation = String(state.lastLocation || '');
+  state.lastWinner = String(state.lastWinner || '');
+  if (!Array.isArray(state.history)) state.history = [];
+
+  const nextDay = Number(state.nextSkirmishDay || 0);
+  if (!Number.isFinite(nextDay) || nextDay <= 0) {
+    state.nextSkirmishDay = world.day + calcNextSkirmishInterval(state.tension);
+  }
+
+  state.updatedAt = Date.now();
+  return state;
+}
+
+function calcFactionWinner(state) {
+  const diff = Number(state.orderPower || 50) - Number(state.chaosPower || 50);
+  const chaosWinRate = clampNumber(0.5 + diff * 0.02, 0.28, 0.72);
+  return Math.random() < chaosWinRate ? 'chaos' : 'order';
+}
+
+function rebalanceFactionPower(state) {
+  const order = Number(state.orderPower || 50);
+  const chaos = Number(state.chaosPower || 50);
+  let adjustedOrder = order + (50 - order) * 0.16;
+  let adjustedChaos = chaos + (50 - chaos) * 0.16;
+
+  let gap = adjustedOrder - adjustedChaos;
+  if (Math.abs(gap) > FACTION_WAR_CONFIG.maxGap) {
+    const center = (adjustedOrder + adjustedChaos) / 2;
+    const halfGap = FACTION_WAR_CONFIG.maxGap / 2;
+    adjustedOrder = center + (gap > 0 ? halfGap : -halfGap);
+    adjustedChaos = center + (gap > 0 ? -halfGap : halfGap);
+  }
+
+  state.orderPower = clampNumber(Math.round(adjustedOrder), FACTION_WAR_CONFIG.minPower, FACTION_WAR_CONFIG.maxPower);
+  state.chaosPower = clampNumber(Math.round(adjustedChaos), FACTION_WAR_CONFIG.minPower, FACTION_WAR_CONFIG.maxPower);
+}
+
+function applyFactionMomentum(state, winner) {
+  const decisive = randInt(3, 6);
+  const fallback = randInt(1, 3);
+  if (winner === 'order') {
+    state.orderPower += decisive;
+    state.chaosPower += fallback;
+  } else {
+    state.chaosPower += decisive;
+    state.orderPower += fallback;
+  }
+  rebalanceFactionPower(state);
+}
+
+function pushFactionHistory(state, item) {
+  state.history.unshift(item);
+  if (state.history.length > FACTION_WAR_CONFIG.historyLimit) {
+    state.history.length = FACTION_WAR_CONFIG.historyLimit;
+  }
+}
+
+function pushWorldEvent(eventObj) {
+  world.events.unshift(eventObj);
+  if (world.events.length > 80) world.events.length = 80;
+}
+
+async function maybeRunFactionSkirmish(apiKey = '') {
+  const state = ensureFactionWarState();
+  state.tension = clampNumber(state.tension + randInt(1, 3), FACTION_WAR_CONFIG.minTension, FACTION_WAR_CONFIG.maxTension);
+
+  if (world.day < state.nextSkirmishDay) {
+    state.updatedAt = Date.now();
+    return null;
+  }
+
+  const location = pickFactionSkirmishLocation(state.lastLocation);
+  const winner = calcFactionWinner(state);
+  const before = {
+    orderPower: state.orderPower,
+    chaosPower: state.chaosPower,
+    tension: state.tension
+  };
+
+  const narrative = await FACTION_DIRECTOR.generateFactionSkirmishNarrative({
+    day: world.day,
+    location,
+    tension: state.tension,
+    orderPower: state.orderPower,
+    chaosPower: state.chaosPower,
+    lastWinner: state.lastWinner
+  }, apiKey);
+
+  applyFactionMomentum(state, winner);
+  state.skirmishCount += 1;
+  state.lastSkirmishDay = world.day;
+  state.lastLocation = location;
+  state.lastWinner = winner;
+  state.tension = clampNumber(
+    state.tension - randInt(4, 9) + randInt(0, 3),
+    FACTION_WAR_CONFIG.minTension,
+    FACTION_WAR_CONFIG.maxTension
+  );
+  state.nextSkirmishDay = world.day + calcNextSkirmishInterval(state.tension);
+  state.updatedAt = Date.now();
+
+  const summary = `${narrative.headline}\n${narrative.story}\n🔹正派收益：${narrative.orderGain}\n🔸Digital收益：${narrative.chaosGain}\n♻️ 平衡：${narrative.balanceHint}`;
+  pushWorldEvent({
+    day: world.day,
+    type: 'faction_skirmish',
+    message: summary,
+    timestamp: Date.now(),
+    meta: {
+      location,
+      winner,
+      source: narrative.source || 'template',
+      before,
+      after: {
+        orderPower: state.orderPower,
+        chaosPower: state.chaosPower,
+        tension: state.tension
+      }
+    }
+  });
+
+  const rumor = `第${world.day}日傳聞：${location}再爆正派與 Digital 勢力衝突，雙方互有進退。`;
+  world.rumors.unshift(rumor);
+  if (world.rumors.length > 12) world.rumors.length = 12;
+
+  pushFactionHistory(state, {
+    day: world.day,
+    location,
+    winner,
+    headline: narrative.headline,
+    source: narrative.source || 'template',
+    orderPower: state.orderPower,
+    chaosPower: state.chaosPower,
+    tension: state.tension,
+    timestamp: Date.now()
+  });
+
+  return {
+    triggered: true,
+    day: world.day,
+    location,
+    winner,
+    headline: narrative.headline,
+    story: narrative.story,
+    source: narrative.source || 'template',
+    orderPower: state.orderPower,
+    chaosPower: state.chaosPower,
+    tension: state.tension,
+    nextSkirmishDay: state.nextSkirmishDay
+  };
+}
+
+function getFactionWarStatus() {
+  const state = ensureFactionWarState();
+  return JSON.parse(JSON.stringify(state));
+}
+
+function getFactionPresenceStatus() {
+  const state = maybeGenerateFactionPresenceForDay();
+  return JSON.parse(JSON.stringify(state || {}));
+}
+
+function getFactionPresenceForLocation(location) {
+  const loc = String(location || '').trim();
+  if (!loc) return { orderHere: false, chaosHere: false };
+  const state = maybeGenerateFactionPresenceForDay();
+  const orderLocations = Array.isArray(state?.orderLocations) ? state.orderLocations : [];
+  const chaosLocations = Array.isArray(state?.chaosLocations) ? state.chaosLocations : [];
+  return {
+    orderHere: orderLocations.includes(loc),
+    chaosHere: chaosLocations.includes(loc),
+    day: Number(state?.day || world.day)
+  };
+}
+
+async function triggerFactionSkirmishNow(apiKey = '') {
+  const state = ensureFactionWarState();
+  state.nextSkirmishDay = world.day;
+  return maybeRunFactionSkirmish(apiKey);
+}
+
 // ============== 玩家記憶系統 ==============
+const LONG_TERM_MEMORY_CONFIG = {
+  recentWindow: 20,
+  minMemoriesForDigest: 28,
+  minArchivedForDigest: 8,
+  maxSummaryChars: 680,
+  maxTypeItems: 4,
+  maxLocationItems: 3,
+  maxTagItems: 5,
+  maxHighlights: 4
+};
+
+const MEMORY_NAMESPACE = 'story';
+const NPC_MEMORY_PUBLIC_NAMESPACE = 'npc_public';
+const NPC_MEMORY_PRIVATE_NAMESPACE_PREFIX = 'npc_private';
+const MEMORY_INDEX_WARMING = new Set();
+
+function clipText(text, maxChars = 120) {
+  const source = String(text || '').trim();
+  if (!source) return '';
+  if (source.length <= maxChars) return source;
+  return source.slice(0, maxChars) + '...';
+}
+
+function normalizeMemoryDigest(digest) {
+  if (!digest || typeof digest !== 'object') return null;
+  const summary = String(digest.summary || '').trim();
+  if (!summary) return null;
+  return {
+    version: Number.isFinite(Number(digest.version)) ? Number(digest.version) : 1,
+    builtAt: Number.isFinite(Number(digest.builtAt)) ? Number(digest.builtAt) : Date.now(),
+    totalMemories: Number.isFinite(Number(digest.totalMemories)) ? Number(digest.totalMemories) : 0,
+    archivedCount: Number.isFinite(Number(digest.archivedCount)) ? Number(digest.archivedCount) : 0,
+    recentWindow: Number.isFinite(Number(digest.recentWindow)) ? Number(digest.recentWindow) : LONG_TERM_MEMORY_CONFIG.recentWindow,
+    sourceLatestTimestamp: Number.isFinite(Number(digest.sourceLatestTimestamp)) ? Number(digest.sourceLatestTimestamp) : 0,
+    summary
+  };
+}
+
+function normalizeMemoryEntry(entry, fallbackType = 'action') {
+  if (!entry) return null;
+
+  if (typeof entry === 'string') {
+    return {
+      type: fallbackType,
+      content: entry,
+      outcome: '',
+      location: '',
+      tags: [],
+      importance: 0,
+      timestamp: Date.now()
+    };
+  }
+
+  if (typeof entry !== 'object') return null;
+
+  const content = String(entry.content || entry.text || '').trim();
+  if (!content) return null;
+
+  return {
+    type: String(entry.type || fallbackType),
+    content,
+    outcome: String(entry.outcome || '').trim(),
+    location: String(entry.location || '').trim(),
+    tags: Array.isArray(entry.tags) ? entry.tags.map(t => String(t)).slice(0, 6) : [],
+    importance: Number.isFinite(Number(entry.importance)) ? Number(entry.importance) : 0,
+    timestamp: Number.isFinite(Number(entry.timestamp)) ? Number(entry.timestamp) : Date.now()
+  };
+}
+
+function normalizePlayerMemorySchema(player) {
+  if (!player || typeof player !== 'object') return player;
+
+  const modern = Array.isArray(player.memories) ? player.memories : [];
+  const legacy = Array.isArray(player.memory) ? player.memory : [];
+  const merged = [...modern, ...legacy]
+    .map(entry => normalizeMemoryEntry(entry, 'action'))
+    .filter(Boolean)
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  const deduped = [];
+  const seen = new Set();
+  for (const entry of merged) {
+    const key = `${entry.type}|${entry.content}|${entry.outcome}|${entry.location}|${entry.timestamp}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(entry);
+    if (deduped.length >= 80) break;
+  }
+
+  player.memories = deduped;
+  player.memoryDigest = normalizeMemoryDigest(player.memoryDigest);
+  if ('memory' in player) delete player.memory;
+  return player;
+}
+
+function summarizeCountMap(mapObj, maxItems = 4) {
+  const entries = Object.entries(mapObj || {})
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return String(a[0]).localeCompare(String(b[0]), 'zh-Hant');
+    })
+    .slice(0, maxItems)
+    .map(([name, count]) => `${name}x${count}`);
+  return entries;
+}
+
+function scoreMemory(entry) {
+  const text = `${entry.type} ${entry.content} ${entry.outcome}`.toLowerCase();
+  let score = Number(entry.importance || 0);
+
+  if (['主線', '戰鬥', '許願', 'travel', '移動'].includes(entry.type)) score += 3;
+  if (/(結局|擊敗|死亡|boss|通緝|傳送|主線|逃跑|失敗|勝利|擊殺)/.test(text)) score += 2;
+
+  return score;
+}
+
+function formatMemoryLine(entry) {
+  const type = entry.type || 'action';
+  const loc = entry.location ? ` @${entry.location}` : '';
+  const outcome = entry.outcome ? ` -> ${entry.outcome}` : '';
+  return `[${type}] ${entry.content}${outcome}${loc}`;
+}
+
+function buildLongTermMemoryDigest(player) {
+  const memories = Array.isArray(player?.memories) ? player.memories : [];
+  if (memories.length < LONG_TERM_MEMORY_CONFIG.minMemoriesForDigest) return null;
+
+  const archived = memories.slice(LONG_TERM_MEMORY_CONFIG.recentWindow);
+  if (archived.length < LONG_TERM_MEMORY_CONFIG.minArchivedForDigest) return null;
+
+  const typeCounts = {};
+  const locationCounts = {};
+  const tagCounts = {};
+
+  for (const mem of archived) {
+    if (mem.type) typeCounts[mem.type] = (typeCounts[mem.type] || 0) + 1;
+    if (mem.location) locationCounts[mem.location] = (locationCounts[mem.location] || 0) + 1;
+    for (const tag of (mem.tags || [])) {
+      if (!tag) continue;
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    }
+  }
+
+  const topTypes = summarizeCountMap(typeCounts, LONG_TERM_MEMORY_CONFIG.maxTypeItems);
+  const topLocations = summarizeCountMap(locationCounts, LONG_TERM_MEMORY_CONFIG.maxLocationItems);
+  const topTags = summarizeCountMap(tagCounts, LONG_TERM_MEMORY_CONFIG.maxTagItems);
+
+  const highlights = archived
+    .map(mem => ({ mem, score: scoreMemory(mem) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (b.mem.timestamp || 0) - (a.mem.timestamp || 0);
+    })
+    .slice(0, LONG_TERM_MEMORY_CONFIG.maxHighlights)
+    .map(item => `- ${clipText(formatMemoryLine(item.mem), 120)}`);
+
+  const summaryLines = [
+    `已壓縮較舊記憶 ${archived.length} 筆（短期窗口保留最近 ${LONG_TERM_MEMORY_CONFIG.recentWindow} 筆）。`
+  ];
+  if (topTypes.length > 0) summaryLines.push(`事件主軸：${topTypes.join('、')}`);
+  if (topLocations.length > 0) summaryLines.push(`常見地點：${topLocations.join('、')}`);
+  if (topTags.length > 0) summaryLines.push(`常見標籤：${topTags.join('、')}`);
+  if (highlights.length > 0) {
+    summaryLines.push('關鍵事件：');
+    summaryLines.push(...highlights);
+  }
+
+  const summary = clipText(summaryLines.join('\n'), LONG_TERM_MEMORY_CONFIG.maxSummaryChars);
+  const latestTs = Number(memories[0]?.timestamp || 0);
+
+  return {
+    version: 1,
+    builtAt: Date.now(),
+    totalMemories: memories.length,
+    archivedCount: archived.length,
+    recentWindow: LONG_TERM_MEMORY_CONFIG.recentWindow,
+    sourceLatestTimestamp: latestTs,
+    summary
+  };
+}
+
+function ensureLongTermMemoryDigest(player, force = false) {
+  if (!player || typeof player !== 'object') return null;
+  normalizePlayerMemorySchema(player);
+
+  const memories = Array.isArray(player.memories) ? player.memories : [];
+  const latestTs = Number(memories[0]?.timestamp || 0);
+  const digest = normalizeMemoryDigest(player.memoryDigest);
+  const canReuse = Boolean(
+    !force &&
+    digest &&
+    digest.totalMemories === memories.length &&
+    digest.sourceLatestTimestamp === latestTs &&
+    digest.summary
+  );
+
+  if (canReuse) {
+    player.memoryDigest = digest;
+    return digest;
+  }
+
+  const rebuilt = buildLongTermMemoryDigest(player);
+  player.memoryDigest = rebuilt;
+  return rebuilt;
+}
+
+function ensurePlayerMemoryIndexed(player) {
+  if (!player || typeof player !== 'object' || !player.id) return;
+  if (!Array.isArray(player.memories) || player.memories.length === 0) return;
+  if (MEMORY_INDEX_WARMING.has(player.id)) return;
+
+  let stats = null;
+  try {
+    stats = MEMORY_INDEX.getIndexStats(player.id, MEMORY_NAMESPACE);
+  } catch (e) {
+    console.log('[MemoryIndex] getIndexStats failed:', e?.message || e);
+    return;
+  }
+
+  if (stats && Number(stats.count || 0) > 0) return;
+
+  MEMORY_INDEX_WARMING.add(player.id);
+  MEMORY_INDEX
+    .rebuildPlayerIndexFromMemories(player, player.memories, { namespace: MEMORY_NAMESPACE })
+    .catch((e) => {
+      console.log('[MemoryIndex] rebuild from player json failed:', e?.message || e);
+    })
+    .finally(() => {
+      MEMORY_INDEX_WARMING.delete(player.id);
+    });
+}
+
+function appendPlayerMemory(player, memory) {
+  if (!player || typeof player !== 'object') return null;
+
+  normalizePlayerMemorySchema(player);
+  if (!Array.isArray(player.memories)) player.memories = [];
+
+  const normalized = normalizeMemoryEntry(
+    {
+      ...memory,
+      location: memory?.location || player.location || ''
+    },
+    'action'
+  );
+  if (!normalized) return null;
+
+  player.memories.unshift(normalized);
+  if (player.memories.length > 80) player.memories.length = 80;
+  ensureLongTermMemoryDigest(player, true);
+  MEMORY_INDEX
+    .rememberPlayerMemory(player, normalized, { namespace: MEMORY_NAMESPACE })
+    .catch((e) => {
+      console.error('[MemoryIndex] remember failed (strict):', e?.message || e);
+    });
+  return normalized;
+}
+
 function addPlayerMemory(playerId, memory) {
   const player = loadPlayer(playerId);
   if (!player) return;
-  
-  if (!player.memories) player.memories = [];
-  
-  // 加入新記憶（格式：類型:內容）
-  player.memories.unshift({
-    type: memory.type || 'action',
-    content: memory.content,
-    timestamp: Date.now()
-  });
-  
-  // 只保留最近 10 條
-  if (player.memories.length > 10) {
-    player.memories.pop();
-  }
-  
+
+  appendPlayerMemory(player, memory);
   savePlayer(player);
+}
+
+function buildShortAndLongMemoryContext(player) {
+  if (!player || !player.memories || player.memories.length === 0) return '';
+  const maxItems = 6;
+  const memories = Array.isArray(player.memories) ? player.memories : [];
+  if (memories.length === 0) return '';
+
+  const recent = memories.slice(0, 2);
+  const selected = [...recent];
+  const used = new Set(recent.map(m => `${m.type}|${m.content}|${m.timestamp}`));
+
+  const ranked = memories
+    .slice(2)
+    .map(m => ({ m, score: scoreMemory(m) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (b.m.timestamp || 0) - (a.m.timestamp || 0);
+    });
+
+  for (const item of ranked) {
+    const key = `${item.m.type}|${item.m.content}|${item.m.timestamp}`;
+    if (used.has(key)) continue;
+    selected.push(item.m);
+    used.add(key);
+    if (selected.length >= maxItems) break;
+  }
+
+  const shortTermSection = selected.map(formatMemoryLine).join('\n');
+  const digest = ensureLongTermMemoryDigest(player, false);
+  const longTermSection = digest?.summary ? `【長期記憶摘要】\n${digest.summary}` : '';
+  return [shortTermSection, longTermSection].filter(Boolean).join('\n\n');
+}
+
+function formatSemanticRecallLine(item) {
+  if (!item || typeof item !== 'object') return '';
+  const type = item.type ? `[${item.type}] ` : '';
+  const content = String(item.content || item.factText || '').trim();
+  if (!content) return '';
+  const outcome = item.outcome ? ` -> ${item.outcome}` : '';
+  const loc = item.location ? ` @${item.location}` : '';
+  return `${type}${content}${outcome}${loc}`.trim();
 }
 
 function getPlayerMemoryContext(playerId) {
   const player = loadPlayer(playerId);
-  if (!player || !player.memories || player.memories.length === 0) {
-    return '';
+  return buildShortAndLongMemoryContext(player);
+}
+
+async function getPlayerMemoryContextAsync(playerId, options = {}) {
+  const player = loadPlayer(playerId);
+  if (!player) return '';
+
+  const baseContext = buildShortAndLongMemoryContext(player);
+  const location = String(options.location || player.location || '').trim();
+  const queryText = clipText(
+    [
+      options.queryText || '',
+      options.previousChoice || '',
+      options.previousStory || '',
+      player.currentStory || '',
+      location ? `地點:${location}` : ''
+    ].filter(Boolean).join('\n'),
+    760
+  );
+
+  let recalled = [];
+  try {
+    recalled = await MEMORY_INDEX.recallPlayerMemories({
+      playerId: player.id,
+      namespace: String(options.namespace || MEMORY_NAMESPACE),
+      queryText,
+      location,
+      topK: Number(options.topK || 6),
+      similarityThreshold: Number(options.similarityThreshold || 0.22),
+      recencyBoost: Number(options.recencyBoost || 0.22),
+      sameLocationBoost: Number(options.sameLocationBoost || 0.2)
+    });
+  } catch (e) {
+    throw new Error(`記憶檢索失敗：${e?.message || e}`);
   }
-  
-  const memories = player.memories.slice(0, 5); // 取最近 5 條
-  return memories.map(m => `[${m.type}] ${m.content}`).join('\n');
+
+  const semanticLines = (Array.isArray(recalled) ? recalled : [])
+    .map(formatSemanticRecallLine)
+    .filter(Boolean)
+    .slice(0, 8);
+  const semanticSection = semanticLines.length > 0
+    ? `【語義回想】\n${semanticLines.join('\n')}`
+    : '';
+
+  return [baseContext, semanticSection].filter(Boolean).join('\n\n');
+}
+
+function rebuildPlayerMemoryDigest(playerId) {
+  const player = loadPlayer(playerId);
+  if (!player) return null;
+  const digest = ensureLongTermMemoryDigest(player, true);
+  savePlayer(player);
+  return digest;
+}
+
+async function rebuildPlayerMemoryIndex(playerId, namespace = MEMORY_NAMESPACE) {
+  const player = loadPlayer(playerId);
+  if (!player) return null;
+  const memories = Array.isArray(player.memories) ? player.memories : [];
+  return MEMORY_INDEX.rebuildPlayerIndexFromMemories(player, memories, { namespace });
+}
+
+async function rebuildAllPlayersMemoryIndex(namespace = MEMORY_NAMESPACE) {
+  const players = getAllPlayers();
+  const results = [];
+  for (const player of players) {
+    const memories = Array.isArray(player.memories) ? player.memories : [];
+    const result = await MEMORY_INDEX.rebuildPlayerIndexFromMemories(player, memories, { namespace });
+    results.push({ playerId: player.id, ...result });
+  }
+  return results;
+}
+
+function getPlayerMemoryIndexStats(playerId, namespace = MEMORY_NAMESPACE) {
+  return MEMORY_INDEX.getIndexStats(playerId, namespace);
+}
+
+function sanitizeMemoryId(raw, fallback = 'unknown') {
+  const source = String(raw || '').trim().toLowerCase();
+  if (!source) return fallback;
+  const safe = source.replace(/[^\w\u4e00-\u9fa5-]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return safe || fallback;
+}
+
+function resolveNpcMemoryIdentity(npcId) {
+  const raw = String(npcId || '').trim();
+  if (!raw) return null;
+  const npc = getNPCById(raw);
+  if (npc) {
+    return {
+      id: sanitizeMemoryId(String(npc.id || raw), 'npc'),
+      name: String(npc.name || raw)
+    };
+  }
+  return {
+    id: sanitizeMemoryId(raw, 'npc'),
+    name: raw
+  };
+}
+
+function buildNpcMemoryOwnerId(npcId) {
+  const identity = resolveNpcMemoryIdentity(npcId);
+  if (!identity) return '';
+  return `npc:${identity.id}`;
+}
+
+function buildNpcPrivateNamespace(playerId) {
+  const pid = sanitizeMemoryId(playerId, '');
+  if (!pid) return '';
+  return `${NPC_MEMORY_PRIVATE_NAMESPACE_PREFIX}:${pid}`;
+}
+
+function formatNpcSemanticRecallLine(item) {
+  if (!item || typeof item !== 'object') return '';
+  const type = item.type ? `[${item.type}] ` : '';
+  const content = String(item.content || item.factText || '').trim();
+  if (!content) return '';
+  const outcome = item.outcome ? ` -> ${item.outcome}` : '';
+  const loc = item.location ? ` @${item.location}` : '';
+  return `${type}${content}${outcome}${loc}`.trim();
+}
+
+function getNearbyNpcIds(location, limit = 2) {
+  const loc = String(location || '').trim();
+  if (!loc) return [];
+  const maxItems = Math.max(1, Number(limit) || 2);
+  const sourceAgents = Array.isArray(agents) ? agents : [];
+  const picked = [];
+  const seen = new Set();
+  for (const agent of sourceAgents) {
+    if (!agent || !agent.id) continue;
+    if (String(agent.loc || '').trim() !== loc) continue;
+    if (typeof isNPCAlive === 'function' && !isNPCAlive(agent.id)) continue;
+    if (seen.has(agent.id)) continue;
+    seen.add(agent.id);
+    picked.push(agent.id);
+    if (picked.length >= maxItems) break;
+  }
+  return picked;
+}
+
+function appendNpcMemory(npcId, playerId, memory, options = {}) {
+  const identity = resolveNpcMemoryIdentity(npcId);
+  if (!identity || !memory || !memory.content) return null;
+  const scope = options.scope === 'public' ? 'public' : 'private';
+  const privateNamespace = buildNpcPrivateNamespace(playerId);
+  const namespace = scope === 'public' ? NPC_MEMORY_PUBLIC_NAMESPACE : privateNamespace;
+  if (!namespace) return null;
+
+  const normalized = normalizeMemoryEntry(
+    {
+      ...memory,
+      location: memory?.location || options.location || ''
+    },
+    scope === 'public' ? 'npc_public' : 'npc_private'
+  );
+  if (!normalized) return null;
+
+  MEMORY_INDEX
+    .rememberEntityMemory(buildNpcMemoryOwnerId(identity.id), normalized, { namespace })
+    .catch((e) => {
+      console.error('[MemoryIndex][NPC] remember failed (strict):', e?.message || e);
+    });
+
+  addAgentMemory(identity.id, `${normalized.content}${normalized.outcome ? ` -> ${normalized.outcome}` : ''}`, normalized.type || 'npc_memory');
+  return normalized;
+}
+
+async function getNpcMemoryContextAsync(options = {}) {
+  const identity = resolveNpcMemoryIdentity(options.npcId);
+  if (!identity) return '';
+  const ownerId = buildNpcMemoryOwnerId(identity.id);
+  const playerId = String(options.playerId || '').trim();
+  const privateNamespace = buildNpcPrivateNamespace(playerId);
+  const location = String(options.location || '').trim();
+  const queryText = clipText(options.queryText || '', 760);
+
+  const namespaces = [];
+  if (privateNamespace) {
+    const privateStats = MEMORY_INDEX.getEntityIndexStats(ownerId, privateNamespace);
+    if (Number(privateStats?.count || 0) > 0) namespaces.push(privateNamespace);
+  }
+  const publicStats = MEMORY_INDEX.getEntityIndexStats(ownerId, NPC_MEMORY_PUBLIC_NAMESPACE);
+  if (Number(publicStats?.count || 0) > 0) namespaces.push(NPC_MEMORY_PUBLIC_NAMESPACE);
+  if (namespaces.length === 0) return '';
+
+  const topKPrivate = Math.max(1, Number(options.topKPrivate || 3));
+  const topKPublic = Math.max(1, Number(options.topKPublic || 2));
+  const combinedTopK = Math.max(2, topKPrivate + topKPublic + 2);
+
+  const recalled = await MEMORY_INDEX.recallEntityMemories({
+    ownerId,
+    namespaces,
+    queryText,
+    location,
+    topK: combinedTopK,
+    candidateLimit: Math.max(40, Number(options.candidateLimit || 90)),
+    similarityThreshold: Number(options.similarityThreshold || 0.22),
+    recencyBoost: Number(options.recencyBoost || 0.22),
+    sameLocationBoost: Number(options.sameLocationBoost || 0.2)
+  });
+
+  if (!Array.isArray(recalled) || recalled.length === 0) return '';
+
+  const privateRows = privateNamespace
+    ? recalled.filter(item => item.namespace === privateNamespace).slice(0, topKPrivate)
+    : [];
+  const publicRows = recalled
+    .filter(item => item.namespace === NPC_MEMORY_PUBLIC_NAMESPACE)
+    .slice(0, topKPublic);
+
+  const privateLines = privateRows.map(formatNpcSemanticRecallLine).filter(Boolean);
+  const publicLines = publicRows.map(formatNpcSemanticRecallLine).filter(Boolean);
+
+  const sections = [];
+  if (privateLines.length > 0) {
+    sections.push(`【NPC私有記憶｜${identity.name}↔玩家】\n${privateLines.join('\n')}`);
+  }
+  if (publicLines.length > 0) {
+    sections.push(`【NPC公共記憶｜${identity.name}】\n${publicLines.join('\n')}`);
+  }
+  return sections.join('\n\n');
+}
+
+async function getNearbyNpcMemoryContextAsync(playerId, options = {}) {
+  const player = loadPlayer(playerId);
+  if (!player) return '';
+
+  const location = String(options.location || player.location || '').trim();
+  const queryText = clipText(options.queryText || '', 760);
+  const npcIds = Array.isArray(options.npcIds) && options.npcIds.length > 0
+    ? options.npcIds
+    : getNearbyNpcIds(location, Math.max(1, Number(options.limit || 1)));
+
+  if (!npcIds || npcIds.length === 0) return '';
+  const contexts = [];
+  const maxChars = Math.max(320, Number(options.maxChars || 1400));
+
+  for (const npcId of npcIds) {
+    try {
+      const ctx = await getNpcMemoryContextAsync({
+        npcId,
+        playerId,
+        queryText,
+        location,
+        topKPrivate: Number(options.topKPrivate || 3),
+        topKPublic: Number(options.topKPublic || 2),
+        similarityThreshold: Number(options.similarityThreshold || 0.22),
+        recencyBoost: Number(options.recencyBoost || 0.22),
+        sameLocationBoost: Number(options.sameLocationBoost || 0.2)
+      });
+      if (!ctx) continue;
+      contexts.push(ctx);
+      if (contexts.join('\n\n').length >= maxChars) break;
+    } catch (e) {
+      throw new Error(`NPC記憶檢索失敗(${npcId})：${e?.message || e}`);
+    }
+  }
+
+  if (contexts.length === 0) return '';
+  return clipText(contexts.join('\n\n'), maxChars);
 }
 
 // ============== Agent 擴展數據 ==============
@@ -528,6 +1447,8 @@ function getNPCById(npcId) {
 // ============== 世界 Tick ==============
 async function worldTick(useAI, apiKey) {
   world.day++;
+  ensureFactionWarState();
+  maybeGenerateFactionPresenceForDay();
   
   // 季節變化
   if (world.day % 30 === 0) {
@@ -557,6 +1478,8 @@ async function worldTick(useAI, apiKey) {
     world.rumors.push(rumors[Math.floor(Math.random() * rumors.length)]);
     if (world.rumors.length > 10) world.rumors.pop();
   }
+
+  const factionUpdate = await maybeRunFactionSkirmish(apiKey);
   
   const results = [];
   
@@ -651,7 +1574,7 @@ async function worldTick(useAI, apiKey) {
   // 儲存世界
   saveWorld();
   
-  return { world, results };
+  return { world, results, factionUpdate };
 }
 
 // ============== 隨機劇情系統 ==============
@@ -910,17 +1833,19 @@ function loadWorld() {
       agentInventories = data.agentInventories || {};
     } catch (e) {}
   }
+  ensureFactionWarState();
 }
 
 
 // ============== 玩家系統 ==============
 function createPlayer(discordId, name, gender, sect) {
+  const spawnCity = WORLD_MAP.getRandomBeginnerCity();
   const player = {
     id: discordId,
     name,
     gender: gender || "男",
     sect: sect || "無門無派",
-    alignment: null, // '正派' 或 '反派'
+    alignment: null, // '正派' 或 '機變派'
     petId: null, // 寵物ID
     language: 'zh-TW', // 預設繁體中文
     title: "Renaiss星球新人",
@@ -928,7 +1853,7 @@ function createPlayer(discordId, name, gender, sect) {
     exp: 0,
     reputation: 0,
     
-    location: WORLD_MAP.getRandomCity().name, // 隨機出生地點
+    location: spawnCity.name, // 新手只會在低難度區域出生
     status: "自由",
     
     stats: {
@@ -957,30 +1882,67 @@ function createPlayer(discordId, name, gender, sect) {
     companions: [],
     
     relationships: {},
+
+    mainStory: {
+      act: 1,
+      node: 'act1_market',
+      side: null,
+      completed: false,
+      history: [],
+      pressure: 0
+    },
     
-    memory: [],
+    memories: [],
+    memoryDigest: null,
+    storyTurns: 0,
+    starterRewards: {
+      fivePullClaimed: false,
+      claimedAt: 0
+    },
     
     // 狀態效果
     statusEffects: [],
     
     alive: true,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    spawnLocation: spawnCity.name,
+    spawnRegion: spawnCity.region || '未知',
+    spawnDifficulty: Number(spawnCity.difficulty || 1)
   };
   
   savePlayer(player);
   return player;
 }
 
+function normalizeAlignmentValue(alignment) {
+  if (alignment === null || alignment === undefined) return alignment;
+  const text = String(alignment).trim();
+  if (!text) return '';
+  if (text === '反派') return '機變派';
+  return text;
+}
+
 function savePlayer(player) {
   const playerDir = path.join(DATA_DIR, 'players');
   if (!fs.existsSync(playerDir)) fs.mkdirSync(playerDir, { recursive: true });
+  if (player && typeof player === 'object') {
+    player.alignment = normalizeAlignmentValue(player.alignment);
+  }
+  normalizePlayerMemorySchema(player);
+  ensureLongTermMemoryDigest(player, true);
   fs.writeFileSync(path.join(playerDir, `${player.id}.json`), JSON.stringify(player, null, 2));
+  ensurePlayerMemoryIndexed(player);
 }
 
 function loadPlayer(discordId) {
   const playerFile = path.join(DATA_DIR, 'players', `${discordId}.json`);
   if (fs.existsSync(playerFile)) {
-    return JSON.parse(fs.readFileSync(playerFile, 'utf8'));
+    const player = JSON.parse(fs.readFileSync(playerFile, 'utf8'));
+    player.alignment = normalizeAlignmentValue(player.alignment);
+    normalizePlayerMemorySchema(player);
+    ensureLongTermMemoryDigest(player, false);
+    ensurePlayerMemoryIndexed(player);
+    return player;
   }
   return null;
 }
@@ -989,7 +1951,13 @@ function getAllPlayers() {
   const playerDir = path.join(DATA_DIR, 'players');
   if (!fs.existsSync(playerDir)) return [];
   const files = fs.readdirSync(playerDir).filter(f => f.endsWith('.json'));
-  return files.map(f => JSON.parse(fs.readFileSync(path.join(playerDir, f), 'utf8')));
+  return files.map(f => {
+    const player = normalizePlayerMemorySchema(JSON.parse(fs.readFileSync(path.join(playerDir, f), 'utf8')));
+    player.alignment = normalizeAlignmentValue(player.alignment);
+    ensureLongTermMemoryDigest(player, false);
+    ensurePlayerMemoryIndexed(player);
+    return player;
+  });
 }
 
 // ============== 天氣系統 ==============
@@ -1058,35 +2026,69 @@ function craftingLogic(ingredients) {
   return results.length > 0 ? results : [{ name: "失敗的丹藥", desc: "配方不對...", success: false }];
 }
 
-// ============== 戰鬥系統 ==============
-function calculateDamage(attacker, skillName, target, realmMultiplier = 1.0, weather = "晴") {
-  const skillData = martial.MARTIAL_ARTS[skillName];
-  if (!skillData) return 0;
-  
-  let damage = (attacker.stats?.戰力 || 50) * skillData.coefficient;
-  damage *= realmMultiplier;
-  
-  // 天氣影響
-  if (weather === "雨" && skillData.description?.includes("火")) {
-    damage *= 0.7;
-  }
-  
-  // 防禦
-  const defense = (target.stats?.戰力 || 50) * 0.4;
-  damage = Math.max(5, damage - defense);
-  
-  // 暴擊
-  const luck = (attacker.stats?.運氣 || 50) / 100;
-  if (Math.random() < luck * 0.3) damage *= 1.5;
-  
-  return Math.floor(damage);
-}
-
 // ============== 談判系統 ==============
 async function negotiationPrompt(npc, player, situation, apiKey) {
-  const prompt = "你是武俠世界中的NPC。\n\n【NPC】\n名字：" + npc.name + "\n性格：" + npc.personality + "\n門派：" + npc.sect + "\n\n【玩家】\n名字：" + player.name + "\n實力：" + (player.stats?.戰力 || 50) + "\n財富：" + (player.stats?.財富 || 50) + "\n聲望：" + (player.reputation || 0) + "\n\n【談判情境】\n" + situation + "\n\n請用50-100字描述這個NPC的反應和回覆。";
-  
-  return callAI(prompt, apiKey);
+  const npcName = String(npc?.name || '未知NPC');
+  const npcId = String(npc?.id || npcName).trim();
+  const playerId = String(player?.id || '').trim();
+  const safeSituation = clipText(situation || '', 360);
+
+  let npcMemoryContext = '';
+  if (npcId && playerId && safeSituation) {
+    try {
+      npcMemoryContext = await getNpcMemoryContextAsync({
+        npcId,
+        playerId,
+        location: player?.location || npc?.loc || '',
+        queryText: [
+          `對話情境:${safeSituation}`,
+          `玩家:${player?.name || ''}`,
+          `地點:${player?.location || npc?.loc || ''}`
+        ].join('\n'),
+        topKPrivate: 4,
+        topKPublic: 2
+      });
+    } catch (e) {
+      console.log('[NPC Memory] negotiation recall failed:', e?.message || e);
+    }
+  }
+
+  const prompt =
+    "你是武俠世界中的NPC，正在和玩家當面互動。\n\n【NPC】\n名字：" + npcName + "\n性格：" + (npc?.personality || '沉穩') + "\n門派：" + (npc?.sect || '中立') +
+    "\n\n【玩家】\n名字：" + (player?.name || '旅人') + "\n實力：" + (player?.stats?.戰力 || 50) + "\n財富：" + (player?.stats?.財富 || 50) + "\n聲望：" + (player?.reputation || 0) +
+    "\n\n【談判情境】\n" + safeSituation +
+    "\n\n【NPC記憶（先讀再回覆）】\n" + (npcMemoryContext || '目前沒有可用的私有/公共記憶。') +
+    "\n\n【回覆規則】\n1. 50-100字。\n2. 必須明確體現上述性格，不可平淡。\n3. 若記憶裡提到玩家過往互動，需自然引用至少一點。\n4. 只輸出NPC當下會說的內容，不要系統說明、不要模板句。";
+
+  const reply = await callAI(prompt, apiKey);
+  const invalidReply = /^(需要API Key|API Error|連線錯誤|解析錯誤|（無回應）)$/;
+  if (!reply || invalidReply.test(String(reply).trim())) {
+    throw new Error(`NPC dialogue generation failed: ${reply || 'empty reply'}`);
+  }
+
+  if (npcId && playerId && safeSituation) {
+    appendNpcMemory(npcId, playerId, {
+      type: '對話',
+      content: `玩家說：${safeSituation}`,
+      outcome: `NPC回覆：${clipText(reply, 180)}`,
+      location: player?.location || npc?.loc || '',
+      tags: ['dialogue', 'private'],
+      importance: 2
+    }, { scope: 'private' });
+
+    if (/(暴動|戰爭|衝突|市場|店|公告|傳送門|城|幫派|災|襲擊)/.test(safeSituation)) {
+      appendNpcMemory(npcId, playerId, {
+        type: '見聞',
+        content: `關於公共事件的談話：${safeSituation}`,
+        outcome: clipText(reply, 140),
+        location: player?.location || npc?.loc || '',
+        tags: ['dialogue', 'public_event'],
+        importance: 2
+      }, { scope: 'public' });
+    }
+  }
+
+  return reply;
 }
 
 // ============== AI API ==============
@@ -1180,6 +2182,7 @@ function canPetFight(pet) {
   if (!pet) return false;
   if (pet.status === '休眠') return false;
   if (pet.status === '蛋') return false;
+  if (pet.status === '死亡') return false;
   if (pet.hp <= 0) return false;
   
   // 檢查是否有任何招式
@@ -1223,9 +2226,6 @@ module.exports = {
   WEATHER_TYPES,
   WEATHER_EFFECTS,
   
-  // 戰鬥
-  calculateDamage,
-  
   // 談判
   negotiationPrompt,
   
@@ -1235,10 +2235,18 @@ module.exports = {
   // 數據
   getAgents: () => agents,
   getWorld: () => world,
+  getFactionWarStatus,
+  getFactionPresenceStatus,
+  getFactionPresenceForLocation,
+  triggerFactionSkirmishNow,
   
   // Agent 記憶/背包
   getAgentMemory,
   addAgentMemory,
+  getNearbyNpcIds,
+  appendNpcMemory,
+  getNpcMemoryContextAsync,
+  getNearbyNpcMemoryContextAsync,
   getAgentInventory,
   addAgentItem,
   removeAgentItem,
@@ -1271,7 +2279,13 @@ module.exports = {
   
   // 玩家記憶系統
   addPlayerMemory,
-  getPlayerMemoryContext
+  appendPlayerMemory,
+  rebuildPlayerMemoryDigest,
+  rebuildPlayerMemoryIndex,
+  rebuildAllPlayersMemoryIndex,
+  getPlayerMemoryIndexStats,
+  getPlayerMemoryContext,
+  getPlayerMemoryContextAsync
 };
 
 function getAgentFullInfo(agentId) {

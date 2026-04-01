@@ -4,13 +4,15 @@
   "description": "",
   "main": "bot.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "reindex:memory": "node tools/reindex-memory-index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "discord.js": "^14.25.1"
+    "discord.js": "^14.25.1",
+    "opencc-js": "^1.0.5"
   }
 }

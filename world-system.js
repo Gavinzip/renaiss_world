@@ -1,5 +1,5 @@
 /**
- * 🌍 刀鋒 BLADE - 世界系統
+ * 🌍 Renaiss World - 世界系統
  * Renaiss星球 - 以現實時間為一天的系統
  */
 

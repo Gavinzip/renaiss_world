@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getLocationProfile, getNearbyPoints } = require('./world-map');
 
 // ============== 50+ 事件庫（長敘事版）==============
 const BASE_EVENTS = [
@@ -248,7 +249,7 @@ const BASE_EVENTS = [
     reputation: 10
   },
 
-  // ===== 反派專屬事件（31-40）=====
+  // ===== Digital 壓力事件（31-40）=====
   {
     id: 'rob_merchant',
     name: '🗡️ 襲擊商人',
@@ -452,10 +453,20 @@ const MASTERS = [
   { id: 'fire_master_good', name: '🔥 烈火俠', element: '火', teaches: ['烈焰焚天', '赤焰甲'], price: 700, region: '正派', desc: '俠義為先的火系高手', requires: '正派' },
   { id: 'combo_master', name: '✨ 白蓮花仙', element: '複合', teaches: ['風火燎原', '雷霆萬鈞'], price: 1500, region: '正派', desc: '隱世高人，融合陰陽五行', requires: '正派' },
   
-  // 反派師父
-  { id: 'dark_master', name: '🌑 黑影教主', element: '暗', teaches: ['吸星大法', '無形鎖脈', '離魂散'], price: 1000, region: '反派', desc: '神秘的暗黑勢力首領，專收有野心之人', requires: '反派' },
-  { id: 'poison_master', name: '☠️ 毒娘子', element: '毒', teaches: ['七步斷腸散', '化骨水', '蛛絲縛魂'], price: 700, region: '反派', desc: '用毒高手，心狠手辣', requires: '反派' },
-  { id: 'evil_fire_master', name: '💀 火雲邪神', element: '火毒', teaches: ['地獄烈火', '爆炸信號彈', '熱砂地獄'], price: 800, region: '反派', desc: '邪惡的火系大師', requires: '反派' }
+  // 機變派師父（同屬正義，但走捷徑/博弈手段）
+  { id: 'dark_master', name: '🌑 黑影教主', element: '暗', teaches: ['吸星大法', '無形鎖脈', '離魂散'], price: 1000, region: '機變派', desc: '擅長情報與佈局，教你以最小代價換最大成果', requires: '機變派' },
+  { id: 'poison_master', name: '☠️ 毒娘子', element: '毒', teaches: ['七步斷腸散', '化骨水', '蛛絲縛魂'], price: 700, region: '機變派', desc: '以奇襲與反制見長，不主張硬拼', requires: '機變派' },
+  { id: 'evil_fire_master', name: '💀 火雲邪神', element: '火毒', teaches: ['地獄烈火', '爆炸信號彈', '熱砂地獄'], price: 800, region: '機變派', desc: '風險收益派，重視時機與賭注', requires: '機變派' },
+
+  // Renaiss 核心（可拜師）
+  { id: 'winchman', name: '🏛️ Winchman', element: '秩序', teaches: ['風火燎原', '雷霆萬鈞', '洪水滔天'], price: 2500, region: 'Renaiss', desc: 'Renaiss 統治者，主張秩序與市場公信' },
+  { id: 'tom', name: '🧠 Tom', element: '策略', teaches: ['雷霆萬鈞', '羅漢金剛腿', '金鐘罩'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長穩定局勢與戰場節奏' },
+  { id: 'harry', name: '🛡️ Harry', element: '守御', teaches: ['金鐘罩', '赤焰甲', '回春術'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長反制與續戰' },
+  { id: 'kathy', name: '✨ Kathy', element: '複合', teaches: ['風火燎原', '火蓮碎', '天女散花'], price: 1400, region: 'Renaiss', desc: '核心幹部，精通爆發與連段' },
+  { id: 'yuzu', name: '🌊 Yuzu', element: '水木', teaches: ['洪水滔天', '寒冰掌', '回春術'], price: 1400, region: 'Renaiss', desc: '核心幹部，擅長控場與回復' },
+  { id: 'leslie', name: '⚡ Leslie', element: '雷火', teaches: ['雷霆萬鈞', '烈焰焚天', '暴雨梨花'], price: 1500, region: 'Renaiss', desc: '核心幹部，高壓進攻與破防專家' },
+
+  // 注意：Digital 四大天王是敵對壓力來源，不可拜師。
 ];
 
 // ============== 史詩魔王列表 ==============
@@ -549,11 +560,24 @@ function getLocationContext(location) {
     '光明頂': { desc: '明教聖火熊熊燃燒', mood: '熱血', special: '教主' },
     '黑木崖': { desc: '日月神教陰森詭異', mood: '詭譎', special: '任我行' }
   };
-  return contexts[location] || { desc: 'Renaiss星球某處', mood: '平靜', special: '陌生人' };
+  if (contexts[location]) return contexts[location];
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+  if (!profile) return { desc: 'Renaiss星球某處', mood: '平靜', special: '陌生人' };
+  const nearby = typeof getNearbyPoints === 'function' ? getNearbyPoints(location, 3) : [];
+  return {
+    desc: profile.desc || `${location}附近仍有許多未解謎團`,
+    mood: Number(profile.difficulty || 3) >= 4 ? '詭譎' : Number(profile.difficulty || 3) <= 2 ? '活力' : '緊張',
+    special: nearby[0] || (Array.isArray(profile.landmarks) ? profile.landmarks[0] : '') || '當地住民'
+  };
 }
 
 // 根據地點獲取相關事件
 function getLocationBasedEvents(location, alignment) {
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+  const nearby = typeof getNearbyPoints === 'function' ? getNearbyPoints(location, 3) : [];
+  const nearbyHint = nearby.length > 0 ? nearby.join('、') : '周邊小巷';
+  const difficulty = Number(profile?.difficulty || 3);
+  const resourceLine = Array.isArray(profile?.resources) ? profile.resources.join('、') : '';
   const events = [];
   
   // 戰鬥相關
@@ -561,7 +585,7 @@ function getLocationBasedEvents(location, alignment) {
     id: 'local_threat',
     name: '🏯 發現可疑人物',
     choice: '悄悄跟蹤，看看他們有何企圖',
-    desc: '在' + location + '的街角，你注意到幾個鬼鬼祟祟的身影正在低聲商議...',
+    desc: '在' + location + '的' + nearbyHint + '一帶，你注意到幾個鬼鬼祟祟的身影正在低聲商議...',
     action: 'fight',
     type: 'combat',
     enemy: { name: '可疑人物', hp: 60, attack: 18, moves: ['偷襲', '逃跑'], reward: { gold: [30, 60] } }
@@ -572,7 +596,7 @@ function getLocationBasedEvents(location, alignment) {
     id: 'local_npc',
     name: '👤 遇到當地居民',
     choice: '上前友善地打招呼，詢問當地風土人情',
-    desc: '一位當地居民正在路邊擺攤，見你走近便熱情地招呼...',
+    desc: '一位當地居民正在' + (nearby[0] || '路邊') + '擺攤，見你走近便熱情地招呼...',
     action: 'social'
   });
   
@@ -581,9 +605,98 @@ function getLocationBasedEvents(location, alignment) {
     id: 'local_explore',
     name: '🔍 四處探查',
     choice: '遠離人群，去探索那些隱蔽的角落',
-    desc: '你決定在' + location + '四處走走，看看有沒有什麼隱藏的機會或危險...',
+    desc: '你決定沿著' + (nearby[1] || location) + '一帶四處探查，看看有沒有什麼隱藏的機會或危險...',
     action: 'explore'
   });
+
+  if (profile && Array.isArray(profile.resources) && profile.resources.length > 0) {
+    events.push({
+      id: 'local_resource',
+      name: '📦 探查在地資源',
+      choice: `沿著線索尋找${profile.resources[0]}相關補給`,
+      desc: `${location}盛產${profile.resources.slice(0, 2).join('、')}，你聽說${nearby[2] || '一條側巷'}有一批新貨剛到。`,
+      action: 'explore'
+    });
+  }
+
+  const herbChance = difficulty <= 2 ? 0.34 : difficulty === 3 ? 0.48 : 0.56;
+  if (Math.random() < herbChance) {
+    const herbHotspot = nearby[0] || '濕地邊緣';
+    events.push({
+      id: `rare_herb_${location}`,
+      name: '🌿 稀有草藥帶',
+      choice: `沿著${herbHotspot}的香氣尋找稀有草藥`,
+      desc: `${location}近期盛傳有珍稀藥材現身，${herbHotspot}一帶出現了不尋常的靈氣波動。`,
+      action: 'forage'
+    });
+  }
+
+  const oreChance = /礦|晶|遺物|藍圖|核心/.test(resourceLine)
+    ? 0.62
+    : (difficulty >= 4 ? 0.45 : 0.24);
+  if (Math.random() < oreChance) {
+    const oreSpot = nearby[1] || '崖壁裂口';
+    events.push({
+      id: `ore_cache_${location}`,
+      name: '⛏️ 礦脈裂隙',
+      choice: `前往${oreSpot}探勘礦脈與古代寶藏`,
+      desc: `${location}傳出礦脈外露的消息，${oreSpot}附近可能挖到高價稀有礦與古代殘件。`,
+      action: 'treasure'
+    });
+  }
+
+  const greedyMonsters = ['貪財地精', '竊袋鼬獸', '銅牙鼠王', '黑市搬運怪'];
+  const greedyName = greedyMonsters[Math.floor(Math.random() * greedyMonsters.length)];
+  const greedyChance = difficulty >= 4 ? 0.58 : difficulty === 3 ? 0.33 : 0.16;
+  if (Math.random() < greedyChance) {
+    events.push({
+      id: `greedy_raider_${location}`,
+      name: '🦝 貪財怪物出沒',
+      choice: `追擊偷走行商財物的${greedyName}`,
+      desc: `${location}傳出失竊騷動，一隻${greedyName}正拖著贓物往${nearby[2] || '巷尾'}逃竄。`,
+      action: 'fight',
+      type: 'combat',
+      enemy: {
+        name: greedyName,
+        hp: difficulty >= 5 ? 108 : difficulty >= 4 ? 90 : 72,
+        attack: difficulty >= 5 ? 32 : difficulty >= 4 ? 25 : 20,
+        moves: ['投擲贓物', '煙霧逃逸', '背刺'],
+        reward: { gold: difficulty >= 4 ? [95, 185] : [55, 120] }
+      }
+    });
+  }
+
+  // 正派可在任意地區出現，但低難區降頻，避免新手過早拿到過強資源
+  const orderMeetRate = difficulty <= 2 ? 0.18 : difficulty === 3 ? 0.42 : 0.58;
+  if (Math.random() < orderMeetRate) {
+    events.push({
+      id: 'order_patrol',
+      name: '🛡️ 遇到正派巡行者',
+      choice: '上前交談，詢問是否有機會受指點',
+      desc: `一支正派巡行隊在${location}巡查秩序，隊長停下腳步觀察你的身手。`,
+      action: 'social',
+      mentorOffer: difficulty >= 3
+    });
+  }
+
+  // Digital 僅在高難度區域（D4-D5）出現
+  if (difficulty >= 4) {
+    events.push({
+      id: 'chaos_raiders',
+      name: '🩸 Digital 斥候現身',
+      choice: '保持距離追蹤，找出他們的目的',
+      desc: `${location}的高危區傳出騷動，Digital 斥候疑似正在踩點與滲透。`,
+      action: 'fight',
+      type: 'combat',
+      enemy: {
+        name: 'Digital 斥候',
+        hp: difficulty >= 5 ? 95 : 78,
+        attack: difficulty >= 5 ? 28 : 22,
+        moves: ['偷襲', '煙霧彈', '撤離'],
+        reward: { gold: [80, 160] }
+      }
+    });
+  }
   
   return events;
 }
@@ -737,7 +850,6 @@ function generateAIOption(player, luck) {
 
 // ============== 執行事件結果 ==============
 function executeEvent(event, player) {
-  const results = [];
   const luck = player.stats?.運氣 || 50;
   const food = require('./food-system');
   
@@ -758,7 +870,7 @@ function executeEvent(event, player) {
       const forageResult = food.forageHerb(luck);
       return {
         type: 'gather',
-        message: `${event.desc}\n\n${forageResult.desc}`,
+        message: `${event.desc || ''}`.trim(),
         item: forageResult.food,
         success: forageResult.success
       };
@@ -767,7 +879,7 @@ function executeEvent(event, player) {
       const huntResult = food.huntAnimal(luck);
       return {
         type: 'hunt',
-        message: `${event.desc}\n\n${huntResult.desc}`,
+        message: `${event.desc || ''}`.trim(),
         item: huntResult.food,
         success: huntResult.success
       };
@@ -775,7 +887,7 @@ function executeEvent(event, player) {
     case 'quest':
       return {
         type: 'quest',
-        message: `${event.desc}\n\n是否接受任務？`,
+        message: `${event.desc || ''}`.trim(),
         quest: event.quest
       };
       
@@ -783,7 +895,7 @@ function executeEvent(event, player) {
       const hpGain = event.heal || 20;
       return {
         type: 'rest',
-        message: `${event.desc}\n\n生命 +${hpGain}`,
+        message: `${event.desc || ''}`.trim(),
         hpGain: hpGain,
         cost: event.cost
       };
@@ -792,21 +904,47 @@ function executeEvent(event, player) {
       const mpGain = event.mpGain || 5;
       return {
         type: 'meditate',
-        message: `${event.desc}\n\n內力 +${mpGain}`,
+        message: `${event.desc || ''}`.trim(),
         mpGain: mpGain
       };
       
     case 'shop':
       return {
         type: 'shop',
-        message: `${event.desc}\n\n可以購買物品或抽獎`
+        message: `${event.desc || ''}`.trim()
+      };
+
+    case 'market_renaiss':
+      return {
+        type: 'market_renaiss',
+        message: `${event.desc || ''}`.trim()
+      };
+
+    case 'market_digital':
+      return {
+        type: 'market_digital',
+        message: `${event.desc || ''}`.trim()
+      };
+
+    case 'social':
+      return {
+        type: 'social',
+        message: `${event.desc || ''}`.trim(),
+        reputation: event.mentorOffer ? 8 : 3
+      };
+
+    case 'teach':
+      return {
+        type: 'learn_move',
+        message: `${event.desc || ''}`.trim(),
+        canLearn: true
       };
       
     case 'justice':
     case 'help':
       return {
         type: 'good_deed',
-        message: `${event.desc}\n\n聲望 +${event.reputation || 5}`,
+        message: `${event.desc || ''}`.trim(),
         reputation: event.reputation || 5,
         risk: event.risk
       };
@@ -817,49 +955,43 @@ function executeEvent(event, player) {
     case 'extort':
       return {
         type: 'evil_deed',
-        message: `${event.desc}`,
+        message: `${event.desc || ''}`.trim(),
         gold: event.reward,
         wanted: event.wanted
       };
       
     case 'fortune':
-      const fortunes = [
-        '大吉：你將在三天內遇到貴人',
-        '吉：有意外之財',
-        '中：近期會有紛爭',
-        '凶：要小心身邊的人',
-        '大凶：近期有血光之災'
-      ];
       return {
         type: 'fortune',
-        message: `${event.desc}\n\n占卜結果：${fortunes[Math.floor(Math.random() * fortunes.length)]}`
+        message: `${event.desc || ''}`.trim(),
+        fortuneTier: Math.floor(Math.random() * 5) + 1
       };
       
     case 'dragon':
       return {
         type: 'epic_boss',
-        message: `${event.desc}\n\n這是傳說中的史詩魔王！`,
+        message: `${event.desc || ''}`.trim(),
         boss: EPIC_BOSSES[Math.floor(Math.random() * EPIC_BOSSES.length)]
       };
       
     case 'wish':
       return {
         type: 'wish',
-        message: `${event.desc}\n\n你閉上眼睛許下心願...\n\n願望已記錄，將在未來實現`,
+        message: `${event.desc || ''}`.trim(),
         luckBonus: event.luck
       };
       
     case 'manual':
       return {
         type: 'learn_move',
-        message: `${event.desc}\n\n這是一本珍貴的武功秘籍！`
+        message: `${event.desc || ''}`.trim()
       };
       
     case 'treasure':
       const treasures = Math.floor(Math.random() * 100) + 50;
       return {
         type: 'treasure',
-        message: `${event.desc}\n\n🎉 開啟寶箱！獲得 ${treasures} Rns！`,
+        message: `${event.desc || ''}`.trim(),
         gold: treasures
       };
       
@@ -868,29 +1000,36 @@ function executeEvent(event, player) {
       if (perfRoll > 0.7) {
         return {
           type: 'perform_success',
-          message: `${event.desc}\n\n表演大獲成功！觀眾歡呼！`,
+          message: `${event.desc || ''}`.trim(),
           gold: 100,
           reputation: 20
         };
       } else if (perfRoll > 0.3) {
         return {
           type: 'perform_normal',
-          message: `${event.desc}\n\n表演平平，獲得一些打賞`,
+          message: `${event.desc || ''}`.trim(),
           gold: 10
         };
       } else {
         return {
           type: 'perform_fail',
-          message: `${event.desc}\n\n表演失敗了...還惹上了麻煩`,
+          message: `${event.desc || ''}`.trim(),
           gold: 0,
           risk: '有人想找你打架'
         };
       }
+
+    case 'explore':
+      return {
+        type: 'explore',
+        message: `${event.desc || event.choice || ''}`.trim(),
+        gold: Math.floor(Math.random() * 8) + 8 // 8~15
+      };
       
     default:
       return {
         type: 'explore',
-        message: `${event.desc}\n\n你繼續前進...`
+        message: `${event.desc || event.choice || ''}`.trim()
       };
   }
 }

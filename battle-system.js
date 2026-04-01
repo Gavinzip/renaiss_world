@@ -171,7 +171,7 @@ const EPIC_BOSSES = {
 };
 
 // ============== 計算玩家招式傷害 ==============
-function calculatePlayerMoveDamage(move, player, pet) {
+function calculatePlayerMoveDamage(move, player, fighter) {
   if (!move || typeof move !== 'object') {
     return { instant: 0, overTime: 0, totalTurns: 0, total: 0 };
   }
@@ -181,8 +181,8 @@ function calculatePlayerMoveDamage(move, player, pet) {
     return { instant: 0, overTime: 0, totalTurns: 0, total: 0 };
   }
 
-  const level = pet.level || 1;
-  const attack = pet.attack || 20;
+  const level = fighter.level || 1;
+  const attack = fighter.attack || 20;
   
   let damage = move.baseDamage || 0;
   
@@ -225,34 +225,47 @@ function calculatePlayerMoveDamage(move, player, pet) {
 }
 
 // ============== 執行戰鬥回合 ==============
-function executeBattleRound(player, pet, enemy, chosenMove, enemyMove = null) {
+function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null) {
+  // 防呆：避免資料異常時因為招式缺失直接拋錯
+  if (!chosenMove || typeof chosenMove !== 'object') {
+    return {
+      victory: null,
+      enemyHp: enemy?.hp || 0,
+      playerHp: fighter?.hp || 0,
+      petName: fighter?.name || '寵物',
+      enemyName: enemy?.name || '敵人',
+      message: '⚠️ 當前沒有可用攻擊招式，請改用逃跑或返回主選單。'
+    };
+  }
+
   const results = [];
+  const fighterLabel = fighter?.isHuman ? '🧍' : '🐾';
   
   // ===== 玩家攻擊 =====
-  const moveDmg = calculatePlayerMoveDamage(chosenMove, player, pet);
+  const moveDmg = calculatePlayerMoveDamage(chosenMove, player, fighter);
   const finalDamage =
     moveDmg.total > 0
       ? Math.max(1, moveDmg.total - enemy.defense)
       : 0;
   
   results.push({
-    attacker: pet.name,
+    attacker: fighter.name,
     defender: enemy.name,
     move: chosenMove.name,
     damage: finalDamage,
     effects: chosenMove.effect,
-    message: `🐾 ${pet.name}施展「${chosenMove.name}」！造成 ${finalDamage} 點傷害！`
+    message: `${fighterLabel} ${fighter.name}施展「${chosenMove.name}」！造成 ${finalDamage} 點傷害！`
   });
   
   enemy.hp -= finalDamage;
   
   // ===== 敵人攻擊（如果敵人沒被控制）=====
   if (enemy.hp > 0 && enemyMove) {
-    const enemyDamage = Math.max(1, enemyMove.damage - (pet.defense || 15));
-    pet.hp -= enemyDamage;
+    const enemyDamage = Math.max(1, enemyMove.damage - (fighter.defense || 15));
+    fighter.hp -= enemyDamage;
     results.push({
       attacker: enemy.name,
-      defender: pet.name,
+      defender: fighter.name,
       move: enemyMove.name,
       damage: enemyDamage,
       message: `👹 ${enemy.name}施展「${enemyMove.name}」！你受到 ${enemyDamage} 點傷害！`
@@ -282,11 +295,12 @@ function executeBattleRound(player, pet, enemy, chosenMove, enemyMove = null) {
     };
   }
   
-  if (pet.hp <= 0) {
+  if (fighter.hp <= 0) {
     // 玩家死亡
     return {
       victory: false,
       death: true,
+      defeatedFighterType: fighter?.isHuman ? 'player' : 'pet',
       message: `💀 你被${enemy.name}擊敗了...`
     };
   }
@@ -295,8 +309,8 @@ function executeBattleRound(player, pet, enemy, chosenMove, enemyMove = null) {
   return {
     victory: null,
     enemyHp: enemy.hp,
-    playerHp: pet.hp,
-    petName: pet.name,
+    playerHp: fighter.hp,
+    petName: fighter.name,
     enemyName: enemy.name,
     message: results.map(r => r.message).join('\n')
   };

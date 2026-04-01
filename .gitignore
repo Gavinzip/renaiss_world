@@ -1,6 +1,18 @@
 .env
 .env.js
 node_modules/
-data/
+# data 預設忽略，但保留玩家/世界狀態可進版控
+data/*
+!data/players/
+!data/players/*.json
+!data/world.json
+!data/pets.json
+!data/world_events.json
+!data/scratch_lottery.json
+!data/user_wallets.json
+!data/player_threads.json
+!data/memory_index.sqlite
+!data/memory_index.sqlite-shm
+!data/memory_index.sqlite-wal
 *.log
 package-lock.json

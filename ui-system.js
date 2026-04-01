@@ -1,5 +1,5 @@
 /**
- * 🗡️ 刀鋒 BLADE - 互動按鈕系統
+ * 🌟 Renaiss World - 互動按鈕系統
  */
 
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
@@ -302,7 +302,7 @@ function getAdventureNarrative(choice) {
 }
 
 // ============== 創建 Embed ==============
-function createPlayerEmbed(player, title = '🗡️ 刀鋒 RPG') {
+function createPlayerEmbed(player, title = '🌟 Renaiss World RPG') {
   const hpPercent = (player.stats?.生命 || 100) / (player.maxStats?.生命 || 100);
   const hpBar = '█'.repeat(Math.floor(hpPercent * 10)) + '░'.repeat(10 - Math.floor(hpPercent * 10));
   

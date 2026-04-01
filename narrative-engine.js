@@ -1,5 +1,5 @@
 /**
- * 🗡️ 刀鋒 BLADE - 深度敘事引擎 v2
+ * 🌟 Renaiss World - 深度敘事引擎 v2
  */
 
 const fs = require('fs');

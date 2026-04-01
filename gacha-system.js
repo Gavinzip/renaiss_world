@@ -19,24 +19,23 @@ const GACHA_CONFIG = {
 };
 
 // ============== 扭蛋抽招 ==============
-function drawMove(player, count = 1) {
-  const cost = count === 10 ? GACHA_CONFIG.tenPullCost : GACHA_CONFIG.singleCost;
-  
-  // 檢查金錢
-  if (player.stats.財富 < cost) {
-    return { success: false, reason: `Rns不足！需要 ${cost} Rns，你只有 ${player.stats.財富} Rns` };
+function drawMovesCore(player, count = 1, options = {}) {
+  const cost = Number(options.cost || 0);
+  const grantPoints = options.grantPoints !== false;
+
+  if (cost > 0) {
+    if (player.stats.財富 < cost) {
+      return { success: false, reason: `Rns不足！需要 ${cost} Rns，你只有 ${player.stats.財富} Rns` };
+    }
+    player.stats.財富 -= cost;
   }
-  
-  // 扣錢
-  player.stats.財富 -= cost;
-  
-  // 記錄開包次數（升級點數 = 開包次數）
+
   player.totalDraws = (player.totalDraws || 0) + count;
-  
-  // 獲得升級點數（每包1點）
-  const earnedPoints = count * GACHA_CONFIG.pointsPerPack;
-  player.upgradePoints = (player.upgradePoints || 0) + earnedPoints;
-  
+  const earnedPoints = grantPoints ? count * GACHA_CONFIG.pointsPerPack : 0;
+  if (earnedPoints > 0) {
+    player.upgradePoints = (player.upgradePoints || 0) + earnedPoints;
+  }
+
   // 抽卡結果
   const results = [];
   for (let i = 0; i < count; i++) {
@@ -54,9 +53,21 @@ function drawMove(player, count = 1) {
     cost,
     totalValue,
     earnedPoints,
-    currentPoints: player.upgradePoints,
+    currentPoints: player.upgradePoints || 0,
     totalDraws: player.totalDraws
   };
+}
+
+function drawMove(player, count = 1) {
+  const cost = count === 10 ? GACHA_CONFIG.tenPullCost : GACHA_CONFIG.singleCost;
+  return drawMovesCore(player, count, { cost, grantPoints: true });
+}
+
+function drawMoveFree(player, count = 1, options = {}) {
+  return drawMovesCore(player, count, {
+    cost: 0,
+    grantPoints: options.grantPoints === true
+  });
 }
 
 // 單抽（無保底）
@@ -271,6 +282,7 @@ function convertUSDToRNS(player, usdAmount) {
 module.exports = {
   GACHA_CONFIG,
   drawMove,
+  drawMoveFree,
   allocateUpgradePoint,
   getPlayerPetsWithAllocation,
   calculateTotalAssets,
