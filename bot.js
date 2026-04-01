@@ -1644,7 +1644,7 @@ async function handleStart(interaction, user) {
   await interaction.reply({ 
     content: '🎮 正在開啟新討論串...', 
     ephemeral: true 
-  });
+  }).catch(() => {});
   
   // 在使用者目前所在頻道（或其母頻道）創建新 thread
   const interactionChannel = interaction.channel;

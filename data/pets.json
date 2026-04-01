@@ -1,1 +1,157 @@
-{}
+{
+  "pet_872351254536405093_1775031902289": {
+    "id": "pet_872351254536405093_1775031902289",
+    "ownerId": "872351254536405093",
+    "name": "火球",
+    "type": "正派",
+    "level": 1,
+    "exp": 0,
+    "expToLevel": 100,
+    "hp": 100,
+    "maxHp": 100,
+    "attack": 20,
+    "defense": 15,
+    "speed": 20,
+    "moves": [
+      {
+        "id": "head_butt",
+        "name": "頭槌",
+        "element": "普通",
+        "type": "normal",
+        "tier": 1,
+        "baseDamage": 8,
+        "effect": {},
+        "desc": "寵物本能攻擊",
+        "currentProficiency": 0
+      },
+      {
+        "id": "flee",
+        "name": "逃跑",
+        "element": "普通",
+        "type": "normal",
+        "tier": 1,
+        "baseDamage": 0,
+        "effect": {
+          "flee": true
+        },
+        "desc": "100%逃脫",
+        "currentProficiency": 0
+      },
+      {
+        "id": "blaze_sky",
+        "name": "烈焰焚天",
+        "element": "火",
+        "tier": 2,
+        "type": "positive",
+        "baseDamage": 25,
+        "effect": {
+          "burn": 1
+        },
+        "desc": "體內真氣化為烈焰",
+        "currentProficiency": 0
+      },
+      {
+        "id": "root_trap",
+        "name": "藤蔓絆足",
+        "element": "木",
+        "tier": 1,
+        "baseDamage": 9,
+        "effect": {
+          "slow": 1
+        },
+        "desc": "操縱藤蔓阻擋敵人",
+        "currentProficiency": 0
+      },
+      {
+        "id": "minor_poison",
+        "name": "小毒散",
+        "element": "毒",
+        "tier": 1,
+        "baseDamage": 9,
+        "effect": {
+          "poison": 1
+        },
+        "desc": "基礎毒藥",
+        "currentProficiency": 0
+      },
+      {
+        "id": "iron_palm",
+        "name": "鐵砂掌",
+        "element": "金",
+        "tier": 1,
+        "baseDamage": 10,
+        "effect": {},
+        "desc": "基礎掌法，扎實有力",
+        "currentProficiency": 0
+      }
+    ],
+    "maxMoves": 10,
+    "status": "待命名",
+    "hatched": true,
+    "appearance": "一顆充滿神秘氣息的寵物蛋",
+    "lastFed": null,
+    "createdAt": 1775031902289,
+    "waitingForName": false
+  },
+  "pet_1051129116419702784_1775031986922": {
+    "id": "pet_1051129116419702784_1775031986922",
+    "ownerId": "1051129116419702784",
+    "name": "俠寵蛋",
+    "type": "正派",
+    "level": 1,
+    "exp": 0,
+    "expToLevel": 100,
+    "hp": 100,
+    "maxHp": 100,
+    "attack": 20,
+    "defense": 15,
+    "speed": 20,
+    "moves": [
+      {
+        "id": "head_butt",
+        "name": "頭槌",
+        "element": "普通",
+        "type": "normal",
+        "tier": 1,
+        "baseDamage": 8,
+        "effect": {},
+        "desc": "寵物本能攻擊",
+        "currentProficiency": 0
+      },
+      {
+        "id": "flee",
+        "name": "逃跑",
+        "element": "普通",
+        "type": "normal",
+        "tier": 1,
+        "baseDamage": 0,
+        "effect": {
+          "flee": true
+        },
+        "desc": "100%逃脫",
+        "currentProficiency": 0
+      },
+      {
+        "id": "willow_water",
+        "name": "楊枝淨水",
+        "element": "水",
+        "tier": 1,
+        "type": "positive",
+        "baseDamage": 7,
+        "effect": {
+          "cleanse": true,
+          "heal": 10
+        },
+        "desc": "觀音楊枝灑下淨水",
+        "currentProficiency": 0
+      }
+    ],
+    "maxMoves": 10,
+    "status": "待命名",
+    "hatched": true,
+    "appearance": "一顆充滿神秘氣息的寵物蛋",
+    "lastFed": null,
+    "createdAt": 1775031986922,
+    "waitingForName": true
+  }
+}
