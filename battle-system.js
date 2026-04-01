@@ -200,8 +200,16 @@ function getMoveEnergyCost(move) {
 }
 
 const DOT_STATUS_KEYS = ['burn', 'poison', 'trap', 'bleed'];
-const DECAY_STATUS_KEYS = ['bind', 'slow', 'defenseDown', 'shield', 'reflect', 'dodge', 'thorns', 'fear', 'confuse', 'blind'];
+const DECAY_STATUS_KEYS = ['bind', 'slow', 'defenseDown', 'shield', 'reflect', 'dodge', 'thorns', 'fear', 'confuse', 'blind', 'hardCcGuard'];
 const NEGATIVE_STATUS_KEYS = ['burn', 'poison', 'trap', 'bleed', 'dot', 'stun', 'freeze', 'bind', 'slow', 'fear', 'confuse', 'blind', 'missNext', 'defenseDown'];
+const HARD_CC_KEYS = ['stun', 'freeze'];
+const SOFT_CC_KEYS = ['bind', 'slow', 'fear', 'confuse', 'blind', 'missNext'];
+
+function getMoveTier(move = {}) {
+  const tier = Math.floor(Number(move?.tier || 1));
+  if (!Number.isFinite(tier)) return 1;
+  return Math.max(1, Math.min(3, tier));
+}
 
 function ensureStatusState(entity) {
   if (!entity || typeof entity !== 'object') return {};
@@ -226,6 +234,7 @@ function ensureStatusState(entity) {
     blind: 0,
     missNext: 0,
     defenseDown: 0,
+    hardCcGuard: 0,
     shield: 0,
     dodge: 0,
     reflect: 0,
@@ -350,6 +359,75 @@ function shouldMissByMentalDebuff(attacker, defender) {
   return result;
 }
 
+function getMoveEffectSuccessRate(move = {}, effectKey = '', defender = null) {
+  const key = String(effectKey || '');
+  const tier = getMoveTier(move);
+  const rateMap = {
+    stun: [0.08, 0.18, 0.32],
+    freeze: [0.08, 0.18, 0.32],
+    bind: [0.16, 0.30, 0.44],
+    slow: [0.20, 0.36, 0.50],
+    fear: [0.16, 0.30, 0.44],
+    confuse: [0.16, 0.30, 0.44],
+    blind: [0.16, 0.30, 0.44],
+    missNext: [0.18, 0.32, 0.46]
+  };
+  if (!rateMap[key]) return 1;
+  let chance = rateMap[key][tier - 1] || rateMap[key][0];
+  const defenderStatus = defender ? ensureStatusState(defender) : null;
+  if (defenderStatus) {
+    if (HARD_CC_KEYS.includes(key) && Number(defenderStatus.hardCcGuard || 0) > 0) {
+      return 0;
+    }
+    if (Number(defenderStatus[key] || 0) > 0) {
+      chance *= 0.45;
+    }
+  }
+  return Math.max(0, Math.min(0.95, chance));
+}
+
+function applyControlStatusWithChance(defender, move, effectKey, duration, lines, defenderLabel) {
+  const turns = Math.max(1, Number(duration || 1));
+  const status = ensureStatusState(defender);
+  const chance = getMoveEffectSuccessRate(move, effectKey, defender);
+  const pct = Math.round(chance * 100);
+  const read = {
+    stun: { ok: '💫', fail: '🛡️', text: '暈眩' },
+    freeze: { ok: '🧊', fail: '🛡️', text: '凍結' },
+    bind: { ok: '⛓️', fail: '💨', text: '束縛' },
+    slow: { ok: '🐢', fail: '💨', text: '緩速' },
+    fear: { ok: '😨', fail: '💨', text: '恐懼' },
+    confuse: { ok: '🌀', fail: '💨', text: '混亂' },
+    blind: { ok: '🌫️', fail: '💨', text: '致盲' },
+    missNext: { ok: '🎯', fail: '💨', text: '失準' }
+  }[effectKey] || { ok: '✨', fail: '💨', text: effectKey };
+
+  if (chance <= 0) {
+    if (HARD_CC_KEYS.includes(effectKey)) {
+      lines.push(`🛡️ ${defenderLabel}進入硬控抗性期，本次${read.text}未生效。`);
+    } else {
+      lines.push(`💨 ${defenderLabel}本回合免疫${read.text}干擾。`);
+    }
+    return false;
+  }
+
+  if (Math.random() > chance) {
+    lines.push(`${read.fail} ${defenderLabel}扛住了${read.text}（命中率約 ${pct}%）。`);
+    return false;
+  }
+
+  status[effectKey] = Math.max(status[effectKey], turns);
+  if (HARD_CC_KEYS.includes(effectKey)) {
+    status.hardCcGuard = Math.max(status.hardCcGuard, 2);
+  }
+  if (effectKey === 'missNext') {
+    lines.push(`${read.ok} ${defenderLabel}下一次攻擊將落空（命中率約 ${pct}%）。`);
+  } else {
+    lines.push(`${read.ok} ${defenderLabel}受到${read.text}（${status[effectKey]} 回合，命中率約 ${pct}%）。`);
+  }
+  return true;
+}
+
 function applyMoveEffects(attacker, defender, move, rawInstantDamage, appliedDamage, lines, attackerLabel, defenderLabel) {
   const effect = move.effect || {};
   const attackerStatus = ensureStatusState(attacker);
@@ -422,38 +500,14 @@ function applyMoveEffects(attacker, defender, move, rawInstantDamage, appliedDam
     lines.push(`⚡ ${defenderLabel}被掛上持續干擾（每回合 ${defenderStatus.dotPower}）。`);
   }
 
-  if (effect.stun) {
-    defenderStatus.stun = Math.max(defenderStatus.stun, Number(effect.stun || 1));
-    lines.push(`💫 ${defenderLabel}被暈眩（${defenderStatus.stun} 回合）。`);
-  }
-  if (effect.freeze) {
-    defenderStatus.freeze = Math.max(defenderStatus.freeze, Number(effect.freeze || 1));
-    lines.push(`🧊 ${defenderLabel}被凍結（${defenderStatus.freeze} 回合）。`);
-  }
-  if (effect.bind) {
-    defenderStatus.bind = Math.max(defenderStatus.bind, Number(effect.bind || 1));
-    lines.push(`⛓️ ${defenderLabel}被束縛（${defenderStatus.bind} 回合）。`);
-  }
-  if (effect.slow) {
-    defenderStatus.slow = Math.max(defenderStatus.slow, Number(effect.slow || 1));
-    lines.push(`🐢 ${defenderLabel}被緩速（${defenderStatus.slow} 回合）。`);
-  }
-  if (effect.fear) {
-    defenderStatus.fear = Math.max(defenderStatus.fear, Number(effect.fear || 1));
-    lines.push(`😨 ${defenderLabel}陷入恐懼（${defenderStatus.fear} 回合）。`);
-  }
-  if (effect.confuse) {
-    defenderStatus.confuse = Math.max(defenderStatus.confuse, Number(effect.confuse || 1));
-    lines.push(`🌀 ${defenderLabel}陷入混亂（${defenderStatus.confuse} 回合）。`);
-  }
-  if (effect.blind) {
-    defenderStatus.blind = Math.max(defenderStatus.blind, Number(effect.blind || 1));
-    lines.push(`🌫️ ${defenderLabel}視野受阻（${defenderStatus.blind} 回合）。`);
-  }
-  if (effect.missNext) {
-    defenderStatus.missNext = Math.max(defenderStatus.missNext, Number(effect.missNext || 1));
-    lines.push(`🎯 ${defenderLabel}下一次攻擊將落空。`);
-  }
+  if (effect.stun) applyControlStatusWithChance(defender, move, 'stun', effect.stun, lines, defenderLabel);
+  if (effect.freeze) applyControlStatusWithChance(defender, move, 'freeze', effect.freeze, lines, defenderLabel);
+  if (effect.bind) applyControlStatusWithChance(defender, move, 'bind', effect.bind, lines, defenderLabel);
+  if (effect.slow) applyControlStatusWithChance(defender, move, 'slow', effect.slow, lines, defenderLabel);
+  if (effect.fear) applyControlStatusWithChance(defender, move, 'fear', effect.fear, lines, defenderLabel);
+  if (effect.confuse) applyControlStatusWithChance(defender, move, 'confuse', effect.confuse, lines, defenderLabel);
+  if (effect.blind) applyControlStatusWithChance(defender, move, 'blind', effect.blind, lines, defenderLabel);
+  if (effect.missNext) applyControlStatusWithChance(defender, move, 'missNext', effect.missNext, lines, defenderLabel);
   if (effect.defenseDown) {
     defenderStatus.defenseDown = Math.max(defenderStatus.defenseDown, Number(effect.defenseDown || 1));
     lines.push(`📉 ${defenderLabel}防禦下降（${defenderStatus.defenseDown} 回合）。`);
@@ -468,15 +522,15 @@ function applyMoveEffects(attacker, defender, move, rawInstantDamage, appliedDam
     lines.push(`🧪 ${defenderLabel}感染擴散性毒霧。`);
   }
   if (effect.debuff === 'all') {
-    defenderStatus.slow = Math.max(defenderStatus.slow, 1);
+    applyControlStatusWithChance(defender, { ...move, tier: Math.max(getMoveTier(move), 2) }, 'slow', 1, lines, defenderLabel);
     defenderStatus.defenseDown = Math.max(defenderStatus.defenseDown, 1);
-    defenderStatus.blind = Math.max(defenderStatus.blind, 1);
+    applyControlStatusWithChance(defender, { ...move, tier: Math.max(getMoveTier(move), 2) }, 'blind', 1, lines, defenderLabel);
     lines.push(`📡 ${defenderLabel}全屬性受干擾（1 回合）。`);
   }
   if (effect.summon) {
     const turnCount = Math.max(1, Number(effect.summon || 1));
-    defenderStatus.blind = Math.max(defenderStatus.blind, turnCount);
-    defenderStatus.missNext = Math.max(defenderStatus.missNext, 1);
+    applyControlStatusWithChance(defender, { ...move, tier: Math.max(getMoveTier(move), 2) }, 'blind', turnCount, lines, defenderLabel);
+    applyControlStatusWithChance(defender, { ...move, tier: Math.max(getMoveTier(move), 2) }, 'missNext', 1, lines, defenderLabel);
     lines.push(`👥 ${attackerLabel}召出幻像干擾，${defenderLabel}命中率下降。`);
   }
 }
@@ -603,6 +657,7 @@ function calculatePlayerMoveDamage(move, player, fighter) {
 // ============== 執行戰鬥回合 ==============
 function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null, options = {}) {
   const dryRun = Boolean(options?.dryRun);
+  const nonLethal = Boolean(options?.nonLethal || enemy?.nonLethal);
   if (!chosenMove || typeof chosenMove !== 'object') {
     return {
       victory: null,
@@ -659,10 +714,13 @@ function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null
     const enemyId = enemy.id || enemy.name;
     const isMonster = enemy.isMonster || false;
     let wantedLevel = 0;
-    if (!dryRun) {
+    if (!dryRun && !nonLethal) {
       CORE.killNPC(enemyId, player.id, isMonster);
       wantedLevel = CORE.getPlayerWantedLevel(player.id);
     }
+    const outcomeText = nonLethal
+      ? `🤝 你在切磋中壓制了${enemy.name}。`
+      : `🏆 你擊敗了${enemy.name}！獲得 ${goldReward} Rns！${wantedLevel > 0 ? `\n⚠️ 你現在是 ${wantedLevel} 級通緝犯！` : ''}`;
 
     return {
       victory: true,
@@ -670,7 +728,7 @@ function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null
       enemyId,
       gold: goldReward,
       wantedLevel,
-      message: `${lines.join('\n')}\n🏆 你擊敗了${enemy.name}！獲得 ${goldReward} Rns！${wantedLevel > 0 ? `\n⚠️ 你現在是 ${wantedLevel} 級通緝犯！` : ''}`
+      message: `${lines.join('\n')}\n${outcomeText}`
     };
   }
 
@@ -716,6 +774,7 @@ module.exports = {
   createEnemy,
   EPIC_BOSSES,
   getMoveEnergyCost,
+  getMoveEffectSuccessRate,
   calculatePlayerMoveDamage,
   executeBattleRound,
   enemyChooseMove

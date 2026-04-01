@@ -73,6 +73,28 @@ const NEGATIVE_MOVES = [
   { id: 'ultimate_dark', name: '零界崩解', element: '暗域', type: 'negative', tier: 3, baseDamage: 45, effect: { selfDamage: 20 }, desc: '引爆零界反應器，代價極高' }
 ];
 
+function enforceControlMoveTier(pool = []) {
+  const hardControlKeys = ['stun', 'freeze'];
+  const controlKeys = ['bind', 'slow', 'fear', 'confuse', 'blind', 'missNext'];
+  for (const move of pool) {
+    if (!move || typeof move !== 'object') continue;
+    const effect = move.effect || {};
+    const hasHardControl = hardControlKeys.some((k) => Number(effect[k] || 0) > 0);
+    const hasControl = controlKeys.some((k) => Number(effect[k] || 0) > 0);
+    if (hasHardControl) {
+      move.tier = Math.max(2, Number(move.tier || 1));
+      continue;
+    }
+    if (hasControl) {
+      move.tier = Math.max(2, Number(move.tier || 1));
+    }
+  }
+}
+
+// 控制型技能不應落在普通階，避免前期連控失衡
+enforceControlMoveTier(POSITIVE_MOVES);
+enforceControlMoveTier(NEGATIVE_MOVES);
+
 // ============== 初始技能 ==============
 const INITIAL_MOVES = [
   { id: 'head_butt', name: '頭槌', element: '普通', type: 'normal', tier: 1, baseDamage: 8, effect: {}, desc: '寵物本能攻擊' },

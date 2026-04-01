@@ -460,12 +460,13 @@ const PORTAL_CONNECTIONS = createPortalConnections();
 
 const ANSI = {
   reset: '\u001b[0m',
-  brightYellow: '\u001b[1;93m',
-  brightCyan: '\u001b[1;96m'
+  brightYellow: '\u001b[1;33m',
+  brightCyan: '\u001b[1;36m',
+  currentLocation: '\u001b[1;30;43m'
 };
 
-function colorizeAll(text, token, colorCode) {
-  return text.split(token).join(`${colorCode}${token}${ANSI.reset}`);
+function colorizeAll(text, token, colorCode, replacement = token) {
+  return text.split(token).join(`${colorCode}${replacement}${ANSI.reset}`);
 }
 
 function buildIslandMapAnsi(currentLocation = '') {
@@ -473,7 +474,8 @@ function buildIslandMapAnsi(currentLocation = '') {
   const normalized = LEGACY_LOCATION_ALIASES[currentLocation] || currentLocation;
 
   if (normalized && MAP_LOCATIONS.includes(normalized)) {
-    colored = colorizeAll(colored, normalized, ANSI.brightYellow);
+    const marked = `◉${normalized}◉`;
+    colored = colorizeAll(colored, normalized, ANSI.currentLocation, marked);
   }
 
   return colored;

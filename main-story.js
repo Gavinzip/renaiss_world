@@ -15,12 +15,52 @@ const STORY_ACTS = {
 };
 
 const DIGITAL_KINGS = ['Nemo', 'Wolf', 'Adaloc', 'Hom'];
+const KING_ENCOUNTER_GAP_EVENTS = Math.max(1, Number(process.env.KING_ENCOUNTER_GAP_EVENTS || 2));
 
 const ENDING_RULES = {
   order: { fakeRate: 0.12, ambushRate: 0.15, volatility: 0.08, rewardVariance: 0.2 },
   chaos: { fakeRate: 0.48, ambushRate: 0.42, volatility: 0.35, rewardVariance: 0.65 },
   controller: { fakeRate: 0.28, ambushRate: 0.24, volatility: 0.18, rewardVariance: 0.4 }
 };
+
+function getCompletedLocationCount(player) {
+  const completed = player?.locationArcState?.completedLocations;
+  if (!completed || typeof completed !== 'object' || Array.isArray(completed)) return 0;
+  return Object.keys(completed).length;
+}
+
+function buildTravelGateHint(state, required, completed) {
+  const need = Math.max(0, Number(required || 0) - Number(completed || 0));
+  if (need <= 0) return '';
+  const eventCount = Number(state?.eventCount || 0);
+  const lastHintAt = Number(state?.lastTravelHintEventCount || -999);
+  if (eventCount - lastHintAt < 2) return '';
+  state.lastTravelHintEventCount = eventCount;
+  return `📖 **主線線索**：你已在此區取得關鍵線索，下一章需要跨區追查。請靠近傳送門前往新地區，再完成 ${need} 個地區篇章。`;
+}
+
+function normalizeKingProgressState(state) {
+  if (!state || typeof state !== 'object') return;
+  if (!Array.isArray(state.defeatedKings)) state.defeatedKings = [];
+  state.defeatedKings = state.defeatedKings
+    .map((name) => String(name || '').trim())
+    .filter((name, idx, arr) => DIGITAL_KINGS.includes(name) && arr.indexOf(name) === idx);
+  if (!Number.isFinite(Number(state.lastKingEncounterEventCount))) {
+    state.lastKingEncounterEventCount = -999;
+  }
+  if (state.pendingKing != null) {
+    const pending = String(state.pendingKing || '').trim();
+    state.pendingKing = DIGITAL_KINGS.includes(pending) ? pending : null;
+  } else {
+    state.pendingKing = null;
+  }
+}
+
+function getRemainingKings(state) {
+  normalizeKingProgressState(state);
+  const defeated = new Set(state.defeatedKings || []);
+  return DIGITAL_KINGS.filter((name) => !defeated.has(name));
+}
 
 function ensureMainStoryState(player) {
   if (!player) return null;
@@ -34,6 +74,10 @@ function ensureMainStoryState(player) {
       history: [],
       pressure: 0,
       eventCount: 0,
+      lastTravelHintEventCount: -999,
+      defeatedKings: [],
+      lastKingEncounterEventCount: -999,
+      pendingKing: null,
       signals: {
         order: 0,
         chaos: 0,
@@ -47,6 +91,10 @@ function ensureMainStoryState(player) {
   if (typeof player.mainStory.eventCount !== 'number') {
     player.mainStory.eventCount = 0;
   }
+  if (!Number.isFinite(Number(player.mainStory.lastTravelHintEventCount))) {
+    player.mainStory.lastTravelHintEventCount = -999;
+  }
+  normalizeKingProgressState(player.mainStory);
   return player.mainStory;
 }
 
@@ -54,7 +102,11 @@ function getMainStoryBrief(player) {
   const state = ensureMainStoryState(player);
   if (!state) return '主線未初始化';
   const endingText = state.ending ? `｜結局：${state.ending}` : '';
-  return `${STORY_ACTS[state.act] || '未知章節'}｜節點：${state.node}${endingText}`;
+  const kingProgressText =
+    Number(state.act || 1) >= 5 || state.node === 'act6_winchman'
+      ? `｜四巨頭：${Number((state.defeatedKings || []).length)}/${DIGITAL_KINGS.length}`
+      : '';
+  return `${STORY_ACTS[state.act] || '未知章節'}｜節點：${state.node}${kingProgressText}${endingText}`;
 }
 
 function pushHistory(state, text) {
@@ -123,7 +175,7 @@ function finalizeEnding(state, player) {
 function buildMaskedAssassinEncounter() {
   return sanitizeWorldObject({
     type: 'combat',
-    message: '💀 你被 Digital 注意到了。覆面獵手夜襲而來，先試你深淺。',
+    message: '💀 你被暗潮勢力注意到了。覆面獵手夜襲而來，先試你深淺。',
     enemy: {
       name: '覆面獵手',
       hp: 130,
@@ -138,8 +190,10 @@ function buildMaskedAssassinEncounter() {
   });
 }
 
-function buildKingEncounter() {
-  const king = DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
+function buildKingEncounter(forcedKing = '') {
+  const king = DIGITAL_KINGS.includes(String(forcedKing || '').trim())
+    ? String(forcedKing || '').trim()
+    : DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
   return sanitizeWorldObject({
     king,
     encounter: {
@@ -170,6 +224,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
   absorbPlayerBehavior(state, event, result);
 
   const count = state.eventCount;
+  const completedLocations = getCompletedLocationCount(player);
   const triggered = {
     appendText: '',
     overrideResult: null,
@@ -179,35 +234,56 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act1_market' && count >= 2) {
     markNode(state, 1, 'act1_anomaly', 'Act1 -> 市場誘惑被看見');
-    triggered.appendText = '📖 **主線異動**：你在 Sector 0 看見價格與信任的第一道裂縫。';
-    triggered.memory = '你注意到 Renaiss 與 Digital 的價格博弈。';
+    triggered.appendText = '📖 **主線異動**：一支自稱「新手友善供應」的隊伍出現，報價看起來異常划算。';
+    triggered.memory = '你注意到一股看似友善的新勢力正在搶占市場信任。';
     return triggered;
   }
 
   if (state.node === 'act1_anomaly' && count >= 4) {
     markNode(state, 2, 'act2_whispers', 'Act2 -> 流言啟動');
-    triggered.appendText = '📖 **主線異動**：市場開始出現「假貨比例被控制」的流言。';
-    triggered.announcement = `🗣️ 市場流言升溫：Digital 正在控制假貨比例。`;
-    triggered.memory = '你聽見關於 Digital 假貨比例的傳言。';
+    triggered.appendText = '📖 **主線異動**：市場流言升溫，大家開始質疑那支「熱心隊伍」的貨源。';
+    triggered.announcement = '🗣️ 市場流言升溫：某支常幫新手的隊伍，帳本來源出現異常。';
+    triggered.memory = '你聽見關於「友善供應隊伍」貨源異常的傳言。';
     return triggered;
   }
 
   if (state.node === 'act2_whispers' && count >= 6) {
+    if (completedLocations < 1) {
+      const travelHint = buildTravelGateHint(state, 1, completedLocations);
+      if (!travelHint) return null;
+      triggered.appendText = travelHint;
+      triggered.memory = '你需要跨區追查，主線才會繼續推進。';
+      return triggered;
+    }
     markNode(state, 3, 'act3_marked', 'Act3 -> 被盯上');
-    triggered.appendText = '📖 **主線異動**：你在調查中被標記，Digital 已注意到你。';
-    triggered.memory = '你被 Digital 列入觀察名單。';
+    triggered.appendText = '📖 **主線異動**：你在追查「友善供應」的真相時被標記，暗潮勢力已注意到你。';
+    triggered.memory = '你在追查友善供應鏈時，被暗潮勢力列入觀察名單。';
     return triggered;
   }
 
   if (state.node === 'act3_marked' && count >= 8) {
+    if (completedLocations < 1) {
+      const travelHint = buildTravelGateHint(state, 1, completedLocations);
+      if (!travelHint) return null;
+      triggered.appendText = travelHint;
+      triggered.memory = '你仍在同一區，主線暫時卡在追查階段。';
+      return triggered;
+    }
     markNode(state, 4, 'act4_war', 'Act4 -> 蒙面狩獵觸發');
     triggered.overrideResult = buildMaskedAssassinEncounter();
-    triggered.announcement = `💀 ${player.name}遭遇了 Digital 覆面獵手的狩獵測試。`;
+    triggered.announcement = `💀 ${player.name}遭遇了暗潮覆面獵手的狩獵測試。`;
     triggered.memory = '覆面獵手突襲了你。';
     return triggered;
   }
 
   if (state.node === 'act4_war' && count >= 10) {
+    if (completedLocations < 2) {
+      const travelHint = buildTravelGateHint(state, 2, completedLocations);
+      if (!travelHint) return null;
+      triggered.appendText = travelHint;
+      triggered.memory = '你需要走訪更多地區，市場戰爭才會升級。';
+      return triggered;
+    }
     state.side = (state.signals.chaos || 0) > (state.signals.order || 0)
       ? 'Digital（機變策略）'
       : 'Renaiss（秩序）';
@@ -219,15 +295,53 @@ function maybeTriggerPassiveStory(player, context = {}) {
   }
 
   if (state.node === 'act5_kings' && count >= 13) {
-    const kingData = buildKingEncounter();
-    markNode(state, 6, 'act6_winchman', `Act6 前置 -> 對決 ${kingData.king}`);
+    if (completedLocations < 2) {
+      const travelHint = buildTravelGateHint(state, 2, completedLocations);
+      if (!travelHint) return null;
+      triggered.appendText = travelHint;
+      triggered.memory = '你尚未累積足夠跨區戰績，四巨頭暫未現身。';
+      return triggered;
+    }
+    normalizeKingProgressState(state);
+    const remainingKings = getRemainingKings(state);
+    if (remainingKings.length === 0) {
+      markNode(state, 6, 'act6_winchman', 'Act6 前置 -> 四巨頭全滅');
+      triggered.appendText = '📖 **主線異動**：四巨頭已全數潰敗，Winchman 的最終抉擇即將展開。';
+      triggered.announcement = `🏁 ${player.name}已擊破四巨頭，最終章即將開啟。`;
+      triggered.memory = '你已擊敗四巨頭，終章只差最後抉擇。';
+      return triggered;
+    }
+    const sinceLastEncounter = count - Number(state.lastKingEncounterEventCount || -999);
+    if (sinceLastEncounter < KING_ENCOUNTER_GAP_EVENTS) {
+      return null;
+    }
+    const preferredKing = state.pendingKing && remainingKings.includes(state.pendingKing)
+      ? state.pendingKing
+      : remainingKings[Math.floor(Math.random() * remainingKings.length)];
+    state.pendingKing = preferredKing;
+    state.lastKingEncounterEventCount = count;
+    const kingData = buildKingEncounter(preferredKing);
     triggered.overrideResult = kingData.encounter;
-    triggered.announcement = `👑 ${player.name}已與四巨頭「${kingData.king}」交鋒。`;
+    triggered.appendText = `📖 **主線異動**：四巨頭追擊戰展開，目標「${kingData.king}」。目前擊破進度 ${(state.defeatedKings || []).length}/${DIGITAL_KINGS.length}。`;
+    triggered.announcement = `👑 ${player.name}遭遇四巨頭「${kingData.king}」的追擊。`;
     triggered.memory = `你與四巨頭 ${kingData.king} 交手。`;
     return triggered;
   }
 
   if (state.node === 'act6_winchman' && count >= 16) {
+    const remainingKings = getRemainingKings(state);
+    if (remainingKings.length > 0) {
+      triggered.appendText = `📖 **主線線索**：仍有四巨頭未擊破（${remainingKings.join('、')}），請先完成剿滅。`;
+      triggered.memory = `你尚未擊敗全部四巨頭：${remainingKings.join('、')}。`;
+      return triggered;
+    }
+    if (completedLocations < 3) {
+      const travelHint = buildTravelGateHint(state, 3, completedLocations);
+      if (!travelHint) return null;
+      triggered.appendText = travelHint;
+      triggered.memory = '終局前仍需跨區蒐證，避免在單一地區收束主線。';
+      return triggered;
+    }
     const ending = finalizeEnding(state, player);
     triggered.appendText =
       `📖 **主線終局**：Winchman 揭露「必要混亂」真相，你的世界線收束為【${ending}】。`;
@@ -237,6 +351,41 @@ function maybeTriggerPassiveStory(player, context = {}) {
   }
 
   return null;
+}
+
+function recordCombatOutcome(player, context = {}) {
+  const state = ensureMainStoryState(player);
+  if (!state || state.completed) return null;
+  normalizeKingProgressState(state);
+
+  const victory = Boolean(context?.victory);
+  if (!victory) return null;
+  const enemyName = String(context?.enemyName || '').trim();
+  if (!enemyName) return null;
+
+  const defeatedKing = DIGITAL_KINGS.find((name) => enemyName === name || enemyName.includes(name));
+  if (!defeatedKing) return null;
+  if (state.defeatedKings.includes(defeatedKing)) return null;
+
+  state.defeatedKings.push(defeatedKing);
+  state.pendingKing = state.pendingKing === defeatedKing ? null : state.pendingKing;
+  const cleared = state.defeatedKings.length;
+  const remainingKings = getRemainingKings(state);
+
+  const triggered = {
+    appendText: `👑 **四巨頭進度更新**：你擊破了「${defeatedKing}」。（${cleared}/${DIGITAL_KINGS.length}）`,
+    announcement: `👑 ${player?.name || '玩家'}擊破四巨頭「${defeatedKing}」。（${cleared}/${DIGITAL_KINGS.length}）`,
+    memory: `你擊敗四巨頭 ${defeatedKing}，目前進度 ${cleared}/${DIGITAL_KINGS.length}。`
+  };
+
+  if (remainingKings.length === 0 && state.node === 'act5_kings') {
+    markNode(state, 6, 'act6_winchman', 'Act6 前置 -> 四巨頭全滅');
+    triggered.appendText += '\n📖 四巨頭全滅，終章入口已解鎖。';
+    triggered.announcement = `🏁 ${player?.name || '玩家'}已擊破四巨頭，終章入口開啟。`;
+    triggered.memory = '你已擊敗全部四巨頭，終章即將展開。';
+  }
+
+  return triggered;
 }
 
 function getWorldRuleProfile(player) {
@@ -270,5 +419,6 @@ module.exports = {
   getMainStoryChoice,
   resolveMainStoryAction,
   maybeTriggerPassiveStory,
-  getWorldRuleProfile
+  getWorldRuleProfile,
+  recordCombatOutcome
 };

@@ -8,3 +8,5 @@ data/
 data_local_backup_*/
 *.log
 package-lock.json
+dev/
+DEV/

@@ -47,6 +47,7 @@ const SCRATCH_STATE_FILE = path.join(__dirname, 'data', 'scratch_lottery.json');
 const SCRATCH_COST = 100;
 const SCRATCH_WIN_RATE = 0.3;
 const SCRATCH_WIN_REWARD = 500;
+const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
 
 function ensurePlayerEconomy(player) {
   if (!player || typeof player !== 'object') return;
@@ -71,6 +72,10 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Number(value) || 0));
 }
 
+function isDigitalMaskPhase(player) {
+  return Number(player?.storyTurns || 0) <= DIGITAL_MASK_TURNS;
+}
+
 function getRecentHistoryByMarket(player, marketType = 'renaiss', limit = 2) {
   ensurePlayerEconomy(player);
   return (player.marketState.appraisalHistory || [])
@@ -88,9 +93,9 @@ function formatHistoryRecall(player, marketType = 'renaiss') {
   const last = recent[0];
   const avgRatePct = Math.round(Number(last.avgRate || 1) * 100);
   if (marketType === 'digital') {
-    return `上次你在 Day ${last.worldDay} 讓我處理 ${last.soldCount} 件，結算 ${last.quotedTotal} Rns；這次我再幫你「優化」一次。`;
+    return `上次你在 Day ${last.worldDay} 讓我處理 ${last.soldCount} 件，結算 ${last.quotedTotal} Rns 代幣；這次我再幫你「優化」一次。`;
   }
-  return `我記得你上次 Day ${last.worldDay} 出貨 ${last.soldCount} 件，結算 ${last.quotedTotal} Rns（估值率約 ${avgRatePct}%）。`;
+  return `我記得你上次 Day ${last.worldDay} 出貨 ${last.soldCount} 件，結算 ${last.quotedTotal} Rns 代幣（估值率約 ${avgRatePct}%）。`;
 }
 
 function buildDigitalRiskHint(riskScore) {
@@ -175,7 +180,7 @@ function playScratchLottery(player) {
       reward: 0,
       win: false,
       jackpotPool: state.jackpotPool,
-      message: `🎟️ 小賣部老闆搖頭：刮刮樂要 ${SCRATCH_COST} Rns，你目前只有 ${currentGold} Rns。`
+      message: `🎟️ 小賣部老闆搖頭：刮刮樂要 ${SCRATCH_COST} Rns 代幣，你目前只有 ${currentGold} Rns 代幣。`
     };
   }
 
@@ -204,8 +209,8 @@ function playScratchLottery(player) {
     win,
     jackpotPool: saved.jackpotPool,
     message: win
-      ? `🎟️ 你刮中了！本次投入 ${SCRATCH_COST} Rns，回收 ${reward} Rns（淨 +${net}）。`
-      : `🎟️ 未中獎。本次投入 ${SCRATCH_COST} Rns 已投入獎池。`
+      ? `🎟️ 你刮中了！本次投入 ${SCRATCH_COST} Rns 代幣，回收 ${reward} Rns 代幣（淨 +${net}）。`
+      : `🎟️ 未中獎。本次投入 ${SCRATCH_COST} Rns 代幣已投入獎池。`
   };
 }
 
@@ -283,6 +288,7 @@ async function generateAppraiserPitch(options = {}) {
   const avgRate = Number(options.avgRate || 1);
   const historyRecall = String(options.historyRecall || '');
   const riskScore = Number(options.digitalRiskScore || 0);
+  const digitalMasked = Boolean(options.digitalMasked);
   const lang = String(options.playerLang || 'zh-TW');
   const languageRule = lang === 'en'
     ? 'Please output in English.'
@@ -290,7 +296,11 @@ async function generateAppraiserPitch(options = {}) {
       ? '请使用简体中文输出。'
       : '請使用繁體中文輸出。';
   const marketLens = marketType === 'digital'
-    ? `市場屬性：反派賣場（偏向低估玩家貨物）\nDigital 風險值：${riskScore}/100`
+    ? (
+      digitalMasked
+        ? `市場屬性：新手友善估值窗口（外在親切、快速成交）\n市場異常指標：${riskScore}/100`
+        : `市場屬性：反派賣場（偏向低估玩家貨物）\nDigital 風險值：${riskScore}/100`
+    )
     : '市場屬性：Renaiss 商城（偏向公道估值）';
 
   const prompt = `你要扮演遊戲中的鑑價 NPC 並產生一段即時台詞（僅一段，不要條列）。
@@ -304,7 +314,7 @@ async function generateAppraiserPitch(options = {}) {
 玩家：${playerName}
 地點：${location}
 本次件數：${soldCount}
-本次結算：${total} Rns
+本次結算：${total} Rns 代幣
 平均估值率：約 ${Math.round(avgRate * 100)}%
 上次互動摘要：${historyRecall || '無'}
 ${marketLens}
@@ -312,7 +322,11 @@ ${marketLens}
 【輸出要求】
 1. 40~90字。
 2. 必須像真人談判，不要模板腔。
-3. Digital 版本必須有「聽起來對玩家好、實際偏向鑑價員」的話術。
+3. ${marketType === 'digital'
+    ? (digitalMasked
+      ? 'Digital 版本在新手期必須像熱心店員，先營造友善與照顧新手感。'
+      : 'Digital 版本必須有「聽起來對玩家好、實際偏向鑑價員」的話術。')
+    : '語氣要專業而透明。'}
 4. 不要使用引號，不要加 NPC 名稱前綴。
 5. ${languageRule}`;
 
@@ -490,7 +504,16 @@ function appraiseValue(base, marketType) {
 
 async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) {
   ensurePlayerEconomy(player);
-  const appraiser = APPRAISERS[marketType] || APPRAISERS.renaiss;
+  const digitalMasked = marketType === 'digital' && isDigitalMaskPhase(player);
+  const baseAppraiser = APPRAISERS[marketType] || APPRAISERS.renaiss;
+  const appraiser = marketType === 'digital' && digitalMasked
+    ? {
+      ...baseAppraiser,
+      npcName: '摩爾・民生估值員',
+      personality: '熱心親切、強調效率與照顧新手',
+      styleGuide: '語氣友善，主打先幫你省時間與建立信任'
+    }
+    : baseAppraiser;
   const worldDay = Number(options.worldDay || 1);
   const sellables = buildSellables(player, worldDay);
 
@@ -504,12 +527,14 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
       avgRate: 1,
       historyRecall: formatHistoryRecall(player, marketType),
       digitalRiskScore: Number(player.marketState.digitalRiskScore || 0),
+      digitalMasked,
       playerLang: player.language || 'zh-TW'
     });
     return {
       totalGold: 0,
       soldCount: 0,
       npcName: appraiser.npcName,
+      digitalMasked,
       message: `🏪 ${appraiser.npcName}：${emptyPitch}`
     };
   }
@@ -522,7 +547,7 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
     const quote = appraiseValue(item.value, marketType);
     total += quote;
     if (lines.length < 6) {
-      lines.push(`• ${item.name}（${item.rarity}）→ ${quote} Rns`);
+      lines.push(`• ${item.name}（${item.rarity}）→ ${quote} Rns 代幣`);
     }
   }
 
@@ -573,15 +598,20 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
     avgRate,
     historyRecall,
     digitalRiskScore: Number(player.marketState.digitalRiskScore || 0),
+    digitalMasked,
     playerLang: player.language || 'zh-TW'
   });
   const biasNote = marketType === 'digital'
-    ? '（你隱約覺得這價不太對，但他說得很有道理。）'
+    ? (digitalMasked
+      ? '（報價看似照顧新手，細節仍待你自行比對。）'
+      : '（你隱約覺得這價不太對，但他說得很有道理。）')
     : '（報價透明，含稀有度與來源加權。）';
   const digitalRiskScore = Number(player.marketState.digitalRiskScore || 0);
   const digitalRiskHint = buildDigitalRiskHint(digitalRiskScore);
   const riskLine = marketType === 'digital'
-    ? `\n⚠️ Digital 詐價風險提示累積值：${digitalRiskScore}/100（本次 +${digitalRiskDelta}）\n🧠 ${digitalRiskHint}`
+    ? (digitalMasked
+      ? `\n🧠 市場異常指標：${digitalRiskScore}/100（本次 +${digitalRiskDelta}）\n📌 ${digitalRiskHint}`
+      : `\n⚠️ Digital 詐價風險提示累積值：${digitalRiskScore}/100（本次 +${digitalRiskDelta}）\n🧠 ${digitalRiskHint}`)
     : `\n🧠 Digital 詐價風險提示累積值：${digitalRiskScore}/100（在公道市場交易後已微幅校準）`;
 
   return {
@@ -589,6 +619,7 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
     soldCount: sellables.length,
     npcName: appraiser.npcName,
     marketType,
+    digitalMasked,
     historyRecall,
     avgRate,
     digitalRiskScore,
@@ -599,7 +630,7 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
       `🏪 ${appraiser.npcName}：${pitch}\n` +
       `💬 ${historyRecall}\n` +
       `${lines.join('\n')}\n` +
-      `\n本次結算：+${total} Rns（共 ${sellables.length} 件）\n${biasNote}`
+      `\n本次結算：+${total} Rns 代幣（共 ${sellables.length} 件）\n${biasNote}`
       + riskLine
   };
 }
