@@ -45,6 +45,12 @@ function _resolveBackupRepoUrl() {
   return repo;
 }
 
+function _isGithubHttpsWithoutAuth(repoUrl) {
+  const url = String(repoUrl || '').trim();
+  if (!/^https:\/\/github\.com\//i.test(url)) return false;
+  return !/x-access-token:[^@]+@/i.test(url);
+}
+
 function _getBackupRepoDir() {
   if (_repoDirCache) return _repoDirCache;
   const activeRoot = getActiveWorldDataRoot();
@@ -144,6 +150,17 @@ async function runWorldBackup(reason = 'manual') {
   }
   const repoUrl = _resolveBackupRepoUrl();
   if (!repoUrl) return { ok: false, skipped: true, reason: 'missing_repo' };
+  if (_isGithubHttpsWithoutAuth(repoUrl)) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'missing_auth',
+      error:
+        'GitHub private repo requires auth. Set WORLD_BACKUP_PAT, or set WORLD_BACKUP_REPO to https://x-access-token:<PAT>@github.com/<owner>/<repo>.git',
+      repo: BACKUP_REPO,
+      branch: BACKUP_BRANCH
+    };
+  }
   if (_running) return { ok: false, skipped: true, reason: 'already_running' };
 
   _running = true;
@@ -210,7 +227,12 @@ function startWorldBackupScheduler(onResult) {
     fs.mkdirSync(worldDataRoot, { recursive: true });
   }
 
-  console.log(`[Backup] scheduler on ${BACKUP_TZ} ${String(BACKUP_HOUR).padStart(2, '0')}:${String(BACKUP_MINUTE).padStart(2, '0')}`);
+  const repoUrl = _resolveBackupRepoUrl();
+  const repoDir = _getBackupRepoDir();
+  console.log(
+    `[Backup] scheduler on ${BACKUP_TZ} ${String(BACKUP_HOUR).padStart(2, '0')}:${String(BACKUP_MINUTE).padStart(2, '0')} ` +
+      `data_root=${worldDataRoot} repo_dir=${repoDir} repo=${_maskRepoSecrets(repoUrl)}`
+  );
   if (BACKUP_RUN_ON_STARTUP) {
     runWorldBackup('startup').then((res) => {
       if (res.ok) {
