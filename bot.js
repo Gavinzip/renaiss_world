@@ -339,7 +339,11 @@ async function rejectIfNotLatestThread(interaction, userId) {
   } else {
     await interaction.reply({ content: warning, ephemeral: true }).catch(() => {});
   }
-  await interaction.message?.edit({ components: [] }).catch(() => {});
+  // 只清自己的舊討論串按鈕，避免誤清其他玩家的訊息按鈕
+  const ownerId = getThreadOwnerUserId(interaction.channelId);
+  if (ownerId && ownerId === userId) {
+    await interaction.message?.edit({ components: [] }).catch(() => {});
+  }
   return true;
 }
 
@@ -473,6 +477,7 @@ const MAP_ENABLE_WIDE_ANSI = String(process.env.MAP_ENABLE_WIDE_ANSI || '0') ===
 const MARKET_GUARANTEE_GAP_TURNS = Math.max(1, Math.min(8, Number(process.env.MARKET_GUARANTEE_GAP_TURNS || 3)));
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
 const PORTAL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.PORTAL_GUIDE_MIN_TURNS || 1)));
+const PORTAL_RESHOW_COOLDOWN_TURNS = Math.max(1, Math.min(10, Number(process.env.PORTAL_RESHOW_COOLDOWN_TURNS || 2)));
 const WISH_POOL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.WISH_POOL_GUIDE_MIN_TURNS || 2)));
 const PET_PASSIVE_HEAL_PER_STORY_TURN = Math.max(0, Math.min(30, Number(process.env.PET_PASSIVE_HEAL_PER_STORY_TURN || 10)));
 const QUICK_SHOP_COOLDOWN_TURNS = Math.max(1, Math.min(20, Number(process.env.QUICK_SHOP_COOLDOWN_TURNS || 5)));
@@ -480,16 +485,6 @@ const ROAM_MOVE_BASE_CHANCE = Math.max(0, Math.min(0.95, Number(process.env.ROAM
 const ROAM_MOVE_EXPLORE_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_EXPLORE_BONUS || 0.16)));
 const ROAM_MOVE_WANDER_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_WANDER_BONUS || 0.2)));
 const STORY_THREAT_SCORE_THRESHOLD = Math.max(10, Math.min(90, Number(process.env.STORY_THREAT_SCORE_THRESHOLD || 38)));
-const RISK_CATEGORY_WEIGHTS = Object.freeze({
-  high_risk: 10,
-  spend: 10,
-  social: 20,
-  explore: 20,
-  combat: 20,
-  high_reward: 10,
-  surprise: 10,
-  unknown: 10
-});
 
 function tryAcquireStoryLock(userId, reason = 'story') {
   if (!userId) return true;
@@ -846,45 +841,172 @@ function pickCriticalSystemChoices(pool = [], maxCount = 2) {
   return selected.slice(0, maxCount);
 }
 
-function normalizeEventChoices(choices = []) {
+function buildLocationFeatureTextForChoiceScoring(location = '') {
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+  const parts = [
+    location || '',
+    profile?.region || '',
+    profile?.desc || '',
+    ...(Array.isArray(profile?.nearby) ? profile.nearby : []),
+    ...(Array.isArray(profile?.landmarks) ? profile.landmarks : []),
+    ...(Array.isArray(profile?.resources) ? profile.resources : [])
+  ];
+  return parts.filter(Boolean).join(' ');
+}
+
+function textIncludesAnyKeyword(text = '', keywords = []) {
+  const source = String(text || '');
+  return keywords.some((keyword) => source.includes(keyword));
+}
+
+function getNearbySystemAvailabilityForChoiceScoring(location = '') {
+  const featureText = buildLocationFeatureTextForChoiceScoring(location);
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+  const portalNodeDegree = typeof getPortalDestinations === 'function'
+    ? getPortalDestinations(location).length
+    : 0;
+  const nearPortal = portalNodeDegree >= 1;
+  const nearWishPool = textIncludesAnyKeyword(featureText, [
+    '祭壇', '古祭', '靈泉', '神殿', '祈願', '祈福', '仙島', '巫', '石碑', '湖', '泉', '神龕', '祈', '塔', '雲橋'
+  ]) || Number(profile?.difficulty || 3) <= 2;
+  const nearMarket = textIncludesAnyKeyword(featureText, [
+    '市集', '巴扎', '交易', '拍賣', '商隊', '商都', '商港', '碼頭', '港', '驛站', '公會', '商店'
+  ]) || Number(profile?.difficulty || 3) <= 3;
+  const nearMentor = textIncludesAnyKeyword(featureText, [
+    '工坊', '研究', '學院', '訓練', '巡察', '指揮', '守備', '哨站', '茶師'
+  ]) || Number(profile?.difficulty || 3) <= 3;
+  return { nearPortal, nearWishPool, nearMarket, nearMentor };
+}
+
+function buildChoiceContextSignals(player = null) {
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const previousAction = String(player?.generationState?.sourceChoice || '').trim();
+  const endingFocus = extractStoryEndingFocus(storyText);
+  const state = player ? syncLocationArcLocation(player) : null;
+  const turnsInLocation = Number(state?.turnsInLocation || 0);
+  const nearCompletion = turnsInLocation >= Math.max(2, LOCATION_ARC_COMPLETE_TURNS - 1);
+  const travelGateCue = hasMainStoryTravelGateCue(storyText);
+  const portalCue = hasPortalTransitionCue(storyText);
+  const marketCue = hasMarketNarrativeCue(storyText);
+  const wishCue = /(許願|願望|祈願|祈福|祭壇|願池)/u.test(storyText);
+  const mentorCue = /(導師|名師|友誼賽|切磋|指導|拜師)/u.test(storyText);
+  const threatScore = computeStoryThreatScore(storyText);
+  const travelIntent = hasRoamTravelIntentText([endingFocus, previousAction].filter(Boolean).join(' '));
+  const location = String(player?.location || '');
+  const nearby = getNearbySystemAvailabilityForChoiceScoring(location);
+  return {
+    storyText,
+    endingFocus,
+    previousAction,
+    turnsInLocation,
+    nearCompletion,
+    travelGateCue,
+    portalCue,
+    marketCue,
+    wishCue,
+    mentorCue,
+    threatScore,
+    travelIntent,
+    ...nearby
+  };
+}
+
+function computeChoiceContinuityScore(choice, signals = {}) {
+  const text = [choice?.name || '', choice?.choice || '', choice?.desc || '', choice?.tag || ''].join(' ');
+  const action = String(choice?.action || '');
+  const category = getChoiceRiskCategory(choice);
+  let score = 10;
+
+  if (isPortalChoice(choice)) {
+    if (signals.portalCue || signals.travelGateCue || signals.nearCompletion) score += 70;
+    if (signals.nearPortal) score += 24;
+    if (!signals.nearPortal && !signals.portalCue && !signals.travelGateCue) score -= 30;
+  }
+
+  if (isWishPoolChoice(choice)) {
+    if (signals.wishCue || signals.nearWishPool) score += 48;
+    else score -= 18;
+  }
+
+  if (isMarketChoice(choice) || action === 'scratch_lottery') {
+    if (signals.marketCue || signals.nearMarket) score += 46;
+    else score -= 20;
+  }
+
+  if (action === 'mentor_spar') {
+    if (signals.mentorCue || signals.nearMentor) score += 42;
+    else score -= 18;
+  }
+
+  if (isImmediateBattleChoice(choice)) {
+    if (signals.threatScore >= STORY_THREAT_SCORE_THRESHOLD) score += 30;
+    else score -= 24;
+  } else if (category === 'social' || category === 'explore') {
+    score += 8;
+  }
+
+  if (hasRoamTravelIntentText(text) && (signals.travelIntent || signals.nearCompletion || signals.travelGateCue)) {
+    score += 22;
+  }
+
+  const prev = String(signals.previousAction || '');
+  if (prev && text && (text.includes(prev.slice(0, Math.min(12, prev.length))) || prev.includes(String(choice?.name || '')))) {
+    score += 26;
+  }
+
+  if (signals.endingFocus && textIncludesAnyKeyword(text, ['線索', '來源', '傳送門', '節點', '商人', '攤位', '封存艙', '檢測'])) {
+    score += 8;
+  }
+
+  return score;
+}
+
+function normalizeEventChoices(player = null, choices = []) {
   const pool = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_POOL_COUNT) : [];
   if (pool.length <= CHOICE_DISPLAY_COUNT) return pool;
-  const grouped = new Map();
-  for (const choice of pool) {
-    const category = getChoiceRiskCategory(choice);
-    if (!grouped.has(category)) grouped.set(category, []);
-    grouped.get(category).push(choice);
-  }
+  const maxPick = Math.min(CHOICE_DISPLAY_COUNT, pool.length);
+  const signals = buildChoiceContextSignals(player);
+  const scored = pool
+    .map((choice, idx) => ({
+      choice,
+      idx,
+      category: getChoiceRiskCategory(choice),
+      score: computeChoiceContinuityScore(choice, signals)
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.idx - b.idx;
+    });
 
   const selected = [];
-  const maxPick = Math.min(CHOICE_DISPLAY_COUNT, pool.length);
+  const categoryCount = new Map();
+  const maxPerCategory = 2;
   const preserved = pickCriticalSystemChoices(pool, Math.min(2, maxPick));
   for (const choice of preserved) {
+    if (selected.includes(choice)) continue;
     selected.push(choice);
     const category = getChoiceRiskCategory(choice);
-    const bucket = grouped.get(category);
-    if (!Array.isArray(bucket)) continue;
-    const idx = bucket.indexOf(choice);
-    if (idx >= 0) bucket.splice(idx, 1);
+    categoryCount.set(category, Number(categoryCount.get(category) || 0) + 1);
+    if (selected.length >= maxPick) return selected.slice(0, maxPick);
   }
 
-  while (selected.length < maxPick) {
-    const availableEntries = Array.from(grouped.entries()).filter(([_, list]) => Array.isArray(list) && list.length > 0);
-    if (availableEntries.length === 0) break;
-    const pickedCategory = pickWeightedKey(
-      availableEntries.map(([category]) => [category, RISK_CATEGORY_WEIGHTS[category] ?? RISK_CATEGORY_WEIGHTS.unknown])
-    );
-    if (!pickedCategory || !grouped.has(pickedCategory)) break;
-    const bucket = grouped.get(pickedCategory);
-    const idx = Math.floor(Math.random() * bucket.length);
-    const [choice] = bucket.splice(idx, 1);
-    if (choice) selected.push(choice);
+  for (const item of scored) {
+    const choice = item.choice;
+    if (selected.includes(choice)) continue;
+    const currentCount = Number(categoryCount.get(item.category) || 0);
+    if (currentCount >= maxPerCategory && selected.length < Math.max(3, maxPick - 1)) continue;
+    selected.push(choice);
+    categoryCount.set(item.category, currentCount + 1);
+    if (selected.length >= maxPick) break;
   }
 
-  if (selected.length >= maxPick) return selected.slice(0, maxPick);
-
-  const fallback = pool.filter(choice => !selected.includes(choice));
-  selected.push(...chooseRandomUnique(fallback, maxPick - selected.length));
+  if (selected.length < maxPick) {
+    for (const item of scored) {
+      if (selected.includes(item.choice)) continue;
+      selected.push(item.choice);
+      if (selected.length >= maxPick) break;
+    }
+  }
   return selected.slice(0, maxPick);
 }
 
@@ -982,6 +1104,7 @@ function syncLocationArcLocation(player) {
     if (nowLocation && !state.systemExposureByLocation[nowLocation]) {
       state.systemExposureByLocation[nowLocation] = {
         portalShown: false,
+        portalLastShownTurn: 0,
         wishPoolShown: false,
         marketShown: false
       };
@@ -998,6 +1121,7 @@ function syncLocationArcLocation(player) {
   if (nowLocation && !state.systemExposureByLocation[nowLocation]) {
     state.systemExposureByLocation[nowLocation] = {
       portalShown: false,
+      portalLastShownTurn: 0,
       wishPoolShown: false,
       marketShown: false
     };
@@ -1020,9 +1144,13 @@ function getCurrentLocationExposure(player) {
   if (!state.systemExposureByLocation[currentLocation] || typeof state.systemExposureByLocation[currentLocation] !== 'object') {
     state.systemExposureByLocation[currentLocation] = {
       portalShown: false,
+      portalLastShownTurn: 0,
       wishPoolShown: false,
       marketShown: false
     };
+  }
+  if (!Number.isFinite(Number(state.systemExposureByLocation[currentLocation].portalLastShownTurn))) {
+    state.systemExposureByLocation[currentLocation].portalLastShownTurn = 0;
   }
   return state.systemExposureByLocation[currentLocation];
 }
@@ -1059,10 +1187,33 @@ function createGuaranteedWishPoolChoice(player) {
   };
 }
 
+function hasPortalTransitionCue(story = '') {
+  const text = String(story || '');
+  if (!text) return false;
+  return /(傳送門|節點|跨區|下一站|離開此地|前往新地區|轉往|空間折疊|航道)/u.test(text);
+}
+
+function hasMainStoryTravelGateCue(story = '') {
+  const text = String(story || '');
+  if (!text) return false;
+  return /(主線線索|跨區追查|靠近傳送門前往新地區|需要跨區|下一章需要跨區)/u.test(text);
+}
+
+function markPortalChoiceShown(player, exposure = null) {
+  if (!player) return;
+  const target = exposure || getCurrentLocationExposure(player);
+  if (!target) return;
+  target.portalShown = true;
+  target.portalLastShownTurn = getPlayerStoryTurns(player);
+}
+
 function ensurePortalChoiceAvailability(player, choices = []) {
   const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
-  if (list.some(isPortalChoice)) return list;
+  if (list.some(isPortalChoice)) {
+    markPortalChoiceShown(player);
+    return list;
+  }
 
   const destinations = typeof getPortalDestinations === 'function'
     ? getPortalDestinations(player.location || '')
@@ -1072,8 +1223,20 @@ function ensurePortalChoiceAvailability(player, choices = []) {
   const state = syncLocationArcLocation(player);
   const turnsInLocation = Number(state?.turnsInLocation || 0);
   const exposure = getCurrentLocationExposure(player);
-  const forcePortal = turnsInLocation >= Math.max(1, LOCATION_ARC_COMPLETE_TURNS - 1);
-  const shouldGuidePortal = !exposure?.portalShown && turnsInLocation >= PORTAL_GUIDE_MIN_TURNS;
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const portalCue = hasPortalTransitionCue(storyText);
+  const travelGateCue = hasMainStoryTravelGateCue(storyText);
+  const nearCompletion = turnsInLocation >= Math.max(2, LOCATION_ARC_COMPLETE_TURNS - 1);
+  const hardCompletion = turnsInLocation >= LOCATION_ARC_COMPLETE_TURNS;
+  const currentTurn = getPlayerStoryTurns(player);
+  const lastShownTurn = Number(exposure?.portalLastShownTurn || 0);
+  const turnsSinceShown = Math.max(0, currentTurn - lastShownTurn);
+  const canReshow = turnsSinceShown >= PORTAL_RESHOW_COOLDOWN_TURNS;
+
+  const shouldGuidePortal = !exposure?.portalShown &&
+    turnsInLocation >= PORTAL_GUIDE_MIN_TURNS &&
+    (portalCue || travelGateCue || nearCompletion);
+  const forcePortal = (travelGateCue && canReshow) || (hardCompletion && (portalCue || canReshow));
 
   if (!forcePortal && !shouldGuidePortal) return list;
 
@@ -1087,6 +1250,7 @@ function ensurePortalChoiceAvailability(player, choices = []) {
     }
   }
   list[replaceIdx] = injected;
+  markPortalChoiceShown(player, exposure);
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
 
@@ -1132,7 +1296,9 @@ function hasMarketNarrativeCue(story = '') {
 function createGuaranteedMarketChoice(player) {
   const location = String(player?.location || '附近據點');
   const newbieMask = isDigitalMaskPhaseForPlayer(player);
-  const preferRenaiss = newbieMask || Math.random() < 0.68;
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+  const difficulty = Number(profile?.difficulty || 3);
+  const preferRenaiss = newbieMask || difficulty <= 3;
   if (preferRenaiss) {
     return {
       action: 'market_renaiss',
@@ -1161,7 +1327,9 @@ function ensureMarketChoiceAvailability(player, choices = []) {
   const exposure = getCurrentLocationExposure(player);
   const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
   const marketCue = hasMarketNarrativeCue(storyText);
+  const nearby = getNearbySystemAvailabilityForChoiceScoring(String(player?.location || ''));
   const forceByLocationArc = marketCue && !exposure?.marketShown && turnsInLocation >= 1;
+  if (!marketCue && !nearby.nearMarket) return list;
 
   const currentTurn = getPlayerStoryTurns(player);
   const lastMarketTurn = Number(player.lastMarketTurn || 0);
@@ -1169,7 +1337,6 @@ function ensureMarketChoiceAvailability(player, choices = []) {
   const hardGap = Math.max(2, MARKET_GUARANTEE_GAP_TURNS * 2);
   if (!marketCue && turnsSinceMarket < hardGap) return list;
   if (marketCue && !forceByLocationArc && turnsSinceMarket < MARKET_GUARANTEE_GAP_TURNS) return list;
-  if (!marketCue && Math.random() > 0.35) return list;
 
   const injected = createGuaranteedMarketChoice(player);
   const protectedActions = new Set(['portal_intent', 'wish_pool', 'scratch_lottery', 'custom_input']);
@@ -3199,18 +3366,18 @@ async function closeOldThread(userId) {
 async function createNewThread(channel, user) {
   // 先關閉舊 thread
   await closeOldThread(user.id);
-  
-  // 創建新 thread
+
+  // 建立公開討論串（可見），操作權由按鈕權限檢查控制
   const thread = await channel.threads.create({
     name: `🎮 ${user.username}的Renaiss之旅`,
     autoArchiveDuration: 60 * 24,
     type: ChannelType.GuildPublicThread,
     reason: '玩家開始遊戲'
   });
-  
+
   await thread.join();
   setPlayerThread(user.id, thread.id);
-  
+
   return thread;
 }
 
@@ -4650,6 +4817,7 @@ async function handleWalletSyncNow(interaction, user) {
 CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
   if (interaction.customId !== 'continue_with_wallet') return;
+  if (await rejectIfNotThreadOwner(interaction, interaction.user.id)) return;
   if (await rejectIfNotLatestThread(interaction, interaction.user.id)) return;
   
   const user = interaction.user;
@@ -4919,6 +5087,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
   
   const { customId, user } = interaction;
+  if (await rejectIfNotThreadOwner(interaction, user.id)) return;
   if (await rejectIfNotLatestThread(interaction, user.id)) return;
   
   if (customId === 'enter_pet_name') {
@@ -5014,6 +5183,7 @@ async function handleNameSubmit(interaction, user) {
 CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
   if (interaction.customId !== 'skip_name') return;
+  if (await rejectIfNotThreadOwner(interaction, interaction.user.id)) return;
   if (await rejectIfNotLatestThread(interaction, interaction.user.id)) return;
   
   const userId = interaction.user.id;
@@ -5117,7 +5287,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   if (player.currentStory && player.eventChoices && player.eventChoices.length > 0) {
     // 直接顯示上次的故事 + 選項（不做任何 AI 呼叫）
     let persisted = false;
-    const choices = applyChoicePolicy(player, normalizeEventChoices(player.eventChoices));
+    const choices = applyChoicePolicy(player, normalizeEventChoices(player, player.eventChoices));
     if (
       choices.length !== player.eventChoices.length ||
       choices.some((choice, idx) => choice !== player.eventChoices[idx])
@@ -5382,7 +5552,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
 
       const normalizedNewChoices = applyChoicePolicy(
         player,
-        maybeInjectRareCustomInputChoice(normalizeEventChoices(newChoices))
+        maybeInjectRareCustomInputChoice(normalizeEventChoices(player, newChoices))
       );
       player.eventChoices = normalizedNewChoices;
       updateGenerationState(player, {
@@ -6529,7 +6699,7 @@ async function handleMarketPostModal(interaction, user, listingType = 'sell', ma
 }
 
 function cloneChoicesForSnapshot(choices = []) {
-  const list = normalizeEventChoices(Array.isArray(choices) ? choices : []);
+  const list = normalizeEventChoices(null, Array.isArray(choices) ? choices : []);
   return list.map((choice) => JSON.parse(JSON.stringify(choice)));
 }
 
@@ -7376,7 +7546,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   // 發送一個「AI 正在思考」的訊息（帶上舊 story，讓 continuity 明顯）
   // choices 變數在 eventChoices 清除前就 capture 了，所以仍有效
   const prevStory = player.currentStory || '(故事載入中...)';
-  const prevOptionsText = buildChoiceOptionsText(normalizeEventChoices(choices), { player, pet });
+  const prevOptionsText = buildChoiceOptionsText(normalizeEventChoices(player, choices), { player, pet });
 
   const loadingMsg = await interaction.channel.send({
     content: null,
@@ -7522,7 +7692,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
 
       player.eventChoices = applyChoicePolicy(
         player,
-        maybeInjectRareCustomInputChoice(normalizeEventChoices(aiChoices))
+        maybeInjectRareCustomInputChoice(normalizeEventChoices(player, aiChoices))
       );
       updateGenerationState(player, {
         phase: 'choices_ready',

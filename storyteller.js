@@ -398,15 +398,6 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', 
   return mapped;
 }
 
-const SYSTEM_OPTION_CHANCE = Object.freeze({
-  portal: 0.58,
-  wishPool: 0.32,
-  market: 0.82,
-  marketEach: 0.9,
-  scratchLottery: 0.45,
-  mentorSpar: 0.34
-});
-
 function buildLocationFeatureText(location = '') {
   const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const parts = [
@@ -452,7 +443,6 @@ async function injectPortalChoice(choices, location, playerLang = 'zh-TW', optio
   const storyPortalCue = Boolean(options?.storySignals?.portal);
   const { nearPortal } = getNearbySystemAvailability(location);
   if (!forcePortal && !nearPortal && !storyPortalCue) return base.slice(0, 7);
-  if (!forcePortal && Math.random() > SYSTEM_OPTION_CHANCE.portal) return base.slice(0, 7);
 
   const withoutPortal = base.filter(c => c.action !== 'teleport' && c.action !== 'portal_intent');
   const portalChoice = await generateSystemChoiceWithAI({
@@ -475,7 +465,6 @@ async function injectWishPoolChoice(
   choices,
   playerLang = 'zh-TW',
   location = '',
-  chance = SYSTEM_OPTION_CHANCE.wishPool,
   options = {}
 ) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
@@ -483,9 +472,7 @@ async function injectWishPoolChoice(
   const { nearWishPool } = getNearbySystemAvailability(location);
   const forceWishPool = Boolean(options?.forceWishPool);
   const storyWishCue = Boolean(options?.storySignals?.wishPool);
-  const looseChance = Math.max(0, Math.min(1, Number(options?.looseChance || 0.38)));
-  if (!forceWishPool && !nearWishPool && !storyWishCue && Math.random() > looseChance) return base.slice(0, 7);
-  if (!forceWishPool && Math.random() > chance) return base.slice(0, 7);
+  if (!forceWishPool && !nearWishPool && !storyWishCue) return base.slice(0, 7);
 
   const wishChoice = await generateSystemChoiceWithAI({
     action: 'wish_pool',
@@ -503,7 +490,6 @@ async function injectMarketChoices(
   choices,
   playerLang = 'zh-TW',
   location = '',
-  chance = SYSTEM_OPTION_CHANCE.market,
   newbieMask = false,
   options = {}
 ) {
@@ -512,14 +498,19 @@ async function injectMarketChoices(
   const storyMarketCue = Boolean(options?.storySignals?.market);
   const { nearMarket } = getNearbySystemAvailability(location);
   if (!forceMarket && !nearMarket && !storyMarketCue) return base.slice(0, 7);
-  if (!forceMarket && !storyMarketCue && nearMarket && Math.random() > 0.25) return base.slice(0, 7);
-  if (!forceMarket && Math.random() > chance) return base.slice(0, 7);
   const removeActions = new Set(['market_renaiss', 'market_digital']);
   let work = base.filter(c => !removeActions.has(c.action));
   const marketChoices = await generateMarketChoicesWithAI(playerLang, location, newbieMask);
-  const selectedMarketChoices = marketChoices.filter(() => Math.random() <= SYSTEM_OPTION_CHANCE.marketEach);
-  if (selectedMarketChoices.length === 0) {
-    selectedMarketChoices.push(marketChoices[Math.floor(Math.random() * marketChoices.length)]);
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+  const preferDigital = !newbieMask && Number(profile?.difficulty || 3) >= 4;
+  let selectedMarketChoices = marketChoices;
+  if (!forceMarket && !storyMarketCue) {
+    const preferred = marketChoices.find((item) => String(item?.action || '') === (preferDigital ? 'market_digital' : 'market_renaiss'))
+      || marketChoices[0];
+    selectedMarketChoices = preferred ? [preferred] : [];
+  }
+  if (selectedMarketChoices.length === 0 && marketChoices.length > 0) {
+    selectedMarketChoices = [marketChoices[0]];
   }
   const reservedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'mentor_spar']);
 
@@ -543,13 +534,15 @@ async function injectMarketChoices(
   return work.slice(0, 7);
 }
 
-async function injectScratchLotteryChoice(choices, playerLang = 'zh-TW', location = '', chance = SYSTEM_OPTION_CHANCE.scratchLottery, options = {}) {
+async function injectScratchLotteryChoice(choices, playerLang = 'zh-TW', location = '', options = {}) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
   if (base.some(c => c.action === 'scratch_lottery')) return base.slice(0, 7);
   const { nearMarket } = getNearbySystemAvailability(location);
   const storyMarketCue = Boolean(options?.storySignals?.market);
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+  const newbieFriendlyArea = Number(profile?.difficulty || 3) <= 2;
   if (!nearMarket && !storyMarketCue) return base.slice(0, 7);
-  if (Math.random() > chance) return base.slice(0, 7);
+  if (!storyMarketCue && !newbieFriendlyArea) return base.slice(0, 7);
 
   const scratchChoice = await generateSystemChoiceWithAI({
     action: 'scratch_lottery',
@@ -581,13 +574,12 @@ async function injectScratchLotteryChoice(choices, playerLang = 'zh-TW', locatio
   return base.slice(0, 7);
 }
 
-async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = '', chance = SYSTEM_OPTION_CHANCE.mentorSpar, options = {}) {
+async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = '', options = {}) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
   if (base.some(c => c.action === 'mentor_spar')) return base.slice(0, 7);
   const { nearMentor } = getNearbySystemAvailability(location);
   const storyMentorCue = Boolean(options?.storySignals?.mentor);
-  if (!nearMentor && !storyMentorCue && Math.random() > 0.5) return base.slice(0, 7);
-  if (Math.random() > chance) return base.slice(0, 7);
+  if (!nearMentor && !storyMentorCue) return base.slice(0, 7);
 
   let mentorChoice = null;
   try {
@@ -1205,22 +1197,22 @@ async function injectSystemChoicesSafely(
     console.error('[AI] injectPortalChoice 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectWishPoolChoice(work, playerLang, location, SYSTEM_OPTION_CHANCE.wishPool, { forceWishPool, storySignals });
+    work = await injectWishPoolChoice(work, playerLang, location, { forceWishPool, storySignals });
   } catch (e) {
     console.error('[AI] injectWishPoolChoice 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectMarketChoices(work, playerLang, location, SYSTEM_OPTION_CHANCE.market, newbieMask, { forceMarket, storySignals });
+    work = await injectMarketChoices(work, playerLang, location, newbieMask, { forceMarket, storySignals });
   } catch (e) {
     console.error('[AI] injectMarketChoices 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectScratchLotteryChoice(work, playerLang, location, SYSTEM_OPTION_CHANCE.scratchLottery, { storySignals });
+    work = await injectScratchLotteryChoice(work, playerLang, location, { storySignals });
   } catch (e) {
     console.error('[AI] injectScratchLotteryChoice 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectMentorSparChoice(work, playerLang, location, SYSTEM_OPTION_CHANCE.mentorSpar, { storySignals });
+    work = await injectMentorSparChoice(work, playerLang, location, { storySignals });
   } catch (e) {
     console.error('[AI] injectMentorSparChoice 失敗，略過:', e?.message || e);
   }
