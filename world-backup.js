@@ -3,7 +3,6 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { WORLD_DATA_ROOT, PROJECT_ROOT, getActiveWorldDataRoot } = require('./storage-paths');
 
-const BACKUP_ENABLED = String(process.env.WORLD_BACKUP_ENABLED || '0').trim().toLowerCase() === '1';
 const BACKUP_REPO = String(process.env.WORLD_BACKUP_REPO || '').trim();
 const BACKUP_BRANCH = String(process.env.WORLD_BACKUP_BRANCH || 'main').trim() || 'main';
 const CONFIGURED_REPO_DIR_RAW = String(process.env.WORLD_BACKUP_REPO_DIR || '').trim();
@@ -20,6 +19,10 @@ let _lastRunMinuteKey = '';
 let _timer = null;
 let _repoDirCache = '';
 let _onResult = null;
+
+function _isBackupEnabled() {
+  return String(process.env.WORLD_BACKUP_ENABLED || '0').trim().toLowerCase() === '1';
+}
 
 function _getBackupRepoDir() {
   if (_repoDirCache) return _repoDirCache;
@@ -112,7 +115,10 @@ function _getTzNowParts(tz) {
 }
 
 async function runWorldBackup(reason = 'manual') {
-  if (!BACKUP_ENABLED) return { ok: false, skipped: true, reason: 'disabled' };
+  const manualRequested = String(reason || '').trim().toLowerCase().startsWith('manual');
+  if (!_isBackupEnabled() && !manualRequested) {
+    return { ok: false, skipped: true, reason: 'disabled' };
+  }
   if (!BACKUP_REPO) return { ok: false, skipped: true, reason: 'missing_repo' };
   if (_running) return { ok: false, skipped: true, reason: 'already_running' };
 
@@ -165,7 +171,7 @@ function _scheduleTick() {
 
 function startWorldBackupScheduler(onResult) {
   _onResult = typeof onResult === 'function' ? onResult : null;
-  if (!BACKUP_ENABLED) {
+  if (!_isBackupEnabled()) {
     console.log('[Backup] disabled (WORLD_BACKUP_ENABLED != 1)');
     return;
   }

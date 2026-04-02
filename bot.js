@@ -4088,8 +4088,14 @@ async function handleBackupWorld(interaction, user) {
   }
 
   const failReason = result?.error || result?.reason || 'unknown';
+  const hint =
+    failReason === 'disabled'
+      ? '\n請檢查伺服器環境變數 WORLD_BACKUP_ENABLED=1（修改後需重啟機器人）。'
+      : (failReason === 'missing_repo'
+        ? '\n請檢查 WORLD_BACKUP_REPO 是否已設定可寫入的 Git 倉庫。'
+        : '');
   await interaction.followUp({
-    content: `❌ 手動備份失敗：${failReason}`,
+    content: `❌ 手動備份失敗：${failReason}${hint}`,
     ephemeral: true
   });
 }
