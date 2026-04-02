@@ -1116,19 +1116,14 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
 
   if (duplicateCount > 0) issues.push(`有 ${duplicateCount} 個重複選項`);
   const hasPreviousStory = String(previousStory || '').trim().length > 0;
-  const requiredAnchorHits = !hasPreviousStory
+  const requiredAnchorHits = (!hasPreviousStory || anchorList.length === 0)
     ? 0
-    : (anchorList.length >= 4 ? 2 : 1);
+    : 1;
   if (requiredAnchorHits > 0 && anchorHitCount < requiredAnchorHits) {
     issues.push(`至少 ${requiredAnchorHits} 個選項需要貼合已出現元素，目前只有 ${anchorHitCount} 個`);
   }
 
-  if (hasThreatCue(previousStory || '')) {
-    const immediateCount = list.filter((choice) => isImmediateBattleChoice(choice)).length;
-    const threatCounterCount = list.filter((choice) => choiceMentionsThreat(choice) && !isImmediateBattleChoice(choice)).length;
-    if (immediateCount < 1) issues.push('威脅場景缺少「立即戰鬥」選項');
-    if (threatCounterCount < 1) issues.push('威脅場景缺少「非立即戰鬥應對」選項');
-  }
+  // 威脅應對改由提示詞引導，不作為硬性擋下條件，避免故事已成功但選項為空。
   return issues;
 }
 
@@ -1152,14 +1147,31 @@ function buildStorySystemSignals(story = '') {
   };
 }
 
-const THREAT_KEYWORDS = [
-  '殺手', '刺客', '追兵', '伏擊', '埋伏', '危機', '殺機', '湍流', '毒素',
-  '敵人', '敵影', '戰鬥', '開打', '迎戰', '對峙', '威脅', '攔截', '侵蝕', '降臨'
+const THREAT_ACTIVE_KEYWORDS = [
+  '殺手', '刺客', '追兵', '伏擊', '埋伏', '危機', '殺機', '敵影',
+  '攔截', '侵蝕', '逼近', '包圍', '開打', '迎戰', '對峙', '降臨'
 ];
 
-function hasThreatCue(text = '') {
+const THREAT_RESOLVED_KEYWORDS = [
+  '停戰', '通過試煉', '危機解除', '擊退', '擊敗', '化解', '撤離成功', '脫離',
+  '遠去', '離去', '收兵', '結束戰鬥'
+];
+
+function hasThreatKeyword(text = '') {
   const source = String(text || '');
-  return THREAT_KEYWORDS.some(k => source.includes(k));
+  return THREAT_ACTIVE_KEYWORDS.some((keyword) => source.includes(keyword));
+}
+
+function getTailWindow(text = '', size = 320) {
+  const source = String(text || '');
+  if (!source) return '';
+  return source.slice(-Math.max(80, Number(size || 320)));
+}
+
+function hasThreatCue(text = '') {
+  const tail = getTailWindow(text, 360);
+  if (!hasThreatKeyword(tail)) return false;
+  return !THREAT_RESOLVED_KEYWORDS.some((keyword) => tail.includes(keyword));
 }
 
 function buildDeterministicFallbackStory({
@@ -1208,7 +1220,7 @@ function buildDeterministicFallbackStory({
 function choiceMentionsThreat(choice) {
   if (!choice || typeof choice !== 'object') return false;
   const text = [choice.name || '', choice.choice || '', choice.desc || '', choice.tag || ''].join(' ');
-  return hasThreatCue(text);
+  return hasThreatKeyword(text);
 }
 
 function isImmediateBattleChoice(choice) {
@@ -1614,7 +1626,7 @@ ${storyFocus.tail || '（無）'}
 【最後一句（最高優先）】
 ${storyFocus.closing || '（無）'}
 
-【已出現元素清單（選項必須引用）】
+【已出現元素清單（優先引用）】
 ${anchorText}
 
 【任務】
@@ -1623,14 +1635,14 @@ ${anchorText}
 2. 要符合故事的劇情發展
 3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
    {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]"}
-4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前威脅或人物
-5. 每個選項至少包含 1 個「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
+4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前人物、場景或衝突
+5. 至少 1 個選項必須包含「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
 6. 不可憑空新增前文不存在的關鍵道具/暗號/座標，除非先交代如何取得
 7. 若寫「線索」，必須明說來源（例如哪個人、哪個艙、哪個檢測結果）
 8. 刮刮樂只允許在鑑價站互動中出現，這裡禁止輸出「刮刮樂」相關選項
 9. 地名只能用於「在某地調查/前往某地」，禁止把地名當物件（例如禁止「把廣州送去檢測」）
-10. 禁止與「最近已做過的選擇」產生同動詞同目的的重複（例如連續多次「檢測」「詢問」「追查同線索」）
-11. 5 個選項要有足夠發散度，避免都在做同一件事（例如至少涵蓋 2-3 種不同目的）
+10. 避免與「最近已做過的選擇」重複同動詞同目的（例如連續多次「檢測」「詢問」「追查同線索」）
+11. 5 個選項要有足夠發散度，避免都在做同一件事
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
@@ -1644,9 +1656,8 @@ ${anchorText}
 額外規則：
 1. 只有「立刻進入戰鬥」的選項，才在句尾加上「（會進入戰鬥）」。
 2. 其餘 [⚔️會戰鬥] 只代表故事走向偏向衝突，不要馬上開打。
-3. 若故事結尾出現殺手/攔截/殺機/危機等威脅，至少要有：
-   - 1 個立即戰鬥選項（句尾含「（會進入戰鬥）」）
-   - 1 個非戰鬥應對選項（例如佈防、談判、撤離、求援）
+3. 若故事「結尾段」仍有明確威脅（例如正在逼近、尚未解除），至少要有 1 個衝突相關選項（可為備戰、追蹤、佈防、談判、撤離或立即戰鬥）。
+4. 是否立刻開打由情境判斷：若尚在鋪陳，可先給非即時衝突選項；若已正面對峙，再給立即戰鬥選項。
 
 禁止出現：打坐修煉、隨便逛逛、原地休息這類選項！
 也禁止出現武俠詞彙：江湖、俠客、門派、武功、內力。
