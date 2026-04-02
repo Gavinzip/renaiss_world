@@ -479,12 +479,15 @@ const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.
 const PORTAL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.PORTAL_GUIDE_MIN_TURNS || 1)));
 const PORTAL_RESHOW_COOLDOWN_TURNS = Math.max(1, Math.min(10, Number(process.env.PORTAL_RESHOW_COOLDOWN_TURNS || 2)));
 const WISH_POOL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.WISH_POOL_GUIDE_MIN_TURNS || 2)));
+const MENTOR_SPAR_COOLDOWN_TURNS = Math.max(1, Math.min(12, Number(process.env.MENTOR_SPAR_COOLDOWN_TURNS || 4)));
+const MENTOR_NEARBY_SCAN_LIMIT = Math.max(1, Math.min(8, Number(process.env.MENTOR_NEARBY_SCAN_LIMIT || 5)));
 const PET_PASSIVE_HEAL_PER_STORY_TURN = Math.max(0, Math.min(30, Number(process.env.PET_PASSIVE_HEAL_PER_STORY_TURN || 10)));
 const QUICK_SHOP_COOLDOWN_TURNS = Math.max(1, Math.min(20, Number(process.env.QUICK_SHOP_COOLDOWN_TURNS || 5)));
 const ROAM_MOVE_BASE_CHANCE = Math.max(0, Math.min(0.95, Number(process.env.ROAM_MOVE_BASE_CHANCE || 0.42)));
 const ROAM_MOVE_EXPLORE_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_EXPLORE_BONUS || 0.16)));
 const ROAM_MOVE_WANDER_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_WANDER_BONUS || 0.2)));
 const STORY_THREAT_SCORE_THRESHOLD = Math.max(10, Math.min(90, Number(process.env.STORY_THREAT_SCORE_THRESHOLD || 38)));
+const MENTOR_BLOCKED_SECT_PATTERN = /(暗潮議會|暗黑組織|沙盜團|馬賊團|反派|Digital|混亂|滲透|刺客|盜匪)/iu;
 
 function tryAcquireStoryLock(userId, reason = 'story') {
   if (!userId) return true;
@@ -859,7 +862,7 @@ function textIncludesAnyKeyword(text = '', keywords = []) {
   return keywords.some((keyword) => source.includes(keyword));
 }
 
-function getNearbySystemAvailabilityForChoiceScoring(location = '') {
+function getNearbySystemAvailabilityForChoiceScoring(location = '', player = null) {
   const featureText = buildLocationFeatureTextForChoiceScoring(location);
   const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const portalNodeDegree = typeof getPortalDestinations === 'function'
@@ -872,9 +875,11 @@ function getNearbySystemAvailabilityForChoiceScoring(location = '') {
   const nearMarket = textIncludesAnyKeyword(featureText, [
     '市集', '巴扎', '交易', '拍賣', '商隊', '商都', '商港', '碼頭', '港', '驛站', '公會', '商店'
   ]) || Number(profile?.difficulty || 3) <= 3;
-  const nearMentor = textIncludesAnyKeyword(featureText, [
+  const nearMentorByMap = textIncludesAnyKeyword(featureText, [
     '工坊', '研究', '學院', '訓練', '巡察', '指揮', '守備', '哨站', '茶師'
   ]) || Number(profile?.difficulty || 3) <= 3;
+  const nearMentorByNpc = player ? getNearbyMentorCandidatesForPlayer(player).length > 0 : false;
+  const nearMentor = nearMentorByNpc || nearMentorByMap;
   return { nearPortal, nearWishPool, nearMarket, nearMentor };
 }
 
@@ -893,7 +898,7 @@ function buildChoiceContextSignals(player = null) {
   const threatScore = computeStoryThreatScore(storyText);
   const travelIntent = hasRoamTravelIntentText([endingFocus, previousAction].filter(Boolean).join(' '));
   const location = String(player?.location || '');
-  const nearby = getNearbySystemAvailabilityForChoiceScoring(location);
+  const nearby = getNearbySystemAvailabilityForChoiceScoring(location, player);
   return {
     storyText,
     endingFocus,
@@ -961,8 +966,31 @@ function computeChoiceContinuityScore(choice, signals = {}) {
   return score;
 }
 
+function rewriteScratchChoiceToShop(choice, player = null) {
+  if (!choice || typeof choice !== 'object') return choice;
+  const action = String(choice.action || '').trim();
+  if (action !== 'scratch_lottery') return choice;
+  const rawText = [choice.tag || '', choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+  const preferDigital = /(digital|暗潮|黑市|流動收購|精明殺價)/iu.test(rawText);
+  const marketAction = preferDigital ? 'market_digital' : 'market_renaiss';
+  const location = String(player?.location || '附近據點');
+  return {
+    ...choice,
+    action: marketAction,
+    tag: marketAction === 'market_digital' ? '[🕳️精明殺價]' : '[🏪公道鑑價]',
+    name: marketAction === 'market_digital' ? '前往流動賣場' : '前往公道賣場',
+    choice: `先進入${location}附近商城，再到櫃檯選擇刮刮樂`,
+    desc: '刮刮樂只在商城內操作，不會在主選項直接執行'
+  };
+}
+
 function normalizeEventChoices(player = null, choices = []) {
-  const pool = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_POOL_COUNT) : [];
+  const pool = Array.isArray(choices)
+    ? choices
+      .filter(Boolean)
+      .slice(0, CHOICE_POOL_COUNT)
+      .map((choice) => rewriteScratchChoiceToShop(choice, player))
+    : [];
   if (pool.length <= CHOICE_DISPLAY_COUNT) return pool;
   const maxPick = Math.min(CHOICE_DISPLAY_COUNT, pool.length);
   const signals = buildChoiceContextSignals(player);
@@ -1390,6 +1418,206 @@ function createGuaranteedIncomeChoice(player) {
   return { ...pick };
 }
 
+function stableHashCode(source = '') {
+  const text = String(source || '');
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function ensureMentorSparRecord(player) {
+  if (!player || typeof player !== 'object') return null;
+  if (!player.mentorSparRecord || typeof player.mentorSparRecord !== 'object') {
+    player.mentorSparRecord = {
+      completedByMentor: {},
+      completedOrder: [],
+      totalCompleted: 0
+    };
+  }
+  if (!player.mentorSparRecord.completedByMentor || typeof player.mentorSparRecord.completedByMentor !== 'object') {
+    player.mentorSparRecord.completedByMentor = {};
+  }
+  if (!Array.isArray(player.mentorSparRecord.completedOrder)) {
+    player.mentorSparRecord.completedOrder = [];
+  }
+  if (!Number.isFinite(Number(player.mentorSparRecord.totalCompleted))) {
+    player.mentorSparRecord.totalCompleted = Object.keys(player.mentorSparRecord.completedByMentor).length;
+  }
+  return player.mentorSparRecord;
+}
+
+function getCompletedMentorIds(player) {
+  const record = ensureMentorSparRecord(player);
+  return record ? new Set(Object.keys(record.completedByMentor || {})) : new Set();
+}
+
+function hasMentorSparCompleted(player, mentorId = '') {
+  const key = String(mentorId || '').trim();
+  if (!key) return false;
+  const record = ensureMentorSparRecord(player);
+  return Boolean(record?.completedByMentor?.[key]);
+}
+
+function chooseMentorTeachTemplatesFromSeed(seed = '') {
+  const masterPool = Array.isArray(EVENTS?.MASTERS) ? EVENTS.MASTERS : [];
+  const chosenMaster = masterPool.length > 0
+    ? masterPool[stableHashCode(seed) % masterPool.length]
+    : null;
+  const masterTeaches = Array.isArray(chosenMaster?.teaches) ? chosenMaster.teaches : [];
+  if (masterTeaches.length > 0) return masterTeaches.slice(0, 3);
+
+  const positiveMoves = Array.isArray(PET.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : [];
+  if (positiveMoves.length === 0) return ['堡壘力場', '電漿盛放', '再生矩陣'];
+  const sorted = [...positiveMoves].sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
+  const picked = [];
+  const seen = new Set();
+  let idx = stableHashCode(seed || 'mentor_seed') % sorted.length;
+  while (picked.length < 3 && seen.size < sorted.length) {
+    const move = sorted[idx];
+    const id = String(move?.id || '').trim();
+    seen.add(id || `idx_${idx}`);
+    if (move?.name && Number(move?.tier || 1) >= 2 && !picked.includes(move.name)) {
+      picked.push(move.name);
+    }
+    idx = (idx + 1) % sorted.length;
+  }
+  if (picked.length < 3) {
+    for (const move of sorted) {
+      if (!move?.name || picked.includes(move.name)) continue;
+      picked.push(move.name);
+      if (picked.length >= 3) break;
+    }
+  }
+  return picked.slice(0, 3);
+}
+
+function isEligibleNearbyMentorNpc(npc = null) {
+  if (!npc || typeof npc !== 'object') return false;
+  const align = String(npc.align || '').trim().toLowerCase();
+  if (align === 'evil') return false;
+  const sect = String(npc.sect || npc.title || '').trim();
+  if (MENTOR_BLOCKED_SECT_PATTERN.test(sect)) return false;
+  return true;
+}
+
+function getNearbyMentorCandidatesForPlayer(player) {
+  if (!player) return [];
+  const location = String(player.location || '').trim();
+  if (!location) return [];
+  const ids = typeof CORE.getNearbyNpcIds === 'function'
+    ? CORE.getNearbyNpcIds(location, MENTOR_NEARBY_SCAN_LIMIT)
+    : [];
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+
+  const completed = getCompletedMentorIds(player);
+  const list = [];
+  for (const npcId of ids) {
+    const info = typeof CORE.getAgentFullInfo === 'function'
+      ? CORE.getAgentFullInfo(npcId)
+      : null;
+    if (!info || !isEligibleNearbyMentorNpc(info)) continue;
+    const mentorId = String(info.id || npcId || '').trim();
+    if (!mentorId || completed.has(mentorId)) continue;
+    if (typeof CORE.isNPCAlive === 'function' && !CORE.isNPCAlive(mentorId)) continue;
+    list.push({
+      id: mentorId,
+      name: String(info.name || '導師').trim(),
+      title: String(info.title || '在地導師').trim(),
+      loc: String(info.loc || location).trim(),
+      teaches: chooseMentorTeachTemplatesFromSeed(mentorId),
+      power: Number(info?.stats?.戰力 || 0)
+    });
+  }
+
+  return list.sort((a, b) => {
+    const p = Number(b.power || 0) - Number(a.power || 0);
+    if (p !== 0) return p;
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+}
+
+function isMentorSparChoice(choice) {
+  if (!choice || typeof choice !== 'object') return false;
+  if (String(choice.action || '').trim() === 'mentor_spar') return true;
+  const text = [choice.tag || '', choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+  if (/(友誼賽|切磋|拜師)/u.test(text)) return true;
+  return /(名師|導師).*(比試|對戰|挑戰|請求)/u.test(text);
+}
+
+function buildMentorSparCooldownInfo(player) {
+  const currentTurn = getPlayerStoryTurns(player);
+  const lastTurn = Number(player?.lastMentorSparTurn || 0);
+  const safeLastTurn = Number.isFinite(lastTurn) ? Math.max(0, Math.floor(lastTurn)) : 0;
+  const nextReadyTurn = safeLastTurn > 0
+    ? safeLastTurn + MENTOR_SPAR_COOLDOWN_TURNS
+    : 0;
+  const remaining = safeLastTurn > 0 ? Math.max(0, nextReadyTurn - currentTurn) : 0;
+  return {
+    currentTurn,
+    lastTurn: safeLastTurn,
+    nextReadyTurn,
+    remaining,
+    ready: remaining <= 0
+  };
+}
+
+function buildMentorCooldownReplacementChoice(player, sourceChoice = null) {
+  const location = String(player?.location || '附近據點');
+  const source = sourceChoice && typeof sourceChoice === 'object' ? sourceChoice : {};
+  const tag = String(source.tag || '').trim();
+  if (/🤝|社交|交談/u.test(tag)) {
+    return {
+      action: 'social',
+      tag: '[🤝需社交]',
+      name: '整理導師筆記',
+      choice: `在${location}整理剛獲得的導師筆記，向在地人確認實戰用法`,
+      desc: '先把新知識消化後再挑戰更高難度'
+    };
+  }
+  return {
+    action: 'explore',
+    tag: '[🔍需探索]',
+    name: '尋找可學對象',
+    choice: `在${location}先整理線索並觀察周邊，等待合適導師現身`,
+    desc: '附近沒有可切磋對象或仍在冷卻中，先做準備更穩妥'
+  };
+}
+
+function assignNearbyMentorToChoice(player, choice, mentor = null) {
+  const source = choice && typeof choice === 'object' ? { ...choice } : {};
+  const picked = mentor || getNearbyMentorCandidatesForPlayer(player)[0] || null;
+  if (!picked) return buildMentorCooldownReplacementChoice(player, source);
+  source.action = 'mentor_spar';
+  source.mentorId = picked.id;
+  source.mentorName = picked.name;
+  source.mentorLoc = picked.loc;
+  source.mentorTitle = picked.title;
+  source.tag = '[🤝友誼賽]';
+  source.name = `向${picked.name}請求友誼賽`;
+  source.choice = `向${picked.name}提出友誼賽請求，驗證你對戰術的掌握（會進入戰鬥）`;
+  source.desc = `${picked.title}願意指導你；每位導師只可切磋一次`;
+  return source;
+}
+
+function enforceMentorSparAvailability(player, choices = []) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
+  if (!player || list.length === 0) return list;
+  const cd = buildMentorSparCooldownInfo(player);
+  const mentors = getNearbyMentorCandidatesForPlayer(player);
+  const canSpar = cd.ready && mentors.length > 0;
+  let assignCursor = 0;
+
+  return list.map((choice) => {
+    if (!isMentorSparChoice(choice)) return choice;
+    if (!canSpar) return buildMentorCooldownReplacementChoice(player, choice);
+    const mentor = mentors[assignCursor % mentors.length];
+    assignCursor += 1;
+    return assignNearbyMentorToChoice(player, choice, mentor);
+  });
+}
+
 function ensureEarlyGameIncomeChoice(player, choices = []) {
   const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
@@ -1413,6 +1641,7 @@ function applyChoicePolicy(player, choices = []) {
   let list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
   list = applyStoryThreatGate(player, list);
+  list = enforceMentorSparAvailability(player, list);
   list = ensurePortalChoiceAvailability(player, list);
   list = ensureWishPoolChoiceAvailability(player, list);
   list = ensureMarketChoiceAvailability(player, list);
@@ -1824,6 +2053,7 @@ async function notifyStoryBusy(interaction) {
 function shouldTriggerBattle(event, result) {
   if (!event) return false;
   if (result?.type === 'combat') return true;
+  if (String(event?.action || '') === 'mentor_spar') return false;
   return isImmediateBattleChoice(event);
 }
 
@@ -2131,16 +2361,40 @@ function buildMoveTemplateByNameMap() {
 
 const MOVE_TEMPLATE_BY_NAME = buildMoveTemplateByNameMap();
 
-function getMentorCandidatesForPlayer(player) {
-  const all = Array.isArray(EVENTS?.MASTERS) ? EVENTS.MASTERS : [];
-  const allowedRegions = new Set(['通用', '正派', 'Renaiss']);
-  const alignment = String(player?.alignment || '正派');
-  let pool = all.filter((m) => allowedRegions.has(String(m?.region || '')));
-  if (alignment !== '正派') {
-    pool = pool.filter((m) => String(m?.requires || '').trim() !== '正派');
+function getMentorCandidatesForPlayer(player, event = null) {
+  const nearby = getNearbyMentorCandidatesForPlayer(player);
+  if (nearby.length === 0) return [];
+  const requestedMentorId = String(event?.mentorId || event?.mentorSpar?.mentorId || '').trim();
+  if (!requestedMentorId) return nearby;
+  const preferred = nearby.find((row) => String(row?.id || '').trim() === requestedMentorId);
+  if (!preferred) return nearby;
+  return [preferred, ...nearby.filter((row) => String(row?.id || '').trim() !== requestedMentorId)];
+}
+
+function resolveMentorCandidateForEvent(event, player) {
+  const requestedMentorId = String(event?.mentorId || event?.mentorSpar?.mentorId || '').trim();
+  if (requestedMentorId) {
+    const info = typeof CORE.getAgentFullInfo === 'function'
+      ? CORE.getAgentFullInfo(requestedMentorId)
+      : null;
+    const sameLocation = String(info?.loc || '').trim() === String(player?.location || '').trim();
+    const completed = hasMentorSparCompleted(player, requestedMentorId);
+    if (info && sameLocation && !completed && isEligibleNearbyMentorNpc(info)) {
+      if (typeof CORE.isNPCAlive !== 'function' || CORE.isNPCAlive(requestedMentorId)) {
+        return {
+          id: requestedMentorId,
+          name: String(info.name || '導師').trim(),
+          title: String(info.title || '在地導師').trim(),
+          loc: String(info.loc || player?.location || '').trim(),
+          teaches: chooseMentorTeachTemplatesFromSeed(requestedMentorId),
+          power: Number(info?.stats?.戰力 || 0)
+        };
+      }
+    }
   }
-  if (pool.length > 0) return pool;
-  return all.filter((m) => String(m?.region || '') !== '機變派');
+  const candidates = getMentorCandidatesForPlayer(player, event);
+  if (candidates.length <= 0) return null;
+  return candidates[0];
 }
 
 function chooseMentorTeachMoves(mentor, pet) {
@@ -2170,14 +2424,17 @@ function chooseMentorTeachMoves(mentor, pet) {
 }
 
 function buildMentorSparResult(event, player, pet) {
-  const candidates = getMentorCandidatesForPlayer(player);
-  const mentor = candidates[Math.floor(Math.random() * Math.max(1, candidates.length))] || {
-    id: 'mentor_fallback',
-    name: '導師',
-    teaches: ['堡壘力場', '電漿盛放', '再生矩陣']
-  };
+  const mentor = resolveMentorCandidateForEvent(event, player);
+  if (!mentor) {
+    return {
+      type: 'social',
+      isMentorSpar: false,
+      mentorUnavailable: true,
+      message: `你在${player?.location || '附近'}暫時沒找到可切磋的在地導師。\n先觀察周邊 NPC 動向，等導師現身再提出友誼賽。`
+    };
+  }
+
   const teachMoves = chooseMentorTeachMoves(mentor, pet);
-  const level = Math.max(1, Number(player?.level || 1));
   const difficulty = getLocationDifficultyForPlayer(player);
   const petMaxHp = Math.max(80, Number(pet?.maxHp || 100));
   const petAtk = Math.max(12, Number(pet?.attack || 20));
@@ -2188,6 +2445,8 @@ function buildMentorSparResult(event, player, pet) {
   const acceptHpThreshold = Math.max(1, Math.floor(enemyMaxHp * MENTOR_SPAR_WIN_HP_RATIO));
   const ratioPercent = Math.round(MENTOR_SPAR_WIN_HP_RATIO * 100);
   const mentorName = String(mentor?.name || '導師');
+  const mentorTitle = String(mentor?.title || '在地導師');
+  const mentorLoc = String(mentor?.loc || player?.location || '').trim();
 
   const fallbackMoves = teachMoves.length > 0
     ? teachMoves
@@ -2197,7 +2456,7 @@ function buildMentorSparResult(event, player, pet) {
     type: 'combat',
     isMentorSpar: true,
     message:
-      `你在${player?.location || '附近'}遇見 **${mentorName}**，對方接受你的請求，提出一場友誼賽。\n` +
+      `你在${mentorLoc || player?.location || '附近'}遇見 **${mentorName}（${mentorTitle}）**，對方接受你的請求，提出一場友誼賽。\n` +
       `規則：將導師壓到 **${ratioPercent}% HP 以下** 即視為通過考驗；若你方寵物被打到 0，導師會當場治療回滿。`,
     enemy: {
       id: `mentor_${String(mentor?.id || 'unknown')}`,
@@ -2215,6 +2474,8 @@ function buildMentorSparResult(event, player, pet) {
     mentorSpar: {
       mentorId: String(mentor?.id || 'unknown'),
       mentorName,
+      mentorTitle,
+      mentorLoc,
       teachMoveIds: fallbackMoves.map((m) => String(m?.id || '').trim()).filter(Boolean),
       teachMoveNames: fallbackMoves.map((m) => String(m?.name || '').trim()).filter(Boolean),
       acceptHpThreshold,
@@ -2250,8 +2511,8 @@ function summarizeBattleDetailForStory(detail = '', maxLen = 260) {
   return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
 }
 
-function composePostBattleStory(player, outcomeLine, detail = '', epilogue = '', triggerChoice = '') {
-  const prev = String(player?.currentStory || '').trim();
+function composePostBattleStory(player, outcomeLine, detail = '', epilogue = '', triggerChoice = '', baseStory = '') {
+  const prev = String(baseStory || player?.battleState?.preBattleStory || player?.currentStory || '').trim();
   const trigger = String(triggerChoice || '').trim();
   const summary = summarizeBattleDetailForStory(detail);
   const parts = [];
@@ -2307,8 +2568,47 @@ function maybeResolveMentorSparResult(player, enemy, roundResult) {
   return roundResult;
 }
 
+function recordMentorSparCompletion(player, spar = {}, result = 'done') {
+  if (!player || typeof player !== 'object') return;
+  const mentorId = String(spar?.mentorId || '').trim();
+  const mentorName = String(spar?.mentorName || mentorId || '導師').trim();
+  if (!mentorId) return;
+
+  const record = ensureMentorSparRecord(player);
+  const now = Date.now();
+  const turn = getPlayerStoryTurns(player);
+  record.completedByMentor[mentorId] = {
+    mentorId,
+    mentorName,
+    mentorTitle: String(spar?.mentorTitle || '').trim(),
+    mentorLoc: String(spar?.mentorLoc || player?.location || '').trim(),
+    result: String(result || 'done'),
+    completedAt: now,
+    completedTurn: turn
+  };
+  if (!record.completedOrder.includes(mentorId)) {
+    record.completedOrder.push(mentorId);
+  }
+  record.totalCompleted = Object.keys(record.completedByMentor).length;
+
+  player.lastMentorSparTurn = turn;
+
+  if (!Array.isArray(player.achievements)) player.achievements = [];
+  const achievementId = `mentor_spar:${mentorId}`;
+  if (!player.achievements.some((row) => String(row?.id || '') === achievementId)) {
+    player.achievements.push({
+      id: achievementId,
+      type: 'mentor_spar',
+      title: `友誼賽成就｜${mentorName}`,
+      summary: '已完成一次性友誼賽，無法再次挑戰同導師',
+      at: now
+    });
+  }
+}
+
 function finalizeMentorSparVictory(player, pet, detailText = '') {
-  const spar = player?.battleState?.mentorSpar || {};
+  const battleState = player?.battleState || {};
+  const spar = battleState?.mentorSpar || {};
   const mentorName = String(spar.mentorName || '導師');
   const teachMoveIds = Array.isArray(spar.teachMoveIds) ? spar.teachMoveIds : [];
   let learnedMove = null;
@@ -2323,8 +2623,9 @@ function finalizeMentorSparVictory(player, pet, detailText = '') {
   }
   PET.savePet(pet);
 
-  const sourceChoice = String(player?.battleState?.sourceChoice || '').trim();
-  player.battleState = null;
+  const sourceChoice = String(battleState?.sourceChoice || '').trim();
+  const baseStory = String(battleState?.preBattleStory || player?.currentStory || '').trim();
+  recordMentorSparCompletion(player, spar, 'victory');
   const learnLine = learnedMove
     ? `📜 ${mentorName}收你為徒，傳授了「${learnedMove.name}」。`
     : `📜 ${mentorName}願意收你為徒，但本次未新增招式（${learnReason || '你已掌握其核心招式'}）。`;
@@ -2339,16 +2640,19 @@ function finalizeMentorSparVictory(player, pet, detailText = '') {
     player,
     `🤝 你在友誼賽中獲得 ${mentorName} 認可。`,
     detailText,
-    `${learnLine}\n你把這份指導記在心裡，準備帶往下一段冒險。`,
-    sourceChoice
+    `${learnLine}\n你把這份指導記在心裡，準備帶往下一段冒險。\n🔒 你已完成與 ${mentorName} 的一次性友誼賽，之後不可重複挑戰。`,
+    sourceChoice,
+    baseStory
   );
+  player.battleState = null;
   player.eventChoices = [];
   CORE.savePlayer(player);
   return { mentorName, learnedMove, learnReason, learnLine };
 }
 
 function finalizeMentorSparDefeat(player, pet, combatant, detailText = '') {
-  const spar = player?.battleState?.mentorSpar || {};
+  const battleState = player?.battleState || {};
+  const spar = battleState?.mentorSpar || {};
   const mentorName = String(spar.mentorName || '導師');
   if (pet) {
     pet.hp = pet.maxHp || 100;
@@ -2361,8 +2665,9 @@ function finalizeMentorSparDefeat(player, pet, combatant, detailText = '') {
   if (combatant?.isHuman) {
     player.stats.生命 = Math.max(1, Number(player?.maxStats?.生命 || 100));
   }
-  const sourceChoice = String(player?.battleState?.sourceChoice || '').trim();
-  player.battleState = null;
+  const sourceChoice = String(battleState?.sourceChoice || '').trim();
+  const baseStory = String(battleState?.preBattleStory || player?.currentStory || '').trim();
+  recordMentorSparCompletion(player, spar, 'defeat');
   rememberPlayer(player, {
     type: '友誼賽',
     content: `在與${mentorName}的友誼賽中落敗`,
@@ -2374,9 +2679,11 @@ function finalizeMentorSparDefeat(player, pet, combatant, detailText = '') {
     player,
     `🤝 你在友誼賽中敗給了 ${mentorName}。`,
     detailText,
-    `${mentorName}沒有追擊，反而立刻替你的夥伴做緊急修復，並提醒你下次該如何調整節奏。`,
-    sourceChoice
+    `${mentorName}沒有追擊，反而立刻替你的夥伴做緊急修復，並提醒你下次該如何調整節奏。\n🔒 這場友誼賽已列入紀錄，同一位導師不會再重複切磋。`,
+    sourceChoice,
+    baseStory
   );
+  player.battleState = null;
   player.eventChoices = [];
   CORE.savePlayer(player);
   return { mentorName };
@@ -4021,12 +4328,14 @@ CLIENT.on('interactionCreate', async (interaction) => {
       if (player.battleState) {
         const enemyName = player.battleState?.enemy?.name || '敵人';
         const sourceChoice = String(player.battleState?.sourceChoice || '').trim();
+        const preBattleStory = String(player.battleState?.preBattleStory || player.currentStory || '').trim();
         player.currentStory = composePostBattleStory(
           player,
           `⚠️ 你暫時脫離與 **${enemyName}** 的交戰，先拉開距離重整節奏。`,
           '',
           '你決定先觀察局勢，再選擇下一步行動。',
-          sourceChoice
+          sourceChoice,
+          preBattleStory
         );
         player.eventChoices = [];
         rememberPlayer(player, {
@@ -4573,6 +4882,50 @@ CLIENT.on('interactionCreate', async (interaction) => {
       user,
       outcome.marketType || 'renaiss',
       `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}`
+    );
+    return;
+  }
+
+  if (customId.startsWith('shop_scratch_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(player);
+    const scratch = ECON.playScratchLottery(player);
+    rememberPlayer(player, {
+      type: '經濟',
+      content: `小賣部刮刮樂（投入 ${scratch.cost || 100} Rns 代幣）`,
+      outcome: scratch.win
+        ? `中獎 ${scratch.reward || 0} Rns 代幣｜淨 ${scratch.net >= 0 ? '+' : ''}${scratch.net}`
+        : `未中獎｜獎池 ${scratch.jackpotPool || 0} Rns 代幣`,
+      importance: scratch.win ? 2 : 1,
+      tags: ['scratch_lottery', scratch.win ? 'win' : 'lose']
+    });
+    if (scratch.success) {
+      recordCashflow(player, {
+        amount: -Number(scratch.cost || 0),
+        category: 'scratch_cost',
+        source: '小賣部刮刮樂投入',
+        marketType
+      });
+      if (Number(scratch.reward || 0) > 0) {
+        recordCashflow(player, {
+          amount: Number(scratch.reward || 0),
+          category: 'scratch_reward',
+          source: '小賣部刮刮樂中獎',
+          marketType
+        });
+      }
+    }
+    CORE.savePlayer(player);
+    await showWorldShopScene(
+      interaction,
+      user,
+      marketType,
+      `${scratch.message}\n💰 目前獎池：${Number(scratch.jackpotPool || 0)} Rns 代幣`
     );
     return;
   }
@@ -5427,28 +5780,33 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       CORE.savePlayer(player);
       let memoryContext = '';
       try {
+        const memStartedAt = Date.now();
         const memoryQueryText = [
           `玩家:${player.name || ''}`,
           `地點:${player.location || ''}`,
           `勢力目擊:${getFactionPresenceHintForPlayer(player)}`,
           `前情:${player.currentStory || ''}`
         ].join('\n');
-        memoryContext = await CORE.getPlayerMemoryContextAsync(player.id, {
-          location: player.location,
-          queryText: memoryQueryText,
-          topK: 6
-        });
-        const npcMemoryContext = await CORE.getNearbyNpcMemoryContextAsync(player.id, {
-          location: player.location,
-          queryText: memoryQueryText,
-          limit: 1,
-          topKPrivate: 3,
-          topKPublic: 2,
-          maxChars: 900
-        });
+        const [playerMemoryContext, npcMemoryContext] = await Promise.all([
+          CORE.getPlayerMemoryContextAsync(player.id, {
+            location: player.location,
+            queryText: memoryQueryText,
+            topK: 6
+          }),
+          CORE.getNearbyNpcMemoryContextAsync(player.id, {
+            location: player.location,
+            queryText: memoryQueryText,
+            limit: 1,
+            topKPrivate: 3,
+            topKPublic: 2,
+            maxChars: 900
+          })
+        ]);
+        memoryContext = String(playerMemoryContext || '');
         if (npcMemoryContext) {
           memoryContext = [memoryContext, npcMemoryContext].filter(Boolean).join('\n\n');
         }
+        console.log(`[Perf][main_menu] memory_context ${Date.now() - memStartedAt}ms`);
       } catch (memErr) {
         stopLoadingAnimation();
         finishGenerationState(player, 'failed', {
@@ -6017,6 +6375,15 @@ async function showCharacter(interaction, user) {
     return;
   }
   
+  const mentorRecord = ensureMentorSparRecord(player);
+  const mentorCompleted = Object.values(mentorRecord?.completedByMentor || {});
+  const mentorCount = mentorCompleted.length;
+  const mentorPreview = mentorCompleted
+    .slice(-3)
+    .map((row) => String(row?.mentorName || row?.mentorId || '未知導師'))
+    .filter(Boolean)
+    .join('、') || '尚未完成';
+
   const embed = new EmbedBuilder()
     .setTitle(`👤 ${player.name}`)
     .setColor(getAlignmentColor(player.alignment))
@@ -6029,7 +6396,9 @@ async function showCharacter(interaction, user) {
       { name: '📊 等級', value: String(player.level), inline: true },
       { name: '🍀 幸運值', value: String(player.stats.運氣), inline: true },
       { name: t('hp'), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
-      { name: t('gold'), value: String(player.stats.財富), inline: true }
+      { name: t('gold'), value: String(player.stats.財富), inline: true },
+      { name: '🎖️ 友誼賽成就', value: `${mentorCount} 位`, inline: true },
+      { name: '🧾 已完成導師', value: mentorPreview, inline: false }
     );
   
   if (pet) {
@@ -6761,6 +7130,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
   const rows = [];
   if (buyButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(buyButtons));
   rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   ));
@@ -6790,7 +7160,7 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
       `你走進了${getMarketTypeLabel(safeMarket)}，櫃台後方的 **${bossName}** 正看著你。\n` +
       `${bossTone}\n\n` +
       `市面賣單：${listingCount} 筆｜你掛單：${myCount} 筆\n` +
-      `請選擇：要掛賣、直接跟老闆議價、看商品，或離開商店。\n` +
+      `請選擇：要掛賣、直接跟老闆議價、買商品、刮刮樂，或離開商店。\n` +
       `掛賣會先出現下拉選單；技能需先從上陣招式卸下才可掛賣。`
     )
     .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
@@ -6800,6 +7170,7 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
     new ButtonBuilder().setCustomId(`shop_npc_haggle_${safeMarket}`).setLabel('🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
   );
   const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`shop_buy_${safeMarket}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
   );
@@ -6964,42 +7335,39 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   }
 
   if (event.action === 'scratch_lottery') {
-    const scratch = ECON.playScratchLottery(player);
-    result = {
-      type: 'scratch_lottery',
-      message: `${scratch.message}\n💰 目前獎池：${Number(scratch.jackpotPool || 0)} Rns 代幣`,
-      gold: scratch.win ? Number(scratch.reward || 0) : 0,
-      scratchWin: Boolean(scratch.win),
-      scratchCost: Number(scratch.cost || 0),
-      scratchNet: Number(scratch.net || 0),
-      scratchJackpot: Number(scratch.jackpotPool || 0),
-      skipGoldApply: true
-    };
+    const marketType = /digital|暗潮|黑市/u.test([event.name || '', event.choice || '', event.desc || ''].join(' '))
+      ? 'digital'
+      : 'renaiss';
+    openShopSession(player, marketType, selectedChoice);
     queueMemory({
-      type: '經濟',
-      content: `小賣部刮刮樂（投入 ${scratch.cost || 100} Rns 代幣）`,
-      outcome: scratch.win
-        ? `中獎 ${scratch.reward || 0} Rns 代幣｜淨 ${scratch.net >= 0 ? '+' : ''}${scratch.net}`
-        : `未中獎｜獎池 ${scratch.jackpotPool || 0} Rns 代幣`,
-      importance: scratch.win ? 2 : 1,
-      tags: ['scratch_lottery', scratch.win ? 'win' : 'lose']
+      type: '商店',
+      content: `進入${getMarketTypeLabel(marketType)}`,
+      outcome: '主選單刮刮樂入口已導向商店內櫃檯操作',
+      importance: 1,
+      tags: ['market', marketType, 'shop_enter', 'scratch_gate']
     });
-    if (scratch.success) {
-      recordCashflow(player, {
-        amount: -Number(scratch.cost || 0),
-        category: 'scratch_cost',
-        source: '小賣部刮刮樂投入',
-        marketType: 'renaiss'
-      });
-      if (Number(scratch.reward || 0) > 0) {
-        recordCashflow(player, {
-          amount: Number(scratch.reward || 0),
-          category: 'scratch_reward',
-          source: '小賣部刮刮樂中獎',
-          marketType: 'renaiss'
-        });
-      }
-    }
+    flushMemories();
+    CORE.savePlayer(player);
+    const embed = new EmbedBuilder()
+      .setTitle(`🏪 ${getMarketTypeLabel(marketType)}`)
+      .setColor(marketType === 'digital' ? 0x9333ea : 0x0ea5e9)
+      .setDescription(
+        `🧭 刮刮樂已移至商店內操作，請點「🎟️ 刮刮樂(100)」。\n\n` +
+        `你可以：掛賣商品、跟老闆議價、買商品，或離開商店回到原本故事。`
+      );
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`shop_post_sell_${marketType}`).setLabel('📤 掛賣商品').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`shop_npc_haggle_${marketType}`).setLabel('🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
+    );
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`shop_scratch_${marketType}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`shop_buy_${marketType}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
+    );
+    const shopMsg = await interaction.channel.send({ embeds: [embed], components: [row1, row2] });
+    trackActiveGameMessage(player, interaction.channel?.id, shopMsg.id);
+    await disableMessageComponents(interaction.channel, interaction.message?.id);
+    return;
   } else if (event.action === 'market_renaiss' || event.action === 'market_digital') {
     const marketType = event.action === 'market_digital' ? 'digital' : 'renaiss';
     openShopSession(player, marketType, selectedChoice);
@@ -7161,14 +7529,24 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     });
   } else if (event.action === 'mentor_spar') {
     result = buildMentorSparResult(event, player, pet);
-    selectedChoice = event.choice || `向${result?.mentorSpar?.mentorName || '導師'}提出友誼賽`;
-    queueMemory({
-      type: '友誼賽',
-      content: selectedChoice,
-      outcome: `對手 ${result?.mentorSpar?.mentorName || result?.enemy?.name || '導師'}｜門檻 ${Math.round(Number(result?.mentorSpar?.acceptHpRatio || MENTOR_SPAR_WIN_HP_RATIO) * 100)}%`,
-      importance: 2,
-      tags: ['mentor_spar', 'training']
-    });
+    selectedChoice = event.choice || `向${result?.mentorSpar?.mentorName || event?.mentorName || '導師'}提出友誼賽`;
+    if (result?.type === 'combat') {
+      queueMemory({
+        type: '友誼賽',
+        content: selectedChoice,
+        outcome: `對手 ${result?.mentorSpar?.mentorName || result?.enemy?.name || '導師'}｜門檻 ${Math.round(Number(result?.mentorSpar?.acceptHpRatio || MENTOR_SPAR_WIN_HP_RATIO) * 100)}%`,
+        importance: 2,
+        tags: ['mentor_spar', 'training']
+      });
+    } else {
+      queueMemory({
+        type: '友誼賽',
+        content: `嘗試發起友誼賽：${selectedChoice}`,
+        outcome: '附近暫無可切磋導師',
+        importance: 1,
+        tags: ['mentor_spar', 'unavailable']
+      });
+    }
   } else {
     result = EVENTS.executeEvent(event, player);
     queueMemory({
@@ -7401,6 +7779,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   }
   
   if (enteringBattle) {
+    const preBattleStory = composeActionBridgeStory(
+      player,
+      selectedChoice,
+      String(result?.message || event?.desc || '').trim()
+    );
     const enemy = buildEnemyForBattle(
       event,
       result,
@@ -7434,6 +7817,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       turn: 1,
       startedAt: Date.now(),
       sourceChoice: selectedChoice,
+      preBattleStory,
       humanState: null,
       petState: null,
       mentorSpar: mentorSparState
@@ -7497,30 +7881,35 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   // 取得記憶上下文
   let memoryContext = '';
   try {
+    const memStartedAt = Date.now();
     const memoryQueryText = [
       `剛選擇:${selectedChoice}`,
       `當前地點:${player.location || ''}`,
       `勢力目擊:${getFactionPresenceHintForPlayer(player)}`,
       `前一段故事:${player.currentStory || ''}`
     ].join('\n');
-    memoryContext = await CORE.getPlayerMemoryContextAsync(user.id, {
-      location: player.location,
-      previousChoice: selectedChoice,
-      previousStory: player.currentStory || '',
-      queryText: memoryQueryText,
-      topK: 8
-    });
-    const npcMemoryContext = await CORE.getNearbyNpcMemoryContextAsync(user.id, {
-      location: player.location,
-      queryText: memoryQueryText,
-      limit: 1,
-      topKPrivate: 3,
-      topKPublic: 2,
-      maxChars: 980
-    });
+    const [playerMemoryContext, npcMemoryContext] = await Promise.all([
+      CORE.getPlayerMemoryContextAsync(user.id, {
+        location: player.location,
+        previousChoice: selectedChoice,
+        previousStory: player.currentStory || '',
+        queryText: memoryQueryText,
+        topK: 8
+      }),
+      CORE.getNearbyNpcMemoryContextAsync(user.id, {
+        location: player.location,
+        queryText: memoryQueryText,
+        limit: 1,
+        topKPrivate: 3,
+        topKPublic: 2,
+        maxChars: 980
+      })
+    ]);
+    memoryContext = String(playerMemoryContext || '');
     if (npcMemoryContext) {
       memoryContext = [memoryContext, npcMemoryContext].filter(Boolean).join('\n\n');
     }
+    console.log(`[Perf][event] memory_context ${Date.now() - memStartedAt}ms`);
   } catch (memErr) {
     finishGenerationState(player, 'failed', {
       phase: 'memory_failed',
@@ -8037,6 +8426,7 @@ async function startManualBattle(interaction, user) {
       turn: 1,
       startedAt: Date.now(),
       sourceChoice: '突發戰鬥',
+      preBattleStory: String(player?.currentStory || '').trim(),
       humanState: null,
       petState: null
     };
@@ -8082,6 +8472,7 @@ async function startAutoBattle(interaction, user) {
       turn: 1,
       startedAt: Date.now(),
       sourceChoice: '突發戰鬥',
+      preBattleStory: String(player?.currentStory || '').trim(),
       humanState: null,
       petState: null
     };
@@ -8179,7 +8570,9 @@ async function startAutoBattle(interaction, user) {
       await interaction.update({ embeds: [embed], content: null, components: [row] });
       return;
     }
-    const sourceChoice = String(player?.battleState?.sourceChoice || '').trim();
+    const battleStateSnapshot = player?.battleState || {};
+    const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
+    const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
     player.stats.財富 += finalResult.gold;
     recordCashflow(player, {
       amount: Number(finalResult.gold || 0),
@@ -8190,7 +8583,6 @@ async function startAutoBattle(interaction, user) {
     const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
-    player.battleState = null;
     rememberPlayer(player, {
       type: '戰鬥',
       content: `AI 自動戰鬥擊敗 ${enemy.name}`,
@@ -8203,8 +8595,10 @@ async function startAutoBattle(interaction, user) {
       `🏆 你的 AI 戰鬥成功擊敗 **${enemy.name}**，獲得 ${finalResult.gold} Rns 代幣與「${battleLoot.name}」。`,
       buildAIBattleStory(rounds, combatant, enemy, finalResult),
       `你迅速整隊，準備把這場勝利帶來的連鎖影響推進到下一段冒險。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
-      sourceChoice
+      sourceChoice,
+      preBattleStory
     );
+    player.battleState = null;
     player.eventChoices = [];
     CORE.savePlayer(player);
 
@@ -8277,6 +8671,7 @@ async function handleFight(interaction, user) {
       turn: 1,
       startedAt: Date.now(),
       sourceChoice: '突發戰鬥',
+      preBattleStory: String(player?.currentStory || '').trim(),
       humanState: null,
       petState: null
     };
@@ -8353,7 +8748,9 @@ async function handleUseMove(interaction, user, moveIndex) {
       await interaction.update({ embeds: [embed], components: [row] });
       return;
     }
-    const sourceChoice = String(player?.battleState?.sourceChoice || '').trim();
+    const battleStateSnapshot = player?.battleState || {};
+    const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
+    const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
     player.stats.財富 += result.gold;
     recordCashflow(player, {
       amount: Number(result.gold || 0),
@@ -8364,7 +8761,6 @@ async function handleUseMove(interaction, user, moveIndex) {
     const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
-    player.battleState = null;
     rememberPlayer(player, {
       type: '戰鬥',
       content: `擊敗 ${enemy.name}`,
@@ -8377,8 +8773,10 @@ async function handleUseMove(interaction, user, moveIndex) {
       `🏆 你擊敗了 **${enemy.name}**，取得 ${result.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
       result.message,
       `戰場餘波未散，你準備依據這次勝負帶來的新線索繼續推進。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
-      sourceChoice
+      sourceChoice,
+      preBattleStory
     );
+    player.battleState = null;
     player.eventChoices = [];
     CORE.savePlayer(player);
 
@@ -8478,6 +8876,9 @@ async function handleBattleWait(interaction, user) {
       return;
     }
     player.stats.財富 += result.gold;
+    const battleStateSnapshot = player?.battleState || {};
+    const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
+    const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
     recordCashflow(player, {
       amount: Number(result.gold || 0),
       category: 'battle_victory_wait',
@@ -8487,7 +8888,6 @@ async function handleBattleWait(interaction, user) {
     const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
-    player.battleState = null;
     rememberPlayer(player, {
       type: '戰鬥',
       content: `蓄能待機後反殺 ${enemy.name}`,
@@ -8495,6 +8895,15 @@ async function handleBattleWait(interaction, user) {
       importance: 3,
       tags: ['battle', 'victory', 'wait_turn']
     });
+    player.currentStory = composePostBattleStory(
+      player,
+      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${result.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      result.message,
+      `你把這段對戰節奏記下，準備把優勢延伸到下一段冒險。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
+      sourceChoice,
+      preBattleStory
+    );
+    player.battleState = null;
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
@@ -8574,6 +8983,17 @@ async function handleFlee(interaction, user, attemptNum) {
   }
 
   if (result.success) {
+    const battleStateSnapshot = player?.battleState || {};
+    const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
+    const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
+    player.currentStory = composePostBattleStory(
+      player,
+      `🏃 你成功脫離與 **${enemy.name}** 的交戰，保住了隊伍狀態。`,
+      result.message,
+      '你拉開距離重整資源，準備以更穩定的節奏回到冒險。',
+      sourceChoice,
+      preBattleStory
+    );
     player.battleState = null;
     rememberPlayer(player, {
       type: '戰鬥',

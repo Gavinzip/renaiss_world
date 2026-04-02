@@ -287,10 +287,6 @@ async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', locati
       '用途：玩家主動前往許願池並準備許願。\n' +
       '限制：描述要有儀式感，不要出現「模板」或「系統」字眼。\n' +
       '固定標籤：tag 必須是 [🪙奇遇]',
-    scratch_lottery:
-      `用途：玩家在 ${location || '目前位置'} 附近的小賣部購買刮刮樂。\n` +
-      '限制：要明確點出本次投入 100 Rns 代幣、可能中 500 Rns 代幣。\n' +
-      '固定標籤：tag 必須是 [🎟️刮刮樂]',
     mentor_spar:
       `用途：玩家在 ${location || '目前位置'} 遇到正派名師，主動提出友誼賽求指導。\n` +
       '限制：要清楚描述這是「友誼賽」，不是生死戰；語氣尊重且有學習目的。\n' +
@@ -512,7 +508,7 @@ async function injectMarketChoices(
   if (selectedMarketChoices.length === 0 && marketChoices.length > 0) {
     selectedMarketChoices = [marketChoices[0]];
   }
-  const reservedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'mentor_spar']);
+  const reservedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'mentor_spar']);
 
   for (const marketChoice of selectedMarketChoices) {
     if (work.some(c => c.action === marketChoice.action)) continue;
@@ -532,46 +528,6 @@ async function injectMarketChoices(
   }
 
   return work.slice(0, 7);
-}
-
-async function injectScratchLotteryChoice(choices, playerLang = 'zh-TW', location = '', options = {}) {
-  const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
-  if (base.some(c => c.action === 'scratch_lottery')) return base.slice(0, 7);
-  const { nearMarket } = getNearbySystemAvailability(location);
-  const storyMarketCue = Boolean(options?.storySignals?.market);
-  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
-  const newbieFriendlyArea = Number(profile?.difficulty || 3) <= 2;
-  if (!nearMarket && !storyMarketCue) return base.slice(0, 7);
-  if (!storyMarketCue && !newbieFriendlyArea) return base.slice(0, 7);
-
-  const scratchChoice = await generateSystemChoiceWithAI({
-    action: 'scratch_lottery',
-    playerLang,
-    location
-  });
-
-  const reservedActions = new Set([
-    'portal_intent',
-    'wish_pool',
-    'market_renaiss',
-    'market_digital',
-    'scratch_lottery'
-  ]);
-  if (base.length < 7) {
-    base.push(scratchChoice);
-    return base.slice(0, 7);
-  }
-
-  let replaceIdx = -1;
-  for (let i = base.length - 1; i >= 0; i--) {
-    if (!reservedActions.has(String(base[i]?.action || ''))) {
-      replaceIdx = i;
-      break;
-    }
-  }
-  if (replaceIdx < 0) replaceIdx = base.length - 1;
-  base[replaceIdx] = scratchChoice;
-  return base.slice(0, 7);
 }
 
 async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = '', options = {}) {
@@ -603,7 +559,6 @@ async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = 
     'wish_pool',
     'market_renaiss',
     'market_digital',
-    'scratch_lottery',
     'mentor_spar'
   ]);
   if (base.length < 7) {
@@ -934,41 +889,87 @@ function buildStorySystemSignals(story = '') {
   };
 }
 
-function buildGroundedReplacementChoice(index = 0, anchors = [], playerLang = 'zh-TW') {
-  const anchor = String(
-    anchors.find((item) => item && String(item).trim().length <= 18) ||
-    anchors[0] ||
-    '現場線索'
-  ).trim();
+function isLikelyLocationAnchor(token = '', location = '') {
+  const text = String(token || '').trim();
+  if (!text) return false;
+  if (location && (text === location || text.includes(location) || location.includes(text))) return true;
+  if (RENAISS_LOCATIONS && Object.prototype.hasOwnProperty.call(RENAISS_LOCATIONS, text)) return true;
+  return /(城|鎮|港|街|巷|區|島|海域|碼頭|都|州|渡口|關|礦區|平原|山谷)$/u.test(text);
+}
+
+function isLikelyObjectAnchor(token = '') {
+  const text = String(token || '').trim();
+  if (!text) return false;
+  return /(貼片|封存艙|艙|修復臺|修復台|檢測儀|檢測|座標|編碼|來源代碼|通行證|卡片|樣本|晶片|零件|修復液|徽章|藏品|收藏品|憑證)/u.test(text);
+}
+
+function pickAnchorBundle(anchors = [], location = '') {
+  const list = Array.isArray(anchors)
+    ? anchors.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const shortFirst = list.find((item) => item.length <= 18) || list[0] || '';
+  const locationAnchor = list.find((item) => isLikelyLocationAnchor(item, location)) || (location ? String(location) : '');
+  const objectAnchor = list.find((item) => isLikelyObjectAnchor(item)) || '';
+  const contextAnchor = shortFirst || locationAnchor || objectAnchor || '現場線索';
+  const safeObject = objectAnchor || '可疑樣本';
+  const safePlace = locationAnchor || location || '現場';
+  return { contextAnchor, safeObject, safePlace, contextIsLocation: isLikelyLocationAnchor(contextAnchor, location) };
+}
+
+function buildGroundedReplacementChoice(index = 0, anchors = [], playerLang = 'zh-TW', location = '') {
+  const { contextAnchor, safeObject, safePlace, contextIsLocation } = pickAnchorBundle(anchors, location);
+  const traceTextTw = contextIsLocation
+    ? `在「${contextAnchor}」持續追查來源與流向`
+    : `沿著「${contextAnchor}」繼續追查來源與流向`;
+  const witnessTextTw = contextIsLocation
+    ? `向「${contextAnchor}」現場目擊者逐一確認出現時間`
+    : `向現場目擊者逐一確認「${contextAnchor}」出現時間`;
+  const inspectTextTw = `把「${safeObject}」送去${safePlace}就近檢測點做真偽鑑定`;
+
+  const traceTextCn = contextIsLocation
+    ? `在「${contextAnchor}」持续追查来源与流向`
+    : `沿着「${contextAnchor}」继续追查来源与流向`;
+  const witnessTextCn = contextIsLocation
+    ? `向「${contextAnchor}」现场目击者逐一确认出现时间`
+    : `向现场目击者逐一确认「${contextAnchor}」出现时间`;
+  const inspectTextCn = `把「${safeObject}」送去${safePlace}就近检测点做真伪鉴定`;
+
+  const traceTextEn = contextIsLocation
+    ? `Continue tracing source and flow in "${contextAnchor}"`
+    : `Follow the trail behind "${contextAnchor}" and trace source records`;
+  const witnessTextEn = contextIsLocation
+    ? `Ask witnesses on-site in "${contextAnchor}" to rebuild the timeline`
+    : `Ask nearby witnesses specifically about "${contextAnchor}"`;
+  const inspectTextEn = `Send "${safeObject}" to a nearby lab in ${safePlace} for authenticity scan`;
 
   if (playerLang === 'en') {
     const templates = [
-      { name: 'Trace the Source', choice: `Follow the trail behind "${anchor}" and verify origin records`, desc: 'Confirm who touched the item before making the next move', tag: '[🔍需探索]', action: 'explore' },
-      { name: 'Question Witness', choice: `Ask nearby witnesses specifically about "${anchor}"`, desc: 'Build a clean timeline and reduce false leads', tag: '[🤝需社交]', action: 'social' },
-      { name: 'Run Authenticity Scan', choice: `Use onsite tools to test whether "${anchor}" is genuine`, desc: 'Get evidence first, then decide buy/sell or chase', tag: '[🔍需探索]', action: 'explore' }
+      { name: 'Trace the Source', choice: traceTextEn, desc: 'Confirm who touched the clue before making the next move', tag: '[🔍需探索]', action: 'explore' },
+      { name: 'Question Witness', choice: witnessTextEn, desc: 'Build a clean timeline and reduce false leads', tag: '[🤝需社交]', action: 'social' },
+      { name: 'Run Authenticity Scan', choice: inspectTextEn, desc: 'Get evidence first, then decide buy/sell or chase', tag: '[🔍需探索]', action: 'explore' }
     ];
     return templates[index % templates.length];
   }
   if (playerLang === 'zh-CN') {
     const templates = [
-      { name: '追查来源', choice: `沿着「${anchor}」继续追查来源与流向`, desc: '先确认谁接触过这条线索，再决定下一步', tag: '[🔍需探索]', action: 'explore' },
-      { name: '询问目击者', choice: `向现场目击者逐一确认「${anchor}」出现时间`, desc: '补齐时间线，避免被假情报带偏', tag: '[🤝需社交]', action: 'social' },
-      { name: '做真伪检测', choice: `把「${anchor}」送去就近检测点做真伪鉴定`, desc: '拿到检测结果后再考虑交易或追击', tag: '[🔍需探索]', action: 'explore' }
+      { name: '追查来源', choice: traceTextCn, desc: '先确认谁接触过这条线索，再决定下一步', tag: '[🔍需探索]', action: 'explore' },
+      { name: '询问目击者', choice: witnessTextCn, desc: '补齐时间线，避免被假情报带偏', tag: '[🤝需社交]', action: 'social' },
+      { name: '做真伪检测', choice: inspectTextCn, desc: '拿到检测结果后再考虑交易或追击', tag: '[🔍需探索]', action: 'explore' }
     ];
     return templates[index % templates.length];
   }
   const templates = [
-    { name: '追查來源', choice: `沿著「${anchor}」繼續追查來源與流向`, desc: '先確認誰接觸過這條線索，再決定下一步', tag: '[🔍需探索]', action: 'explore' },
-    { name: '詢問目擊者', choice: `向現場目擊者逐一確認「${anchor}」出現時間`, desc: '補齊時間線，避免被假情報帶偏', tag: '[🤝需社交]', action: 'social' },
-    { name: '做真偽檢測', choice: `把「${anchor}」送去就近檢測點做真偽鑑定`, desc: '拿到檢測結果後再考慮交易或追擊', tag: '[🔍需探索]', action: 'explore' }
+    { name: '追查來源', choice: traceTextTw, desc: '先確認誰接觸過這條線索，再決定下一步', tag: '[🔍需探索]', action: 'explore' },
+    { name: '詢問目擊者', choice: witnessTextTw, desc: '補齊時間線，避免被假情報帶偏', tag: '[🤝需社交]', action: 'social' },
+    { name: '做真偽檢測', choice: inspectTextTw, desc: '拿到檢測結果後再考慮交易或追擊', tag: '[🔍需探索]', action: 'explore' }
   ];
   return templates[index % templates.length];
 }
 
-function enforceChoiceGrounding(choices = [], { anchors = [], storyText = '', playerLang = 'zh-TW' } = {}) {
+function enforceChoiceGrounding(choices = [], { anchors = [], storyText = '', playerLang = 'zh-TW', location = '' } = {}) {
   const list = Array.isArray(choices) ? choices.filter(Boolean).map((item) => ({ ...item })) : [];
   if (list.length === 0) return list;
-  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'mentor_spar']);
+  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'mentor_spar']);
   const storySignals = buildStorySystemSignals(storyText);
 
   return list.map((choice, idx) => {
@@ -982,9 +983,9 @@ function enforceChoiceGrounding(choices = [], { anchors = [], storyText = '', pl
     const hasUnanchoredEntity = hasUnanchoredEntityToken(text, anchors);
 
     if (!hasAnchor || hasBannedPhrase || hasVaguePhrase || hasUnanchoredEntity) {
-      const replacement = buildGroundedReplacementChoice(idx, anchors, playerLang);
+      const replacement = buildGroundedReplacementChoice(idx, anchors, playerLang, location);
       if (!storySignals.market && /交易|成交|收購|鑑價/u.test(String(replacement.choice || ''))) {
-        return buildGroundedReplacementChoice(idx + 1, anchors, playerLang);
+        return buildGroundedReplacementChoice(idx + 1, anchors, playerLang, location);
       }
       return normalizeChoiceByLanguage(replacement, playerLang);
     }
@@ -1142,7 +1143,7 @@ function createThreatCounterChoice(playerLang = 'zh-TW', anchors = []) {
 function upsertCriticalChoice(work, replacement) {
   if (!Array.isArray(work) || !replacement) return;
   if (work.some(c => (c?.choice || '') === replacement.choice)) return;
-  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'mentor_spar']);
+  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'mentor_spar']);
   let replaceIdx = -1;
   for (let i = work.length - 1; i >= 0; i--) {
     const item = work[i];
@@ -1205,11 +1206,6 @@ async function injectSystemChoicesSafely(
     work = await injectMarketChoices(work, playerLang, location, newbieMask, { forceMarket, storySignals });
   } catch (e) {
     console.error('[AI] injectMarketChoices 失敗，略過:', e?.message || e);
-  }
-  try {
-    work = await injectScratchLotteryChoice(work, playerLang, location, { storySignals });
-  } catch (e) {
-    console.error('[AI] injectScratchLotteryChoice 失敗，略過:', e?.message || e);
   }
   try {
     work = await injectMentorSparChoice(work, playerLang, location, { storySignals });
@@ -1547,6 +1543,8 @@ ${anchorText}
 5. 每個選項至少包含 1 個「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
 6. 不可憑空新增前文不存在的關鍵道具/暗號/座標，除非先交代如何取得
 7. 若寫「線索」，必須明說來源（例如哪個人、哪個艙、哪個檢測結果）
+8. 刮刮樂只允許在商城互動中出現，這裡禁止輸出「刮刮樂」相關選項
+9. 地名只能用於「在某地調查/前往某地」，禁止把地名當物件（例如禁止「把廣州送去檢測」）
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
@@ -1635,18 +1633,10 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     const groundedChoices = enforceChoiceGrounding(normalized, {
       anchors: storyAnchors,
       storyText: fullStoryText,
-      playerLang
-    });
-    const withMarket = await injectSystemChoicesSafely(groundedChoices, {
       playerLang,
-      location,
-      newbieMask,
-      storyText: fullStoryText,
-      forcePortal,
-      forceWishPool,
-      forceMarket
+      location
     });
-    const finalChoices = enforceThreatChoiceContinuity(withMarket, previousStory || '', playerLang, {
+    const finalChoices = enforceThreatChoiceContinuity(groundedChoices, previousStory || '', playerLang, {
       anchors: storyAnchors
     });
     console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms`);
@@ -1654,16 +1644,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
   } catch (e) {
     console.error('[AI] 生成選項失敗，改用本地保底選項:', e.message);
     const fallbackChoices = buildDeterministicFallbackChoices(player, previousStory, playerLang);
-    const withSystem = await injectSystemChoicesSafely(fallbackChoices, {
-      playerLang,
-      location,
-      newbieMask,
-      storyText: fullStoryText,
-      forcePortal,
-      forceWishPool,
-      forceMarket
-    });
-    const finalChoices = enforceThreatChoiceContinuity(withSystem, previousStory || '', playerLang, {
+    const finalChoices = enforceThreatChoiceContinuity(fallbackChoices, previousStory || '', playerLang, {
       anchors: storyAnchors
     });
     return finalChoices.slice(0, 7);
@@ -1720,6 +1701,7 @@ async function generateInitialChoices(player, pet) {
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
 4. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐
 5. 避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴，優先使用收藏語彙
+6. 刮刮樂只允許在商城互動中出現，這裡禁止輸出「刮刮樂」相關選項
 
 風險標籤：
 - [🔥高風險] - 可能危險
@@ -1778,24 +1760,13 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       throw new Error(`initial choices too few: ${choices.length}`);
     }
     const normalized = choices.slice(0, 7).map(c => normalizeChoiceByLanguage(c, playerLang));
-    const finalChoices = await injectSystemChoicesSafely(normalized, {
-      playerLang,
-      location,
-      newbieMask,
-      storyText: ''
-    });
+    const finalChoices = normalized;
     console.log(`[AI][generateInitialChoices] total ${Date.now() - startedAt}ms`);
     return finalChoices;
   } catch (e) {
     console.error('[AI] 生成開場選項失敗，改用本地保底選項:', e.message);
     const fallbackChoices = buildDeterministicFallbackChoices(player, '', playerLang);
-    const withSystem = await injectSystemChoicesSafely(fallbackChoices, {
-      playerLang,
-      location,
-      newbieMask,
-      storyText: ''
-    });
-    return withSystem.slice(0, 7);
+    return fallbackChoices.slice(0, 7);
   }
 }
 
