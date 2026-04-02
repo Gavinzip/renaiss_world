@@ -111,6 +111,15 @@ function _runGit(args, cwd) {
   return (result.stdout || '').trim();
 }
 
+function _remoteHasBranch(repoUrl, branchName) {
+  const result = spawnSync('git', ['ls-remote', '--heads', repoUrl, branchName], { encoding: 'utf-8' });
+  if (result.status !== 0) {
+    const err = _maskRepoSecrets((result.stderr || result.stdout || '').trim());
+    throw new Error(`git ls-remote --heads <repo> ${branchName} failed: ${err}`);
+  }
+  return Boolean(String(result.stdout || '').trim());
+}
+
 function _hasGitStagedChanges(cwd) {
   const result = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd, encoding: 'utf-8' });
   return result.status === 1;
@@ -136,14 +145,24 @@ function _copyWorldDataToRepo() {
 function _ensureRepoReady(repoUrl) {
   const backupRepoDir = _getBackupRepoDir();
   const gitDir = path.join(backupRepoDir, '.git');
+  const branchExistsOnRemote = _remoteHasBranch(repoUrl, BACKUP_BRANCH);
   if (!fs.existsSync(gitDir)) {
     fs.mkdirSync(path.dirname(backupRepoDir), { recursive: true });
-    _runGit(['clone', '--branch', BACKUP_BRANCH, '--single-branch', repoUrl, backupRepoDir], PROJECT_ROOT);
+    if (branchExistsOnRemote) {
+      _runGit(['clone', '--branch', BACKUP_BRANCH, '--single-branch', repoUrl, backupRepoDir], PROJECT_ROOT);
+    } else {
+      _runGit(['clone', repoUrl, backupRepoDir], PROJECT_ROOT);
+      _runGit(['checkout', '-B', BACKUP_BRANCH], backupRepoDir);
+    }
   } else {
     _runGit(['remote', 'set-url', 'origin', repoUrl], backupRepoDir);
-    _runGit(['fetch', 'origin', BACKUP_BRANCH], backupRepoDir);
-    _runGit(['checkout', BACKUP_BRANCH], backupRepoDir);
-    _runGit(['pull', '--ff-only', 'origin', BACKUP_BRANCH], backupRepoDir);
+    if (branchExistsOnRemote) {
+      _runGit(['fetch', 'origin', BACKUP_BRANCH], backupRepoDir);
+      _runGit(['checkout', BACKUP_BRANCH], backupRepoDir);
+      _runGit(['pull', '--ff-only', 'origin', BACKUP_BRANCH], backupRepoDir);
+    } else {
+      _runGit(['checkout', '-B', BACKUP_BRANCH], backupRepoDir);
+    }
   }
 
   _runGit(['config', 'user.name', BACKUP_GIT_NAME], backupRepoDir);
