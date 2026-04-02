@@ -4,6 +4,7 @@ const { spawnSync } = require('child_process');
 const { WORLD_DATA_ROOT, PROJECT_ROOT, getActiveWorldDataRoot } = require('./storage-paths');
 
 const BACKUP_REPO = String(process.env.WORLD_BACKUP_REPO || '').trim();
+const BACKUP_PAT = String(process.env.WORLD_BACKUP_PAT || '').trim();
 const BACKUP_BRANCH = String(process.env.WORLD_BACKUP_BRANCH || 'main').trim() || 'main';
 const CONFIGURED_REPO_DIR_RAW = String(process.env.WORLD_BACKUP_REPO_DIR || '').trim();
 const BACKUP_SUBDIR = String(process.env.WORLD_BACKUP_SUBDIR || path.basename(WORLD_DATA_ROOT) || 'RENAISSANCEWORLD').trim();
@@ -22,6 +23,26 @@ let _onResult = null;
 
 function _isBackupEnabled() {
   return String(process.env.WORLD_BACKUP_ENABLED || '0').trim().toLowerCase() === '1';
+}
+
+function _maskRepoSecrets(text = '') {
+  return String(text || '')
+    .replace(/x-access-token:[^@]+@/gi, 'x-access-token:***@')
+    .replace(/github_pat_[A-Za-z0-9_]+/g, 'github_pat_***');
+}
+
+function _resolveBackupRepoUrl() {
+  const repo = String(BACKUP_REPO || '').trim();
+  if (!repo) return '';
+  if (/x-access-token:[^@]+@/i.test(repo)) return repo;
+  if (!BACKUP_PAT) return repo;
+  if (/^https:\/\/github\.com\//i.test(repo)) {
+    return repo.replace(
+      /^https:\/\/github\.com\//i,
+      `https://x-access-token:${encodeURIComponent(BACKUP_PAT)}@github.com/`
+    );
+  }
+  return repo;
 }
 
 function _getBackupRepoDir() {
@@ -46,8 +67,9 @@ function _getBackupRepoDir() {
 function _runGit(args, cwd) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
   if (result.status !== 0) {
-    const err = (result.stderr || result.stdout || '').trim();
-    throw new Error(`git ${args.join(' ')} failed: ${err}`);
+    const err = _maskRepoSecrets((result.stderr || result.stdout || '').trim());
+    const safeArgs = args.map((item) => _maskRepoSecrets(item)).join(' ');
+    throw new Error(`git ${safeArgs} failed: ${err}`);
   }
   return (result.stdout || '').trim();
 }
@@ -74,13 +96,14 @@ function _copyWorldDataToRepo() {
   });
 }
 
-function _ensureRepoReady() {
+function _ensureRepoReady(repoUrl) {
   const backupRepoDir = _getBackupRepoDir();
   const gitDir = path.join(backupRepoDir, '.git');
   if (!fs.existsSync(gitDir)) {
     fs.mkdirSync(path.dirname(backupRepoDir), { recursive: true });
-    _runGit(['clone', '--branch', BACKUP_BRANCH, '--single-branch', BACKUP_REPO, backupRepoDir], PROJECT_ROOT);
+    _runGit(['clone', '--branch', BACKUP_BRANCH, '--single-branch', repoUrl, backupRepoDir], PROJECT_ROOT);
   } else {
+    _runGit(['remote', 'set-url', 'origin', repoUrl], backupRepoDir);
     _runGit(['fetch', 'origin', BACKUP_BRANCH], backupRepoDir);
     _runGit(['checkout', BACKUP_BRANCH], backupRepoDir);
     _runGit(['pull', '--ff-only', 'origin', BACKUP_BRANCH], backupRepoDir);
@@ -119,12 +142,13 @@ async function runWorldBackup(reason = 'manual') {
   if (!_isBackupEnabled() && !manualRequested) {
     return { ok: false, skipped: true, reason: 'disabled' };
   }
-  if (!BACKUP_REPO) return { ok: false, skipped: true, reason: 'missing_repo' };
+  const repoUrl = _resolveBackupRepoUrl();
+  if (!repoUrl) return { ok: false, skipped: true, reason: 'missing_repo' };
   if (_running) return { ok: false, skipped: true, reason: 'already_running' };
 
   _running = true;
   try {
-    _ensureRepoReady();
+    _ensureRepoReady(repoUrl);
     _copyWorldDataToRepo();
     const backupRepoDir = _getBackupRepoDir();
     _runGit(['add', '-A'], backupRepoDir);
@@ -176,7 +200,7 @@ function startWorldBackupScheduler(onResult) {
     return;
   }
 
-  if (!BACKUP_REPO) {
+  if (!_resolveBackupRepoUrl()) {
     console.log('[Backup] disabled: WORLD_BACKUP_REPO is empty');
     return;
   }
