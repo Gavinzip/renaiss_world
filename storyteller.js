@@ -833,6 +833,80 @@ function buildNpcDialogueEvidenceText(evidence = [], playerLang = 'zh-TW') {
     .join('\n');
 }
 
+function tokenizeStoryFocusText(text = '') {
+  const source = String(text || '').toLowerCase();
+  if (!source) return [];
+  const zh = source.match(/[\u4e00-\u9fff]{1,2}/g) || [];
+  const alpha = source.match(/[a-z0-9]{2,}/g) || [];
+  return [...new Set([...zh, ...alpha].map((item) => item.trim()).filter(Boolean))].slice(0, 80);
+}
+
+function getActiveMainlineForeshadowPins(player, limit = 6, options = {}) {
+  const list = Array.isArray(player?.mainlineForeshadowPins) ? player.mainlineForeshadowPins : [];
+  if (list.length === 0) return [];
+  const nowTurn = Math.max(0, Math.floor(Number(player?.storyTurns || 0)));
+  const location = String(options.location || player?.location || '').trim();
+  const queryTokens = tokenizeStoryFocusText(options.queryText || '');
+
+  const ranked = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const text = String(item.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+    if (!text) continue;
+    const expiresTurn = Math.max(0, Math.floor(Number(item.expiresTurn || 0)));
+    if (expiresTurn < nowTurn) continue;
+    const lastSeenTurn = Math.max(0, Math.floor(Number(item.lastSeenTurn || 0)));
+    const itemTokens = tokenizeStoryFocusText(text);
+    const overlap = queryTokens.length > 0 && itemTokens.length > 0
+      ? queryTokens.filter((token) => itemTokens.includes(token)).length
+      : 0;
+    const overlapScore = queryTokens.length > 0 ? Math.min(0.72, (overlap / queryTokens.length) * 1.05) : 0;
+    const sameLocation = location && String(item.location || '').trim() === location ? 0.34 : 0;
+    const recency = Math.exp(-Math.max(0, nowTurn - lastSeenTurn) / 8);
+    const recencyScore = 0.3 * recency;
+    const score = Number((overlapScore + sameLocation + recencyScore).toFixed(4));
+    ranked.push({
+      text,
+      location: String(item.location || '').trim().slice(0, 24),
+      score,
+      lastSeenTurn,
+      expiresTurn
+    });
+  }
+
+  ranked.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.expiresTurn !== a.expiresTurn) return b.expiresTurn - a.expiresTurn;
+    return b.lastSeenTurn - a.lastSeenTurn;
+  });
+
+  const out = [];
+  const seen = new Set();
+  for (const item of ranked) {
+    const key = normalizeComparableText(item.text);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= Math.max(1, Number(limit || 6))) break;
+  }
+  return out;
+}
+
+function buildMainlineForeshadowText(pins = [], playerLang = 'zh-TW') {
+  if (!Array.isArray(pins) || pins.length === 0) {
+    if (playerLang === 'en') return '(No preserved mainline foreshadowing in this phase.)';
+    if (playerLang === 'zh-CN') return '（当前没有需保留的主线铺陈）';
+    return '（目前沒有需要保留的主線鋪陳）';
+  }
+  return pins
+    .slice(0, 8)
+    .map((item, idx) => {
+      const loc = item.location ? `＠${item.location}` : '';
+      return `${idx + 1}. ${item.text}${loc}`;
+    })
+    .join('\n');
+}
+
 function extractCarryItemNames(player = {}) {
   const names = [];
   const pushName = (value) => {
@@ -1075,6 +1149,79 @@ function parseLooseChoiceArray(text = '', playerLang = 'zh-TW') {
   return out;
 }
 
+function getChoiceFingerprint(choice = {}) {
+  return normalizeComparableText([
+    choice?.name || '',
+    choice?.choice || '',
+    choice?.desc || ''
+  ].join(' '));
+}
+
+function mergeChoicePool(pool = [], incoming = [], playerLang = 'zh-TW') {
+  const out = Array.isArray(pool) ? pool.filter(Boolean).slice(0, 30) : [];
+  const seen = new Set(out.map(getChoiceFingerprint).filter(Boolean));
+  for (const raw of Array.isArray(incoming) ? incoming : []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const choice = normalizeChoiceByLanguage(raw, playerLang);
+    if (!choice?.choice || !choice?.tag) continue;
+    const fp = getChoiceFingerprint(choice);
+    if (!fp || seen.has(fp)) continue;
+    seen.add(fp);
+    out.push(choice);
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+function scoreChoiceCandidate(choice = {}, { anchors = [], location = '', previousStory = '' } = {}) {
+  const text = [choice?.name || '', choice?.choice || '', choice?.desc || '', choice?.tag || ''].join(' ');
+  if (!String(choice?.choice || '').trim() || !String(choice?.tag || '').trim()) return -999;
+
+  let score = 0;
+  const anchorList = (Array.isArray(anchors) ? anchors : []).map((x) => String(x || '').trim()).filter(Boolean);
+  if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) score += 2.4;
+  if (String(previousStory || '').trim()) score += 0.6;
+  if (hasAnyRegex(text, CHOICE_BANNED_PHRASES)) score -= 3.5;
+  if (hasAnyRegex(text, CHOICE_VAGUE_PHRASES)) score -= 2.6;
+
+  const locationRegex = location
+    ? new RegExp(`把[「"]?${escapeRegex(location)}[」"]?\\s*(送|帶去|拿去|送去)`, 'u')
+    : null;
+  if (locationRegex && locationRegex.test(text)) score -= 2.5;
+
+  const choiceLen = String(choice?.choice || '').trim().length;
+  const descLen = String(choice?.desc || '').trim().length;
+  if (choiceLen >= 10 && choiceLen <= 34) score += 0.6;
+  if (descLen >= 10 && descLen <= 42) score += 0.4;
+  return Number(score.toFixed(4));
+}
+
+function pickTopChoicesFromPool(pool = [], context = {}, maxCount = CHOICE_OUTPUT_COUNT) {
+  const source = Array.isArray(pool) ? pool.filter(Boolean) : [];
+  const scored = source
+    .map((choice, idx) => ({
+      choice,
+      idx,
+      score: scoreChoiceCandidate(choice, context),
+      fp: getChoiceFingerprint(choice)
+    }))
+    .filter((row) => row.fp)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.idx - b.idx;
+    });
+
+  const out = [];
+  const seen = new Set();
+  for (const row of scored) {
+    if (seen.has(row.fp)) continue;
+    seen.add(row.fp);
+    out.push(row.choice);
+    if (out.length >= maxCount) break;
+  }
+  return out;
+}
+
 function validateChoiceSet(choices = [], { anchors = [], location = '', previousStory = '' } = {}) {
   const issues = [];
   const list = Array.isArray(choices) ? choices.filter(Boolean) : [];
@@ -1106,7 +1253,6 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
 
     if (hasAnyRegex(text, CHOICE_BANNED_PHRASES)) issues.push(`第 ${i + 1} 個含跳 tone 詞彙`);
     if (hasAnyRegex(text, CHOICE_VAGUE_PHRASES)) issues.push(`第 ${i + 1} 個語意空泛或暴露過早`);
-    if (hasUnanchoredEntityToken(text, anchorList)) issues.push(`第 ${i + 1} 個提到未鋪陳人物/勢力`);
     if (locationRegex && locationRegex.test(text)) issues.push(`第 ${i + 1} 個把地名當作物件`);
 
     if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) {
@@ -1416,6 +1562,13 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const npcDialogueSection =
     `\n【可驗證 NPC 對話原句（僅以下內容可被回憶為「曾說過」）】\n` +
     `${buildNpcDialogueEvidenceText(npcDialogueEvidence, playerLang)}`;
+  const mainlinePins = getActiveMainlineForeshadowPins(player, 6, {
+    location,
+    queryText: [previousAction, previousStorySummary, focusedMemory].filter(Boolean).join('\n')
+  });
+  const mainlinePinsSection =
+    `\n【主線鋪陳保留（必要延續，但非每句都提）】\n` +
+    `${buildMainlineForeshadowText(mainlinePins, playerLang)}`;
   const openingBeatSection = isOpeningBeat
     ? `\n【開局敘事硬規則（必須遵守）】
 - 這是玩家第一次踏入世界的開場段落，必須有「剛開局」氛圍。
@@ -1448,6 +1601,7 @@ ${previousStorySection}
 ${memorySection}
 ${inventorySection}
 ${npcDialogueSection}
+${mainlinePinsSection}
 ${openingBeatSection}
 
 【上一個行動】
@@ -1479,6 +1633,8 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 21. 角色「手中持有／使用／遞出／展示」的物件，必須來自【玩家背包與可用物件】；若清單沒有，最多只能寫成「想取得/去購買/去詢問」
 22. 禁止憑空產生關鍵道具（通行卡、座標碼、專用藥劑、啟動器等）；若劇情需要，必須先在當下場景明確寫出取得動作
 23. 若本回合為開局段落，必須明確完成主角身份與動機介紹，且語氣要像故事開場而非條列設定
+24. 凡出現引號對話，必須標明發話者；若是未命名角色，請給固定臨時代號（例如：神秘女子A、神秘女子B）並在後續沿用
+25. 若【主線鋪陳保留】有內容，至少延續其中 1 個重點，但只在相關段落自然呼應，不要每句都硬提
 
 直接開始講：`;
 
@@ -1670,6 +1826,7 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
     let validatedChoices = null;
     let lastIssues = [];
     let feedbackText = '';
+    let choicePool = [];
 
     for (let pass = 0; pass < 3; pass++) {
       const passPrompt = feedbackText
@@ -1684,22 +1841,38 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       });
       const normalizedResult = normalizeOutputByLanguage(result, playerLang);
       const parsedChoices = parseChoicesFromAIResult(normalizedResult, playerLang);
-      const issues = validateChoiceSet(parsedChoices, {
+      choicePool = mergeChoicePool(choicePool, parsedChoices, playerLang);
+      const candidateChoices = pickTopChoicesFromPool(choicePool, {
+        anchors: storyAnchors,
+        location,
+        previousStory: fullStoryText
+      }, CHOICE_OUTPUT_COUNT);
+      const issues = validateChoiceSet(candidateChoices, {
         anchors: storyAnchors,
         location,
         previousStory: fullStoryText
       });
       if (issues.length === 0) {
-        validatedChoices = parsedChoices.slice(0, CHOICE_OUTPUT_COUNT);
+        validatedChoices = candidateChoices.slice(0, CHOICE_OUTPUT_COUNT);
         break;
       }
       lastIssues = issues;
       feedbackText = issues.map((item, idx) => `${idx + 1}. ${item}`).join('\n');
-      console.warn(`[AI][choices] pass${pass + 1} invalid: ${issues.join(' | ')}`);
+      console.warn(`[AI][choices] pass${pass + 1} invalid: ${issues.join(' | ')} | pool=${choicePool.length}`);
     }
 
     if (!validatedChoices) {
-      throw new Error(`choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
+      const mergedChoices = pickTopChoicesFromPool(choicePool, {
+        anchors: storyAnchors,
+        location,
+        previousStory: fullStoryText
+      }, CHOICE_OUTPUT_COUNT);
+      if (mergedChoices.length === CHOICE_OUTPUT_COUNT) {
+        console.warn(`[AI][choices] use merged pool fallback, issues=${lastIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
+        validatedChoices = mergedChoices;
+      } else {
+        throw new Error(`choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
+      }
     }
 
     recordAIPerf('choices', Date.now() - startedAt);
@@ -1787,6 +1960,7 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
     let validatedChoices = null;
     let lastIssues = [];
     let feedbackText = '';
+    let choicePool = [];
 
     for (let pass = 0; pass < 3; pass++) {
       const passPrompt = feedbackText
@@ -1800,22 +1974,38 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       });
       const normalizedResult = normalizeOutputByLanguage(result, playerLang);
       const parsedChoices = parseChoicesFromAIResult(normalizedResult, playerLang);
-      const issues = validateChoiceSet(parsedChoices, {
+      choicePool = mergeChoicePool(choicePool, parsedChoices, playerLang);
+      const candidateChoices = pickTopChoicesFromPool(choicePool, {
+        anchors: initialAnchors,
+        location,
+        previousStory: ''
+      }, CHOICE_OUTPUT_COUNT);
+      const issues = validateChoiceSet(candidateChoices, {
         anchors: initialAnchors,
         location,
         previousStory: ''
       });
       if (issues.length === 0) {
-        validatedChoices = parsedChoices.slice(0, CHOICE_OUTPUT_COUNT);
+        validatedChoices = candidateChoices.slice(0, CHOICE_OUTPUT_COUNT);
         break;
       }
       lastIssues = issues;
       feedbackText = issues.map((item, idx) => `${idx + 1}. ${item}`).join('\n');
-      console.warn(`[AI][initialChoices] pass${pass + 1} invalid: ${issues.join(' | ')}`);
+      console.warn(`[AI][initialChoices] pass${pass + 1} invalid: ${issues.join(' | ')} | pool=${choicePool.length}`);
     }
 
     if (!validatedChoices) {
-      throw new Error(`initial choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
+      const mergedChoices = pickTopChoicesFromPool(choicePool, {
+        anchors: initialAnchors,
+        location,
+        previousStory: ''
+      }, CHOICE_OUTPUT_COUNT);
+      if (mergedChoices.length === CHOICE_OUTPUT_COUNT) {
+        console.warn(`[AI][initialChoices] use merged pool fallback, issues=${lastIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
+        validatedChoices = mergedChoices;
+      } else {
+        throw new Error(`initial choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
+      }
     }
 
     recordAIPerf('initialChoices', Date.now() - startedAt);
@@ -1828,10 +2018,69 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
   }
 }
 
+async function analyzeMainlineForeshadowCandidates(payload = {}) {
+  const storyText = String(payload.storyText || '').trim();
+  if (!storyText) return [];
+  const location = String(payload.location || '').trim();
+  const previousAction = String(payload.previousAction || '').trim();
+  const playerLang = String(payload.playerLang || 'zh-TW').trim();
+  const langInstruction = {
+    'zh-TW': '請用繁體中文',
+    'zh-CN': '請用簡體中文',
+    'en': 'Please output in English'
+  }[playerLang] || '請用繁體中文';
+
+  const prompt = [
+    '你是劇情鋪陳分析器，只做「是否屬於主線伏筆」判斷。',
+    '任務：從故事中挑出 0~4 條真正需要跨回合保留的伏筆句。',
+    `場景地點：${location || '未知地點'}`,
+    `上一行動：${previousAction || '（無）'}`,
+    `語言要求：${langInstruction}`,
+    '判定原則：',
+    '1. 必須是會影響後續劇情推進的資訊（人物動機、可疑勢力、來源流向、關鍵物件、傳送節點、主線試煉）。',
+    '2. 一般風景描寫、情緒描寫、一次性寒暄不要選。',
+    '3. 句子要可直接作為後續回憶依據，不要改寫太多。',
+    '4. 不要輸出模板話術。',
+    '',
+    '輸出格式（僅 JSON array）：',
+    '[{"text":"伏筆句","importance":0.0~1.0}]',
+    '',
+    '故事全文：',
+    storyText
+  ].join('\n');
+
+  try {
+    const raw = await callAI(prompt, 0.2, {
+      label: 'analyzeMainlineForeshadowCandidates',
+      model: MINIMAX_MODEL,
+      maxTokens: 260,
+      timeoutMs: 30000,
+      retries: 1
+    });
+    const normalized = normalizeOutputByLanguage(raw, playerLang);
+    const parsed = parseJsonOrThrow(normalized, 'array');
+    const rows = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue;
+      const text = String(item.text || item.content || '').replace(/\s+/g, ' ').trim();
+      if (!text || text.length < 8) continue;
+      const importance = Number(item.importance || 0);
+      if (Number.isFinite(importance) && importance < 0.45) continue;
+      rows.push(text.slice(0, 180));
+      if (rows.length >= 4) break;
+    }
+    return rows;
+  } catch (e) {
+    console.log('[MainlineAI] analyze skipped:', e?.message || e);
+    return [];
+  }
+}
+
 module.exports = {
   generateStory,
   generateChoicesWithAI,
   generateInitialChoices,
+  analyzeMainlineForeshadowCandidates,
   getAIPerfStats,
   RENAISS_NPCS,
   RENAISS_LOCATIONS

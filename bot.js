@@ -494,6 +494,14 @@ const RECENT_CHOICE_HISTORY_LIMIT = Math.max(8, Math.min(64, Number(process.env.
 const CHOICE_REPEAT_ACTION_COOLDOWN_TURNS = Math.max(1, Math.min(8, Number(process.env.CHOICE_REPEAT_ACTION_COOLDOWN_TURNS || 3)));
 const CHOICE_REPEAT_SIMILARITY_THRESHOLD = Math.max(0.7, Math.min(0.95, Number(process.env.CHOICE_REPEAT_SIMILARITY_THRESHOLD || 0.82)));
 const MENTOR_BLOCKED_SECT_PATTERN = /(暗潮議會|暗黑組織|沙盜團|馬賊團|反派|Digital|混亂|滲透|刺客|盜匪)/iu;
+const STORY_DIALOGUE_MAX_QUOTE_LEN = 160;
+const STORY_DIALOGUE_MAX_PER_STORY = 8;
+const STORY_GENERIC_SPEAKER_PATTERN = /(女子|少女|女聲|女人|姑娘|她|某人|有人|對方|對面|其中一人|另一人|另一名|男子|男聲|男人|老年人|中年人|技師|商人|攤主|守衛|巡邏員|倉管)/u;
+const STORY_DIALOGUE_PIN_LIMIT = Math.max(16, Math.min(120, Number(process.env.STORY_DIALOGUE_PIN_LIMIT || 48)));
+const STORY_DIALOGUE_PIN_TTL_TURNS = Math.max(4, Math.min(40, Number(process.env.STORY_DIALOGUE_PIN_TTL_TURNS || 10)));
+const MAINLINE_PIN_LIMIT = Math.max(8, Math.min(80, Number(process.env.MAINLINE_PIN_LIMIT || 32)));
+const MAINLINE_PIN_TTL_TURNS = Math.max(6, Math.min(80, Number(process.env.MAINLINE_PIN_TTL_TURNS || 20)));
+const MAINLINE_CUE_PATTERN = /(可疑|供應隊|帳本|來源|流向|封存艙|金屬壓印|航海羅盤|座標|傳送門|門紋|節點|神秘鑑價站|鑑價站|四巨頭|試煉|追兵|攔截|線索|不明勢力|暗潮)/u;
 
 function tryAcquireStoryLock(userId, reason = 'story') {
   if (!userId) return true;
@@ -1966,6 +1974,342 @@ function appendNpcDialogueLog(player, payload = {}) {
   player.npcDialogueLog = normalizeNpcDialogueLog(logs);
 }
 
+function normalizeStorySpeakerText(raw = '') {
+  let text = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[「」『』"“”]/g, '')
+    .trim();
+  if (!text) return '';
+  const chunks = text.split(/[，。！？!?：:]/).map((s) => s.trim()).filter(Boolean);
+  if (chunks.length > 0) text = chunks[chunks.length - 1];
+  text = text.replace(/^(一名|一位|某位|某個|那位|這位|該名|那名)/u, '').trim();
+  text = text.replace(/(突然|輕聲|低聲|沙啞地|微笑著|笑著|開口|轉身|回頭)$/u, '').trim();
+  if (!text) return '';
+  return text.slice(0, 24);
+}
+
+function normalizeComparableStoryText(text = '') {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[「」『』"'`“”‘’\s，。！？!?；;：:、（）()\[\]【】\-]/g, '')
+    .trim();
+}
+
+function detectSpeakerGroup(speaker = '') {
+  const text = String(speaker || '');
+  if (/(女子|少女|女聲|女人|姑娘|姊|她)/u.test(text)) return 'female';
+  if (/(男子|男聲|男人|叔|伯|他)/u.test(text)) return 'male';
+  return 'neutral';
+}
+
+function isGenericSpeaker(speaker = '') {
+  const text = String(speaker || '').trim();
+  if (!text) return true;
+  if (text.length <= 2) return true;
+  return STORY_GENERIC_SPEAKER_PATTERN.test(text);
+}
+
+function toAlphaIndex(index = 1) {
+  const n = Math.max(1, Number(index) || 1);
+  return String.fromCharCode(64 + Math.min(26, n));
+}
+
+function aliasGenericSpeaker(speaker = '', state = {}) {
+  const key = String(speaker || '').toLowerCase();
+  state.aliasByKey = state.aliasByKey || new Map();
+  state.counts = state.counts || { female: 0, male: 0, neutral: 0 };
+  if (state.aliasByKey.has(key)) return state.aliasByKey.get(key);
+  const group = detectSpeakerGroup(speaker);
+  state.counts[group] = Number(state.counts[group] || 0) + 1;
+  const suffix = toAlphaIndex(state.counts[group]);
+  const alias = group === 'female'
+    ? `神秘女子${suffix}`
+    : (group === 'male' ? `神秘男子${suffix}` : `神秘人物${suffix}`);
+  state.aliasByKey.set(key, alias);
+  return alias;
+}
+
+function extractStoryDialogues(storyText = '') {
+  const text = String(storyText || '');
+  if (!text) return [];
+  const out = [];
+  const seen = new Set();
+  const aliasState = { aliasByKey: new Map(), counts: { female: 0, male: 0, neutral: 0 } };
+
+  const pushRow = (speakerRaw, quoteRaw, source = 'story_quote') => {
+    const quote = String(quoteRaw || '').replace(/\s+/g, ' ').trim().slice(0, STORY_DIALOGUE_MAX_QUOTE_LEN);
+    if (!quote || quote.length < 2) return;
+    let speaker = normalizeStorySpeakerText(speakerRaw);
+    if (!speaker) return;
+    if (isGenericSpeaker(speaker)) {
+      speaker = aliasGenericSpeaker(speaker, aliasState);
+    }
+    const key = `${speaker}|${quote}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ speaker, text: quote, source });
+  };
+
+  // 型態一：人物說：「台詞」
+  const preQuotePattern = /([^\n「」]{1,32}?)(?:說道|說|問道|問|回道|回應|提醒|補充|低語|喊道|表示|開口|答道|笑道|低聲道)?[:：]\s*「([^」\n]{2,220})」/gu;
+  let match = preQuotePattern.exec(text);
+  while (match && out.length < STORY_DIALOGUE_MAX_PER_STORY) {
+    pushRow(match[1], match[2], 'story_quote_pre');
+    match = preQuotePattern.exec(text);
+  }
+
+  // 型態二：💬 角色：台詞
+  const markerPattern = /💬\s*([^：:\n]{1,24})\s*[：:]\s*([^\n]{2,220})/gu;
+  match = markerPattern.exec(text);
+  while (match && out.length < STORY_DIALOGUE_MAX_PER_STORY) {
+    pushRow(match[1], match[2], 'story_quote_marker');
+    match = markerPattern.exec(text);
+  }
+
+  return out.slice(0, STORY_DIALOGUE_MAX_PER_STORY);
+}
+
+function normalizeStoryDialoguePins(pins = [], currentTurn = 0) {
+  const list = Array.isArray(pins) ? pins : [];
+  const nowTurn = Math.max(0, Math.floor(Number(currentTurn) || 0));
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const speaker = String(item.speaker || '').trim().slice(0, 24);
+    const text = String(item.text || '').replace(/\s+/g, ' ').trim().slice(0, STORY_DIALOGUE_MAX_QUOTE_LEN);
+    if (!speaker || !text) continue;
+    const expiresTurn = Math.max(nowTurn, Math.floor(Number(item.expiresTurn || 0)));
+    if (expiresTurn < nowTurn) continue;
+    const key = `${speaker}|${normalizeComparableStoryText(text)}`;
+    if (!normalizeComparableStoryText(text) || seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      speaker,
+      text,
+      location: String(item.location || '').trim().slice(0, 24),
+      source: String(item.source || 'story_quote').trim().slice(0, 24),
+      firstTurn: Math.max(0, Math.floor(Number(item.firstTurn || nowTurn))),
+      lastSeenTurn: Math.max(0, Math.floor(Number(item.lastSeenTurn || nowTurn))),
+      expiresTurn
+    });
+  }
+  out.sort((a, b) => {
+    if (b.expiresTurn !== a.expiresTurn) return b.expiresTurn - a.expiresTurn;
+    return b.lastSeenTurn - a.lastSeenTurn;
+  });
+  return out.slice(0, STORY_DIALOGUE_PIN_LIMIT);
+}
+
+function upsertStoryDialoguePins(player, rows = []) {
+  if (!player || typeof player !== 'object') return 0;
+  const entries = Array.isArray(rows) ? rows : [];
+  if (entries.length === 0) return 0;
+  const currentTurn = Math.max(0, Math.floor(Number(player.storyTurns || 0)));
+  const list = normalizeStoryDialoguePins(player.storyDialoguePins, currentTurn);
+  const index = new Map();
+  for (const item of list) {
+    const key = `${item.speaker}|${normalizeComparableStoryText(item.text)}`;
+    if (key) index.set(key, item);
+  }
+
+  let changed = 0;
+  for (const row of entries) {
+    const speaker = String(row?.speaker || '').trim().slice(0, 24);
+    const text = String(row?.text || '').replace(/\s+/g, ' ').trim().slice(0, STORY_DIALOGUE_MAX_QUOTE_LEN);
+    if (!speaker || !text) continue;
+    const cmp = normalizeComparableStoryText(text);
+    if (!cmp) continue;
+    const key = `${speaker}|${cmp}`;
+    const existing = index.get(key);
+    if (existing) {
+      existing.lastSeenTurn = currentTurn;
+      existing.expiresTurn = Math.max(existing.expiresTurn, currentTurn + STORY_DIALOGUE_PIN_TTL_TURNS);
+      if (!existing.location && player.location) existing.location = String(player.location).slice(0, 24);
+      changed += 1;
+      continue;
+    }
+    const item = {
+      speaker,
+      text,
+      location: String(player.location || '').trim().slice(0, 24),
+      source: String(row?.source || 'story_quote').trim().slice(0, 24),
+      firstTurn: currentTurn,
+      lastSeenTurn: currentTurn,
+      expiresTurn: currentTurn + STORY_DIALOGUE_PIN_TTL_TURNS
+    };
+    list.push(item);
+    index.set(key, item);
+    changed += 1;
+  }
+
+  player.storyDialoguePins = normalizeStoryDialoguePins(list, currentTurn);
+  return changed;
+}
+
+function extractMainlineForeshadowClues(storyText = '') {
+  const text = String(storyText || '');
+  if (!text) return [];
+  const chunks = text
+    .split(/\n+/)
+    .flatMap((line) => line.split(/[。！？!?]/))
+    .map((line) => String(line || '').replace(/\s+/g, ' ').trim())
+    .filter((line) => line.length >= 10 && line.length <= 140);
+  const out = [];
+  const seen = new Set();
+  for (const line of chunks) {
+    if (!MAINLINE_CUE_PATTERN.test(line)) continue;
+    const cmp = normalizeComparableStoryText(line);
+    if (!cmp || seen.has(cmp)) continue;
+    seen.add(cmp);
+    out.push(line);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+function normalizeMainlineForeshadowPins(pins = [], currentTurn = 0) {
+  const list = Array.isArray(pins) ? pins : [];
+  const nowTurn = Math.max(0, Math.floor(Number(currentTurn) || 0));
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const text = String(item.text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+    if (!text) continue;
+    const expiresTurn = Math.max(nowTurn, Math.floor(Number(item.expiresTurn || 0)));
+    if (expiresTurn < nowTurn) continue;
+    const cmp = normalizeComparableStoryText(text);
+    if (!cmp || seen.has(cmp)) continue;
+    seen.add(cmp);
+    out.push({
+      text,
+      location: String(item.location || '').trim().slice(0, 24),
+      source: String(item.source || 'mainline').trim().slice(0, 24),
+      firstTurn: Math.max(0, Math.floor(Number(item.firstTurn || nowTurn))),
+      lastSeenTurn: Math.max(0, Math.floor(Number(item.lastSeenTurn || nowTurn))),
+      expiresTurn
+    });
+  }
+  out.sort((a, b) => {
+    if (b.expiresTurn !== a.expiresTurn) return b.expiresTurn - a.expiresTurn;
+    return b.lastSeenTurn - a.lastSeenTurn;
+  });
+  return out.slice(0, MAINLINE_PIN_LIMIT);
+}
+
+function upsertMainlineForeshadowPins(player, clues = []) {
+  if (!player || typeof player !== 'object') return 0;
+  const lines = Array.isArray(clues) ? clues : [];
+  if (lines.length === 0) return 0;
+  const currentTurn = Math.max(0, Math.floor(Number(player.storyTurns || 0)));
+  const list = normalizeMainlineForeshadowPins(player.mainlineForeshadowPins, currentTurn);
+  const index = new Map();
+  for (const item of list) {
+    const key = normalizeComparableStoryText(item.text);
+    if (key) index.set(key, item);
+  }
+
+  let changed = 0;
+  for (const line of lines) {
+    const text = String(line || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+    const key = normalizeComparableStoryText(text);
+    if (!text || !key) continue;
+    const existing = index.get(key);
+    if (existing) {
+      existing.lastSeenTurn = currentTurn;
+      existing.expiresTurn = Math.max(existing.expiresTurn, currentTurn + MAINLINE_PIN_TTL_TURNS);
+      if (!existing.location && player.location) existing.location = String(player.location).slice(0, 24);
+      changed += 1;
+      continue;
+    }
+    const item = {
+      text,
+      location: String(player.location || '').trim().slice(0, 24),
+      source: 'mainline',
+      firstTurn: currentTurn,
+      lastSeenTurn: currentTurn,
+      expiresTurn: currentTurn + MAINLINE_PIN_TTL_TURNS
+    };
+    list.push(item);
+    index.set(key, item);
+    changed += 1;
+  }
+
+  player.mainlineForeshadowPins = normalizeMainlineForeshadowPins(list, currentTurn);
+  return changed;
+}
+
+function rememberStoryDialogues(player, storyText = '') {
+  if (!player || !player.id) return 0;
+  const rows = extractStoryDialogues(storyText);
+  const clues = extractMainlineForeshadowClues(storyText);
+  if ((!Array.isArray(rows) || rows.length === 0) && (!Array.isArray(clues) || clues.length === 0)) {
+    return { quotes: 0, mainline: 0 };
+  }
+  let added = 0;
+  for (const row of rows) {
+    appendNpcDialogueLog(player, {
+      speaker: row.speaker,
+      text: row.text,
+      location: player.location,
+      source: row.source || 'story_quote'
+    });
+    if (typeof CORE.appendNpcQuoteMemory === 'function') {
+      try {
+        CORE.appendNpcQuoteMemory(player.id, {
+          npcId: row.speaker,
+          npcName: row.speaker,
+          speaker: row.speaker,
+          text: row.text,
+          location: player.location || '',
+          source: row.source || 'story_quote'
+        });
+      } catch (e) {
+        console.log('[StoryQuote] appendNpcQuoteMemory failed:', e?.message || e);
+      }
+    }
+    added += 1;
+  }
+  const pinCount = upsertStoryDialoguePins(player, rows);
+  const mainlineCount = upsertMainlineForeshadowPins(player, clues);
+  return { quotes: added, dialoguePins: pinCount, mainline: mainlineCount };
+}
+
+function triggerMainlineForeshadowAIInBackground(player, options = {}) {
+  const playerId = String(player?.id || '').trim();
+  const storyText = String(options.storyText || '').trim();
+  if (!playerId || !storyText) return;
+  if (!STORY || typeof STORY.analyzeMainlineForeshadowCandidates !== 'function') return;
+
+  const location = String(options.location || player?.location || '').trim();
+  const previousAction = String(options.previousAction || '').trim();
+  const playerLang = String(options.playerLang || player?.language || 'zh-TW').trim();
+  const phase = String(options.phase || 'story').trim();
+
+  Promise.resolve()
+    .then(async () => {
+      const lines = await STORY.analyzeMainlineForeshadowCandidates({
+        storyText,
+        location,
+        previousAction,
+        playerLang
+      });
+      if (!Array.isArray(lines) || lines.length === 0) return;
+      const fresh = CORE.loadPlayer(playerId);
+      if (!fresh) return;
+      ensurePlayerGenerationSchema(fresh);
+      const inserted = upsertMainlineForeshadowPins(fresh, lines);
+      if (inserted > 0) {
+        CORE.savePlayer(fresh);
+        console.log(`[MainlineAI] phase=${phase} player=${playerId} inserted=${inserted}`);
+      }
+    })
+    .catch((e) => {
+      console.log('[MainlineAI] background error:', e?.message || e);
+    });
+}
+
 function ensurePlayerGenerationSchema(player) {
   if (!player || typeof player !== 'object') return false;
   let mutated = false;
@@ -2000,6 +2344,17 @@ function ensurePlayerGenerationSchema(player) {
   const normalizedNpcLog = normalizeNpcDialogueLog(player.npcDialogueLog);
   if (JSON.stringify(player.npcDialogueLog || []) !== JSON.stringify(normalizedNpcLog)) {
     player.npcDialogueLog = normalizedNpcLog;
+    mutated = true;
+  }
+  const currentTurn = Math.max(0, Math.floor(Number(player.storyTurns || 0)));
+  const normalizedStoryPins = normalizeStoryDialoguePins(player.storyDialoguePins, currentTurn);
+  if (JSON.stringify(player.storyDialoguePins || []) !== JSON.stringify(normalizedStoryPins)) {
+    player.storyDialoguePins = normalizedStoryPins;
+    mutated = true;
+  }
+  const normalizedMainlinePins = normalizeMainlineForeshadowPins(player.mainlineForeshadowPins, currentTurn);
+  if (JSON.stringify(player.mainlineForeshadowPins || []) !== JSON.stringify(normalizedMainlinePins)) {
+    player.mainlineForeshadowPins = normalizedMainlinePins;
     mutated = true;
   }
   const normalizedRecentChoices = normalizeRecentChoiceHistory(player.recentChoiceHistory);
@@ -6273,6 +6628,12 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
 
         player.currentStory = storyText;
         player.eventChoices = [];
+        const rememberStats = rememberStoryDialogues(player, storyText);
+        if ((rememberStats?.quotes || 0) > 0 || (rememberStats?.mainline || 0) > 0) {
+          console.log(
+            `[StoryQuote] main_menu quotes=${rememberStats?.quotes || 0} dialoguePins=${rememberStats?.dialoguePins || 0} mainlinePins=${rememberStats?.mainline || 0} player=${player.id}`
+          );
+        }
         updateGenerationState(player, {
           phase: 'story_ready',
           storySnapshot: storyText,
@@ -6371,6 +6732,12 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       if (finalMenuMsg?.id) {
         trackActiveGameMessage(player, thread.id, finalMenuMsg.id);
       }
+      triggerMainlineForeshadowAIInBackground(player, {
+        phase: 'main_menu',
+        storyText,
+        location: player.location,
+        playerLang: player.language
+      });
     } catch (err) {
       stopLoadingAnimation();
       console.log('[AI] 故事生成失敗:', err.message);
@@ -8750,6 +9117,12 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
 
       player.currentStory = storyText;
       player.eventChoices = [];
+      const rememberStats = rememberStoryDialogues(player, storyText);
+      if ((rememberStats?.quotes || 0) > 0 || (rememberStats?.mainline || 0) > 0) {
+        console.log(
+          `[StoryQuote] event quotes=${rememberStats?.quotes || 0} dialoguePins=${rememberStats?.dialoguePins || 0} mainlinePins=${rememberStats?.mainline || 0} player=${player.id}`
+        );
+      }
       updateGenerationState(player, {
         phase: 'story_ready',
         storySnapshot: storyText,
@@ -8885,6 +9258,13 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       if (finalStoryMsg?.id) {
         trackActiveGameMessage(player, interaction.channel?.id, finalStoryMsg.id);
       }
+      triggerMainlineForeshadowAIInBackground(player, {
+        phase: 'event',
+        storyText,
+        previousAction: selectedChoice,
+        location: player.location,
+        playerLang: player.language
+      });
     } catch (err) {
       stopLoadingAnimation();
       console.error('[事件] 處理失敗:', err);
