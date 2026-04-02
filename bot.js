@@ -470,6 +470,9 @@ const EARLY_GAME_GOLD_GUARANTEE_TURNS = Math.max(1, Math.min(10, Number(process.
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
 const PET_MOVE_LOADOUT_LIMIT = Math.max(1, Math.min(5, Number(process.env.PET_MOVE_LOADOUT_LIMIT || 5)));
 const SHOP_SELL_SELECT_LIMIT = 25;
+const SHOP_HAGGLE_SELECT_LIMIT = 25;
+const SHOP_HAGGLE_OFFER_TTL_MS = 10 * 60 * 1000;
+const SHOP_HAGGLE_BLOCKED_ITEMS = new Set(['乾糧一包', '水囊']);
 const NPC_DIALOGUE_LOG_LIMIT = Math.max(20, Math.min(200, Number(process.env.NPC_DIALOGUE_LOG_LIMIT || 80)));
 const STARTER_FIVE_PULL_COUNT = 5;
 const GENERATION_HISTORY_LIMIT = Math.max(5, Math.min(100, Number(process.env.GENERATION_HISTORY_LIMIT || 20)));
@@ -4238,6 +4241,33 @@ CLIENT.on('interactionCreate', async (interaction) => {
       await showWorldShopSellModal(interaction, marketType, spec);
       return;
     }
+
+    if (customId.startsWith('shop_haggle_select_')) {
+      const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+      const player = CORE.loadPlayer(user.id);
+      if (!player) {
+        await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+        return;
+      }
+      if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss')) {
+        await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const options = Array.isArray(player.shopSession.haggleDraftOptions) ? player.shopSession.haggleDraftOptions : [];
+      const raw = String(interaction.values?.[0] || '');
+      const idx = Number(raw.replace('haggleidx_', ''));
+      if (!Number.isFinite(idx) || idx < 0 || idx >= options.length) {
+        await interaction.reply({ content: '⚠️ 議價選項已失效，請重新打開議價選單。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const spec = options[idx];
+      if (!spec || typeof spec !== 'object') {
+        await interaction.reply({ content: '⚠️ 議價選項資料錯誤，請重新選擇。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      await showWorldShopHaggleOffer(interaction, user, marketType, spec);
+      return;
+    }
   }
   
   // ===== 錢包 Modal 按鈕 =====
@@ -4798,61 +4828,153 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   if (customId.startsWith('shop_npc_haggle_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showWorldShopHagglePicker(interaction, user, marketType);
+    return;
+  }
+
+  if (customId.startsWith('shop_haggle_all_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showWorldShopHaggleAllOffer(interaction, user, marketType);
+    return;
+  }
+
+  if (customId.startsWith('shop_haggle_cancel_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (player.shopSession?.pendingHaggleOffer) {
+      player.shopSession.pendingHaggleOffer = null;
+      CORE.savePlayer(player);
+    }
+    await showWorldShopScene(interaction, user, marketType, '你退出本次議價，未發生交易。');
+    return;
+  }
+
+  if (customId.startsWith('shop_haggle_confirm_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
     const player = CORE.loadPlayer(user.id);
     if (!player) {
       await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
       return;
     }
     ECON.ensurePlayerEconomy(player);
-    const worldDay = Number(CORE.getWorld()?.day || 1);
-    const sellResult = await ECON.sellPlayerAtMarket(player, marketType, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
-    if (!sellResult || sellResult.error) {
-      await interaction.reply({ content: `❌ 議價失敗：${sellResult?.error || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+    if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss')) {
+      await interaction.reply({ content: '⚠️ 你目前不在此商店場景。', ephemeral: true }).catch(() => {});
       return;
     }
-    if (Number(sellResult.totalGold || 0) > 0) {
-      recordCashflow(player, {
-        amount: Number(sellResult.totalGold || 0),
-        category: marketType === 'digital' ? 'market_digital_sell' : 'market_renaiss_sell',
-        source: `${getMarketTypeLabel(marketType)} 商店議價售出 ${sellResult.soldCount} 件`,
-        marketType
-      });
+    const pending = player.shopSession?.pendingHaggleOffer;
+    if (!pending || typeof pending !== 'object') {
+      await showWorldShopHagglePicker(interaction, user, marketType, '議價提案已失效，請重新選擇商品。');
+      return;
     }
+    if (Date.now() - Number(pending.createdAt || 0) > SHOP_HAGGLE_OFFER_TTL_MS) {
+      player.shopSession.pendingHaggleOffer = null;
+      CORE.savePlayer(player);
+      await showWorldShopHagglePicker(interaction, user, marketType, '議價提案已逾時，請重新估價。');
+      return;
+    }
+
+    const npcName = String(pending.npcName || (marketType === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員'));
+    let quoted = 0;
+    let soldLabel = String(pending.itemName || '商品');
+    let soldCount = 1;
+
+    if (String(pending.scope || '') === 'all' || String(pending.spec?.kind || '') === 'all') {
+      const worldDay = Number(CORE.getWorld()?.day || 1);
+      const sellResult = await ECON.sellPlayerAtMarket(player, marketType, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
+      if (!sellResult || sellResult.error || Number(sellResult.soldCount || 0) <= 0) {
+        player.shopSession.pendingHaggleOffer = null;
+        CORE.savePlayer(player);
+        await showWorldShopHagglePicker(interaction, user, marketType, `全部議價失敗：${sellResult?.error || '目前沒有可售商品'}`);
+        return;
+      }
+      const rawTotal = Math.max(0, Number(sellResult.totalGold || 0));
+      quoted = Math.max(0, Math.floor(rawTotal * 0.7));
+      const discountLoss = Math.max(0, rawTotal - quoted);
+      if (discountLoss > 0) {
+        player.stats.財富 = Math.max(0, Number(player?.stats?.財富 || 0) - discountLoss);
+      }
+      soldCount = Math.max(1, Number(sellResult.soldCount || 1));
+      soldLabel = `全部商品（${soldCount} 件）`;
+      if (quoted > 0) {
+        recordCashflow(player, {
+          amount: quoted,
+          category: marketType === 'digital' ? 'market_digital_sell' : 'market_renaiss_sell',
+          source: `${getMarketTypeLabel(marketType)} 商店議價全部賣出（七折）`,
+          marketType
+        });
+      }
+      if (discountLoss > 0) {
+        recordCashflow(player, {
+          amount: -discountLoss,
+          category: 'shop_haggle_bulk_discount',
+          source: `${getMarketTypeLabel(marketType)} 全賣七折折讓`,
+          marketType
+        });
+      }
+    } else {
+      const consume = consumeHaggleItemFromPlayer(player, pending.spec || {});
+      if (!consume.success) {
+        player.shopSession.pendingHaggleOffer = null;
+        CORE.savePlayer(player);
+        await showWorldShopHagglePicker(interaction, user, marketType, consume.reason || '商品已變動，請重新議價。');
+        return;
+      }
+      quoted = Math.max(0, Number(pending.quotedTotal || 0));
+      player.stats.財富 = Math.max(0, Number(player?.stats?.財富 || 0)) + quoted;
+      if (pending.marketStateAfter && typeof pending.marketStateAfter === 'object') {
+        player.marketState = JSON.parse(JSON.stringify(pending.marketStateAfter));
+      }
+      if (quoted > 0) {
+        recordCashflow(player, {
+          amount: quoted,
+          category: marketType === 'digital' ? 'market_digital_sell' : 'market_renaiss_sell',
+          source: `${getMarketTypeLabel(marketType)} 商店議價售出 1 件`,
+          marketType
+        });
+      }
+    }
+    ECON.ensurePlayerEconomy(player);
+    player.shopSession.pendingHaggleOffer = null;
+
     rememberPlayer(player, {
       type: '交易',
-      content: `商店內與${sellResult.npcName}議價`,
-      outcome: `售出 ${sellResult.soldCount} 件，結算 ${sellResult.totalGold} Rns`,
+      content: `商店內與${npcName}議價`,
+      outcome: `售出 ${soldLabel}，結算 ${quoted} Rns`,
       importance: 2,
       tags: ['market', marketType, 'shop_haggle']
     });
-    CORE.appendNpcMemory(sellResult.npcName, user.id, {
+    CORE.appendNpcMemory(npcName, user.id, {
       type: '交易',
-      content: `${player.name} 在商店櫃台議價並售出 ${sellResult.soldCount} 件物資`,
-      outcome: `結算 ${sellResult.totalGold} Rns`,
+      content: `${player.name} 在商店櫃台議價並售出 ${soldLabel}`,
+      outcome: `結算 ${quoted} Rns`,
       location: player.location,
       tags: ['market', marketType, 'private'],
       importance: marketType === 'digital' ? 3 : 2
     }, { scope: 'private' });
     if (typeof CORE.appendNpcQuoteMemory === 'function') {
-      const pitchMatch = String(sellResult.message || '').match(/🏪\s*[^：:\n]+[：:]\s*([^\n]+)/u);
-      const pitchText = String(pitchMatch?.[1] || '').trim();
+      const pitchText = extractPitchFromHaggleMessage(pending.message || '');
       if (pitchText) {
         CORE.appendNpcQuoteMemory(user.id, {
-          npcId: sellResult.npcName,
-          npcName: sellResult.npcName,
-          speaker: sellResult.npcName,
+          npcId: npcName,
+          npcName,
+          speaker: npcName,
           text: pitchText,
           location: player.location,
           source: marketType === 'digital' ? 'shop_haggle_digital' : 'shop_haggle_renaiss'
         });
       }
     }
+
     CORE.savePlayer(player);
     await showWorldShopScene(
       interaction,
       user,
       marketType,
-      `${sellResult.npcName} 完成估價結算：+${Number(sellResult.totalGold || 0)} Rns（${Number(sellResult.soldCount || 0)} 件）`
+      `${npcName} 完成議價：${soldLabel} 成交 +${quoted} Rns`
     );
     return;
   }
@@ -5667,7 +5789,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     const storyText = player.currentStory;
     
     player.stats.飽腹度 = player.stats.飽腹度 || 100;
-    const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+    const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
     
     const optionsText = buildChoiceOptionsText(choices, { player, pet });
     
@@ -5738,7 +5860,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   
   // ===== 狀態列 =====
   player.stats.飽腹度 = player.stats.飽腹度 || 100;
-  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
 
   // 先用 Loading 訊息回覆（先故事、後選項）
   const loadingHint = hasRecoverableStoryOnly
@@ -6828,6 +6950,337 @@ function buildShopSellDraftOptions(player, ownerId) {
   };
 }
 
+function buildShopHaggleDraftOptions(player, ownerId) {
+  const draft = buildShopSellDraftOptions(player, ownerId);
+  const options = (draft.options || [])
+    .filter((entry) => String(entry?.kind || '') === 'item')
+    .filter((entry) => !SHOP_HAGGLE_BLOCKED_ITEMS.has(String(entry?.itemName || '').trim()));
+  return {
+    ...draft,
+    options: options.slice(0, 80)
+  };
+}
+
+function getDraftItemName(raw = null) {
+  if (typeof raw === 'string') return raw.trim();
+  return String(raw?.name || '').trim();
+}
+
+function getHaggleCandidateFromPlayer(player, spec = {}) {
+  const itemName = String(spec?.itemName || '').trim();
+  const preferSource = String(spec?.itemRef?.source || '').trim();
+  if (!itemName) return null;
+
+  const tradeGoods = Array.isArray(player?.tradeGoods) ? player.tradeGoods : [];
+  const herbs = Array.isArray(player?.herbs) ? player.herbs : [];
+  const inventory = Array.isArray(player?.inventory) ? player.inventory : [];
+
+  const fromTrade = tradeGoods.find((good) => String(good?.name || '').trim() === itemName);
+  const fromHerb = herbs.find((herb) => getDraftItemName(herb) === itemName);
+  const fromInv = inventory.find((item) => getDraftItemName(item) === itemName && !SHOP_HAGGLE_BLOCKED_ITEMS.has(getDraftItemName(item)));
+
+  const bySource = {
+    tradeGoods: fromTrade
+      ? {
+        source: 'tradeGoods',
+        itemName,
+        tradeGoodId: String(fromTrade?.id || '').trim(),
+        tradeGood: JSON.parse(JSON.stringify(fromTrade))
+      }
+      : null,
+    herbs: fromHerb
+      ? { source: 'herbs', itemName }
+      : null,
+    inventory: fromInv
+      ? { source: 'inventory', itemName }
+      : null
+  };
+
+  if (preferSource && bySource[preferSource]) return bySource[preferSource];
+  return bySource.tradeGoods || bySource.herbs || bySource.inventory || null;
+}
+
+function buildHaggleShadowPlayer(player, spec = {}, worldDay = 1) {
+  const candidate = getHaggleCandidateFromPlayer(player, spec);
+  if (!candidate) return { error: '找不到可議價的物品，請重新選擇。' };
+
+  const shadow = JSON.parse(JSON.stringify(player || {}));
+  ECON.ensurePlayerEconomy(shadow);
+  shadow.tradeGoods = [];
+  shadow.herbs = [];
+  shadow.inventory = [];
+  if (!shadow.marketState || typeof shadow.marketState !== 'object') shadow.marketState = {};
+  shadow.marketState.lastSkillLicenseDay = Number(worldDay || 1);
+
+  if (candidate.source === 'tradeGoods' && candidate.tradeGood) {
+    shadow.tradeGoods.push(candidate.tradeGood);
+  } else if (candidate.source === 'herbs') {
+    shadow.herbs.push(candidate.itemName);
+  } else {
+    shadow.inventory.push(candidate.itemName);
+  }
+
+  return { shadow, candidate };
+}
+
+function consumeHaggleItemFromPlayer(player, spec = {}) {
+  const itemName = String(spec?.itemName || '').trim();
+  const tradeGoodId = String(spec?.itemRef?.tradeGoodId || '').trim();
+  const preferSource = String(spec?.itemRef?.source || '').trim();
+  if (!itemName) return { success: false, reason: '物品名稱缺失' };
+
+  const tryTradeGoods = () => {
+    const list = Array.isArray(player?.tradeGoods) ? player.tradeGoods : [];
+    let idx = -1;
+    if (tradeGoodId) idx = list.findIndex((good) => String(good?.id || '').trim() === tradeGoodId);
+    if (idx < 0) idx = list.findIndex((good) => String(good?.name || '').trim() === itemName);
+    if (idx < 0) return false;
+    list.splice(idx, 1);
+    return true;
+  };
+  const tryHerbs = () => {
+    const list = Array.isArray(player?.herbs) ? player.herbs : [];
+    const idx = list.findIndex((herb) => getDraftItemName(herb) === itemName);
+    if (idx < 0) return false;
+    list.splice(idx, 1);
+    return true;
+  };
+  const tryInventory = () => {
+    const list = Array.isArray(player?.inventory) ? player.inventory : [];
+    const idx = list.findIndex((item) => {
+      const name = getDraftItemName(item);
+      if (!name || SHOP_HAGGLE_BLOCKED_ITEMS.has(name)) return false;
+      return name === itemName;
+    });
+    if (idx < 0) return false;
+    list.splice(idx, 1);
+    return true;
+  };
+
+  const ordered = preferSource === 'tradeGoods'
+    ? [tryTradeGoods, tryHerbs, tryInventory]
+    : preferSource === 'herbs'
+      ? [tryHerbs, tryTradeGoods, tryInventory]
+      : preferSource === 'inventory'
+        ? [tryInventory, tryTradeGoods, tryHerbs]
+        : [tryTradeGoods, tryHerbs, tryInventory];
+  for (const fn of ordered) {
+    if (fn()) return { success: true, itemName };
+  }
+  return { success: false, reason: `物品「${itemName}」已不存在或已被移除` };
+}
+
+function extractPitchFromHaggleMessage(message = '') {
+  const text = String(message || '');
+  const match = text.match(/🏪\s*[^：:\n]+[：:]\s*([^\n]+)/u);
+  return String(match?.[1] || '').trim();
+}
+
+async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'renaiss') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
+    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const worldDay = Number(CORE.getWorld()?.day || 1);
+  const shadow = JSON.parse(JSON.stringify(player || {}));
+  ECON.ensurePlayerEconomy(shadow);
+  const offerResult = await ECON.sellPlayerAtMarket(shadow, safeMarket, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
+  if (!offerResult || offerResult.error || Number(offerResult.soldCount || 0) <= 0) {
+    await showWorldShopHagglePicker(interaction, user, safeMarket, `無法全部議價：${offerResult?.error || '目前沒有可售商品'}`);
+    return;
+  }
+
+  const rawTotal = Math.max(0, Number(offerResult.totalGold || 0));
+  const quotedTotal = Math.max(0, Math.floor(rawTotal * 0.7));
+  const discountLoss = Math.max(0, rawTotal - quotedTotal);
+  const pending = {
+    id: `haggle_all_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    marketType: safeMarket,
+    createdAt: Date.now(),
+    scope: 'all',
+    itemName: '全部可賣商品',
+    spec: { kind: 'all' },
+    quotedTotal,
+    rawQuotedTotal: rawTotal,
+    discountLoss,
+    soldCount: Number(offerResult.soldCount || 0),
+    npcName: String(offerResult.npcName || (safeMarket === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員')),
+    message: String(offerResult.message || ''),
+    historyRecall: String(offerResult.historyRecall || ''),
+    digitalRiskScore: Number(offerResult.digitalRiskScore || 0),
+    digitalRiskDelta: Number(offerResult.digitalRiskDelta || 0),
+    marketStateAfter: JSON.parse(JSON.stringify(shadow.marketState || {}))
+  };
+  player.shopSession.pendingHaggleOffer = pending;
+  CORE.savePlayer(player);
+
+  const pitch = extractPitchFromHaggleMessage(offerResult.message);
+  const detailLines = [];
+  detailLines.push('範圍：全部可賣商品');
+  detailLines.push(`件數：${pending.soldCount} 件`);
+  detailLines.push(`原始估價：${rawTotal} Rns 代幣`);
+  detailLines.push(`快速清倉（七折）：**${quotedTotal} Rns 代幣**`);
+  detailLines.push(`折讓差額：-${discountLoss} Rns 代幣`);
+  detailLines.push(`鑑價員：${pending.npcName}`);
+  if (pitch) detailLines.push(`\n💬 ${pitch}`);
+  detailLines.push('\n請選擇是否同意「全部賣出（七折）」提案。');
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🤝 全部議價提案｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(detailLines.join('\n'))
+    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel('✅ 同意成交').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel('↩️ 退出議價').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
+async function showWorldShopHagglePicker(interaction, user, marketType = 'renaiss', notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
+    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const draft = buildShopHaggleDraftOptions(player, user.id);
+  player.shopSession.haggleDraftOptions = draft.options;
+  player.shopSession.pendingHaggleOffer = null;
+  CORE.savePlayer(player);
+
+  const lines = [];
+  if (notice) lines.push(`✅ ${notice}`);
+  lines.push('請先選擇 1 件要交給老闆估價的商品。');
+  lines.push('下一步會顯示 AI 鑑價員報價，你可選「同意成交」或「退出議價」。');
+  lines.push(`可議價項目：${draft.options.length} 個（單次僅處理 1 件）`);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🤝 老闆議價｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(lines.join('\n'))
+    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+
+  if (draft.options.length <= 0) {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
+    );
+    await interaction.update({ embeds: [embed], components: [row] });
+    return;
+  }
+
+  const selectOptions = draft.options.slice(0, SHOP_HAGGLE_SELECT_LIMIT).map((option, idx) => ({
+    label: String(option.label || option.itemName || `選項${idx + 1}`).slice(0, 100),
+    description: String(option.description || '').slice(0, 100) || '選擇此商品進行估價',
+    value: `haggleidx_${idx}`
+  }));
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`shop_haggle_select_${safeMarket}`)
+    .setPlaceholder('選擇要交給老闆估價的商品')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(selectOptions);
+
+  const row1 = new ActionRowBuilder().addComponents(select);
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_haggle_all_${safeMarket}`).setLabel('📦 全部賣出(七折)').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row1, row2] });
+}
+
+async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss', spec = null) {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
+    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (!spec || typeof spec !== 'object') {
+    await showWorldShopHagglePicker(interaction, user, safeMarket, '議價選項已失效，請重新選擇。');
+    return;
+  }
+
+  const worldDay = Number(CORE.getWorld()?.day || 1);
+  const built = buildHaggleShadowPlayer(player, spec, worldDay);
+  if (built.error || !built.shadow) {
+    await showWorldShopHagglePicker(interaction, user, safeMarket, built.error || '目前沒有可議價的項目。');
+    return;
+  }
+
+  const offerResult = await ECON.sellPlayerAtMarket(built.shadow, safeMarket, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
+  if (!offerResult || offerResult.error || Number(offerResult.soldCount || 0) <= 0) {
+    await showWorldShopHagglePicker(interaction, user, safeMarket, `議價失敗：${offerResult?.error || '無可成交項目'}`);
+    return;
+  }
+
+  const pending = {
+    id: `haggle_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    marketType: safeMarket,
+    createdAt: Date.now(),
+    itemName: String(built.candidate?.itemName || spec.itemName || '').trim(),
+    spec: {
+      kind: 'item',
+      itemName: String(built.candidate?.itemName || spec.itemName || '').trim(),
+      itemRef: {
+        kind: 'item',
+        source: String(built.candidate?.source || spec?.itemRef?.source || 'inventory'),
+        tradeGoodId: String(built.candidate?.tradeGoodId || '')
+      }
+    },
+    quotedTotal: Number(offerResult.totalGold || 0),
+    soldCount: Number(offerResult.soldCount || 1),
+    npcName: String(offerResult.npcName || (safeMarket === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員')),
+    message: String(offerResult.message || ''),
+    historyRecall: String(offerResult.historyRecall || ''),
+    digitalRiskScore: Number(offerResult.digitalRiskScore || 0),
+    digitalRiskDelta: Number(offerResult.digitalRiskDelta || 0),
+    marketStateAfter: JSON.parse(JSON.stringify(built.shadow.marketState || {}))
+  };
+  player.shopSession.pendingHaggleOffer = pending;
+  CORE.savePlayer(player);
+
+  const pitch = extractPitchFromHaggleMessage(offerResult.message);
+  const detailLines = [];
+  detailLines.push(`商品：${pending.itemName}`);
+  detailLines.push(`報價：**${pending.quotedTotal} Rns 代幣**`);
+  detailLines.push(`鑑價員：${pending.npcName}`);
+  if (pitch) detailLines.push(`\n💬 ${pitch}`);
+  detailLines.push('\n請選擇是否同意本次 AI 議價。');
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🤝 議價提案｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(detailLines.join('\n'))
+    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel('✅ 同意成交').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel('↩️ 退出議價').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
 async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
@@ -7082,7 +7535,9 @@ function openShopSession(player, marketType = 'renaiss', sourceChoice = '') {
     preStory: String(player.currentStory || ''),
     preChoices: cloneChoicesForSnapshot(player.eventChoices || []),
     sellDraftOptions: [],
-    pendingSellSpec: null
+    pendingSellSpec: null,
+    haggleDraftOptions: [],
+    pendingHaggleOffer: null
   };
 }
 
@@ -7927,7 +8382,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   }
   
-  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.內力 || 10}/${player.maxStats.內力 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
   
   // 立即確認按鈕（避免 Discord 顯示失敗）
   await interaction.deferUpdate().catch(() => {});

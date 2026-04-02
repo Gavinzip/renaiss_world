@@ -136,7 +136,7 @@ function getSuggestion(player) {
     suggestions.push("🩸 生命低了！快去休息或找郎中");
   }
   
-  if ((player.stats?.內力 || 30) < 20) {
+  if ((player.stats?.能量 || 30) < 20) {
     suggestions.push("⚡ 能量不足！建議去情報酒吧或補給站");
   }
   

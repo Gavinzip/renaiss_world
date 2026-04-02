@@ -412,7 +412,7 @@ function createDigitalRoamerBlueprint(index = 0, group = 'Nemo') {
     stats: {
       戰力: base.battle + (index % 3) * 2,
       生命: base.hp + (index % 4) * 6,
-      內力: 45 + (index % 5) * 4,
+      能量: 45 + (index % 5) * 4,
       智商: 72 + (index % 6),
       魅力: 58 + (index % 7),
       運氣: 55 + (index % 4) * 3,
@@ -1773,21 +1773,21 @@ const NPC_AGENTS = [
   // ===== 襄陽城 =====
   { id: "lin_engineer", name: "林工程師", title: "機械師", sect: "中立", loc: "襄陽城", align: "good",
     personality: "創意無限，對機械有狂熱興趣",
-    stats: { 戰力: 15, 生命: 80, 內力: 20, 智商: 95, 魅力: 70, 運氣: 65, 財富: 80 },
+    stats: { 戰力: 15, 生命: 80, 能量: 20, 智商: 95, 魅力: 70, 運氣: 65, 財富: 80 },
     skills: { "齒輪操控": { realm: "大師", proficiency: 450 }, "能量轉換": { realm: "精通", proficiency: 300 } },
     inventory: ["能量核心", "微型齒輪"],
     relationships: { "蘇醫生": 80 },
     memory: [] },
   { id: "su_doctor", name: "蘇醫生", title: "細胞治療師", sect: "中立", loc: "襄陽城", align: "good",
     personality: "懸壺濟世，視錢財如糞土",
-    stats: { 戰力: 20, 生命: 90, 內力: 40, 智商: 88, 魅力: 85, 運氣: 75, 財富: 60 },
+    stats: { 戰力: 20, 生命: 90, 能量: 40, 智商: 88, 魅力: 85, 運氣: 75, 財富: 60 },
     skills: { "細胞修復": { realm: "頂尖", proficiency: 500 }, "解毒術": { realm: "大師", proficiency: 400 } },
     inventory: ["治療針劑", "解毒草藥"],
     relationships: { "林工程師": 80, "黑影商人": 30 },
     memory: [] },
   { id: "shadow_merchant", name: "黑影商人", title: "情報贩子", sect: "中立", loc: "襄陽城", align: "neutral",
     personality: "什麼都賣，什麼都買，只要價格到位",
-    stats: { 戰力: 8, 生命: 65, 內力: 15, 智商: 85, 魅力: 72, 運氣: 60, 財富: 95 },
+    stats: { 戰力: 8, 生命: 65, 能量: 15, 智商: 85, 魅力: 72, 運氣: 60, 財富: 95 },
     skills: { "情報收集": { realm: "大師", proficiency: 450 }, "偽裝術": { realm: "精通", proficiency: 300 } },
     inventory: ["加密通訊器", "夜視裝置"],
     relationships: { "蘇醫生": 30, "賞金獵人": 50 },
@@ -1795,21 +1795,21 @@ const NPC_AGENTS = [
   // ===== 大都 =====
   { id: "crown_prince", name: "皇太子", title: "未來統治者", sect: "皇室", loc: "大都", align: "good",
     personality: "心懷天下，但行事低調",
-    stats: { 戰力: 25, 生命: 85, 內力: 30, 智商: 90, 魅力: 88, 運氣: 80, 財富: 100 },
+    stats: { 戰力: 25, 生命: 85, 能量: 30, 智商: 90, 魅力: 88, 運氣: 80, 財富: 100 },
     skills: { "皇室禮儀": { realm: "頂尖", proficiency: 500 }, "能量護盾": { realm: "精通", proficiency: 300 } },
     inventory: ["皇室印璽", "護身符"],
     relationships: { "將軍王": 90 },
     memory: [] },
   { id: "general_wang", name: "將軍王", title: "邊境守將", sect: "軍隊", loc: "大都", align: "good",
     personality: "戎馬一生，紀律嚴明",
-    stats: { 戰力: 95, 生命: 100, 內力: 50, 智商: 75, 魅力: 82, 運氣: 70, 財富: 70 },
+    stats: { 戰力: 95, 生命: 100, 能量: 50, 智商: 75, 魅力: 82, 運氣: 70, 財富: 70 },
     skills: { "戰甲操控": { realm: "頂尖", proficiency: 500 }, "軍事戰略": { realm: "大師", proficiency: 450 } },
     inventory: ["外骨骼裝甲", "軍事地圖"],
     relationships: { "皇太子": 90, "間諜Q": 20 },
     memory: [] },
   { id: "spy_q", name: "間諜Q", title: "情報頭子", sect: "情報機構", loc: "大都", align: "neutral",
     personality: "為錢辦事，職業素養極高",
-    stats: { 戰力: 22, 生命: 75, 內力: 35, 智商: 92, 魅力: 78, 運氣: 65, 財富: 88 },
+    stats: { 戰力: 22, 生命: 75, 能量: 35, 智商: 92, 魅力: 78, 運氣: 65, 財富: 88 },
     skills: { "數據破解": { realm: "頂尖", proficiency: 500 }, "偽裝術": { realm: "大師", proficiency: 400 } },
     inventory: ["數據晶片", "變聲器"],
     relationships: { "將軍王": 20, "黑影商人": 60 },
@@ -1817,21 +1817,21 @@ const NPC_AGENTS = [
   // ===== 洛陽城 =====
   { id: "peony_lady", name: "牡丹夫人", title: "牡丹山莊莊主", sect: "牡丹山莊", loc: "洛陽城", align: "good",
     personality: "洛陽城實際掌控者，八面玲瓏",
-    stats: { 戰力: 28, 生命: 82, 內力: 55, 智商: 90, 魅力: 95, 運氣: 75, 財富: 98 },
+    stats: { 戰力: 28, 生命: 82, 能量: 55, 智商: 90, 魅力: 95, 運氣: 75, 財富: 98 },
     skills: { "花語操控": { realm: "頂尖", proficiency: 500 }, "談判術": { realm: "大師", proficiency: 450 } },
     inventory: ["牡丹山莊令牌", "基因改造花種"],
     relationships: { "說書人老張": 85, "賞金獵人雷": 60 },
     memory: [] },
   { id: "storyteller_zhang", name: "說書人老張", title: "情報觀測員", sect: "中立", loc: "洛陽城", align: "neutral",
     personality: "什麼都知道，什麼都說，嘴上沒把門",
-    stats: { 戰力: 5, 生命: 60, 內力: 10, 智商: 85, 魅力: 80, 運氣: 55, 財富: 40 },
+    stats: { 戰力: 5, 生命: 60, 能量: 10, 智商: 85, 魅力: 80, 運氣: 55, 財富: 40 },
     skills: { "情報收集": { realm: "頂尖", proficiency: 500 }, "記憶術": { realm: "大師", proficiency: 400 } },
     inventory: ["記錄晶片", "各地地圖"],
     relationships: { "牡丹夫人": 85, "黑影商人": 70 },
     memory: [] },
   { id: "bounty_hunter_lei", name: "賞金獵人雷", title: "賞金聯盟成員", sect: "賞金聯盟", loc: "洛陽城", align: "neutral",
     personality: "賞金獵人，冷酷務實",
-    stats: { 戰力: 60, 生命: 85, 內力: 40, 智商: 78, 魅力: 65, 運氣: 70, 財富: 75 },
+    stats: { 戰力: 60, 生命: 85, 能量: 40, 智商: 78, 魅力: 65, 運氣: 70, 財富: 75 },
     skills: { "追蹤術": { realm: "大師", proficiency: 450 }, "射擊術": { realm: "精通", proficiency: 300 } },
     inventory: ["追蹤器", "能量手槍"],
     relationships: { "牡丹夫人": 60, "黑影商人": 50 },
@@ -1839,21 +1839,21 @@ const NPC_AGENTS = [
   // ===== 敦煌 =====
   { id: "abu_trader", name: "絲路商人阿布", title: "駝隊首領", sect: "絲路商會", loc: "敦煌", align: "neutral",
     personality: "精明但誠信，沙漠中的老狐狸",
-    stats: { 戰力: 12, 生命: 75, 內力: 20, 智商: 85, 魅力: 80, 運氣: 70, 財富: 90 },
+    stats: { 戰力: 12, 生命: 75, 能量: 20, 智商: 85, 魅力: 80, 運氣: 70, 財富: 90 },
     skills: { "商務談判": { realm: "頂尖", proficiency: 500 }, "沙漠生存": { realm: "大師", proficiency: 400 } },
     inventory: ["商隊通行證", "沙漠導航儀"],
     relationships: { "敦煌守護者": 40, "沙盜首領": 0 },
     memory: [] },
   { id: "dunhuang_guardian", name: "敦煌守護者", title: "莫高窟長老", sect: "莫高窟", loc: "敦煌", align: "good",
     personality: "據說已活了三百年，對敦煌了如指掌",
-    stats: { 戰力: 35, 生命: 95, 內力: 80, 智商: 92, 魅力: 75, 運氣: 60, 財富: 50 },
+    stats: { 戰力: 35, 生命: 95, 能量: 80, 智商: 92, 魅力: 75, 運氣: 60, 財富: 50 },
     skills: { "壁畫解讀": { realm: "頂尖", proficiency: 500 }, "遠古知識": { realm: "頂尖", proficiency: 500 } },
     inventory: ["洞窟鑰匙", "壁畫複製品"],
     relationships: { "阿布": 40 },
     memory: [] },
   { id: "sand_bandit_leader", name: "沙盜首領", title: "沙漠之王", sect: "沙盜團", loc: "敦煌", align: "evil",
     personality: "心狠手辣，沙漠中最危險的存在",
-    stats: { 戰力: 75, 生命: 90, 內力: 45, 智商: 78, 魅力: 60, 運氣: 55, 財富: 85 },
+    stats: { 戰力: 75, 生命: 90, 能量: 45, 智商: 78, 魅力: 60, 運氣: 55, 財富: 85 },
     skills: { "沙漠戰": { realm: "大師", proficiency: 450 }, "埋伏術": { realm: "精通", proficiency: 300 } },
     inventory: ["沙漠載具", "沙漠地圖"],
     relationships: { "阿布": 0, "賞金獵人雷": 80 },
@@ -1861,7 +1861,7 @@ const NPC_AGENTS = [
   // ===== 海外島嶼 =====
   { id: "island_master", name: "島主東岚", title: "神秘島主", sect: "桃花島", loc: "桃花島", align: "neutral",
     personality: "脾氣古怪的傳說人物，實力深不可測",
-    stats: { 戰力: 99, 生命: 100, 內力: 95, 智商: 95, 魅力: 75, 運氣: 70, 財富: 90 },
+    stats: { 戰力: 99, 生命: 100, 能量: 95, 智商: 95, 魅力: 75, 運氣: 70, 財富: 90 },
     skills: { "混沌之力": { realm: "傳說", proficiency: 600 }, "機關術": { realm: "頂尖", proficiency: 500 } },
     inventory: ["混沌獸蛋", "島嶼地圖"],
     relationships: {},
@@ -1869,7 +1869,7 @@ const NPC_AGENTS = [
   // ===== 潮汐試煉島 =====
   { id: "dragon_wood_master", name: "龍木島主", title: "試煉頂尖", sect: "潮汐試煉島", loc: "潮汐試煉島", align: "good",
     personality: "戰技超群，低調神秘",
-    stats: { 戰力: 100, 生命: 100, 內力: 98, 智商: 90, 魅力: 80, 運氣: 75, 財富: 85 },
+    stats: { 戰力: 100, 生命: 100, 能量: 98, 智商: 90, 魅力: 80, 運氣: 75, 財富: 85 },
     skills: { "頂尖戰技": { realm: "傳說", proficiency: 600 }, "能量操控": { realm: "傳說", proficiency: 600 } },
     inventory: ["高階技術檔案", "島嶼通行證"],
     relationships: { "木島主": 100 },
@@ -1877,14 +1877,14 @@ const NPC_AGENTS = [
   // ===== 北疆地區 =====
   { id: "ice_queen", name: "冰雪女王", title: "雪山站主理人", sect: "雪山站", loc: "雪白山莊", align: "good",
     personality: "一生只愛冰雪，對外人冷淡",
-    stats: { 戰力: 92, 生命: 95, 內力: 90, 智商: 88, 魅力: 85, 運氣: 65, 財富: 80 },
+    stats: { 戰力: 92, 生命: 95, 能量: 90, 智商: 88, 魅力: 85, 運氣: 65, 財富: 80 },
     skills: { "冰晶操控": { realm: "頂尖", proficiency: 500 }, "冰川之力": { realm: "大師", proficiency: 450 } },
     inventory: ["冰晶權杖", "雪山地圖"],
     relationships: { "獵人老陳": 60 },
     memory: [] },
   { id: "hunter_old_chen", name: "獵人老陳", title: "資深雪地獵人", sect: "中立", loc: "雪白山莊", align: "neutral",
     personality: "在雪山生活了五十年，沉默寡言",
-    stats: { 戰力: 50, 生命: 85, 內力: 30, 智商: 75, 魅力: 60, 運氣: 70, 財富: 55 },
+    stats: { 戰力: 50, 生命: 85, 能量: 30, 智商: 75, 魅力: 60, 運氣: 70, 財富: 55 },
     skills: { "雪地追蹤": { realm: "頂尖", proficiency: 500 }, "陷阱術": { realm: "大師", proficiency: 400 } },
     inventory: ["雪狼標本", "獵具"],
     relationships: { "冰雪女王": 60 },
@@ -1892,21 +1892,21 @@ const NPC_AGENTS = [
   // ===== 草原部落 =====
   { id: "chief_son", name: "族長之子", title: "草原未來領袖", sect: "草原部落", loc: "草原部落", align: "good",
     personality: "英俊瀟灑，戰技高強，心懷牧民",
-    stats: { 戰力: 70, 生命: 90, 內力: 45, 智商: 80, 魅力: 92, 運氣: 75, 財富: 70 },
+    stats: { 戰力: 70, 生命: 90, 能量: 45, 智商: 80, 魅力: 92, 運氣: 75, 財富: 70 },
     skills: { "騎術": { realm: "頂尖", proficiency: 500 }, "草原戰": { realm: "大師", proficiency: 450 } },
     inventory: ["赤兔馬", "部落令牌"],
     relationships: { "流浪詩人": 80, "馬賊王": 0 },
     memory: [] },
   { id: "wandering_poet", name: "流浪詩人", title: "草原吟遊者", sect: "中立", loc: "草原部落", align: "neutral",
     personality: "走遍天下的吟遊詩人，見多識廣",
-    stats: { 戰力: 8, 生命: 65, 內力: 20, 智商: 88, 魅力: 90, 運氣: 80, 財富: 45 },
+    stats: { 戰力: 8, 生命: 65, 能量: 20, 智商: 88, 魅力: 90, 運氣: 80, 財富: 45 },
     skills: { "情報收集": { realm: "大師", proficiency: 450 }, "演奏術": { realm: "頂尖", proficiency: 500 } },
     inventory: ["詩歌手稿", "樂器"],
     relationships: { "族長之子": 80 },
     memory: [] },
   { id: "bandit_king", name: "馬賊王", title: "草原匪首", sect: "馬賊團", loc: "草原部落", align: "evil",
     personality: "草原上令人聞風喪膽的馬賊頭子",
-    stats: { 戰力: 85, 生命: 95, 內力: 50, 智商: 80, 魅力: 65, 運氣: 60, 財富: 90 },
+    stats: { 戰力: 85, 生命: 95, 能量: 50, 智商: 80, 魅力: 65, 運氣: 60, 財富: 90 },
     skills: { "騎兵戰": { realm: "大師", proficiency: 450 }, "游擊術": { realm: "精通", proficiency: 300 } },
     inventory: ["馬賊令牌", "掠奪物資"],
     relationships: { "族長之子": 0, "賞金獵人雷": 90 },
@@ -1914,21 +1914,21 @@ const NPC_AGENTS = [
   // ===== 光明頂 =====
   { id: "ming_emperor", name: "主導者明皇", title: "光焰議會主導者", sect: "光焰議會", loc: "光明頂", align: "good",
     personality: "光明的守護者，理想主義者",
-    stats: { 戰力: 95, 生命: 100, 內力: 90, 智商: 88, 魅力: 85, 運氣: 75, 財富: 80 },
+    stats: { 戰力: 95, 生命: 100, 能量: 90, 智商: 88, 魅力: 85, 運氣: 75, 財富: 80 },
     skills: { "聖火操控": { realm: "頂尖", proficiency: 500 }, "光能術": { realm: "大師", proficiency: 450 } },
     inventory: ["聖火令", "主導者印璽"],
     relationships: { "火焰使者": 90, "叛教者": 0 },
     memory: [] },
   { id: "flame_ember", name: "火焰使者", title: "前線旗隊首領", sect: "光焰議會", loc: "光明頂", align: "good",
     personality: "火爆脾氣，正義感強",
-    stats: { 戰力: 85, 生命: 90, 內力: 75, 智商: 75, 魅力: 70, 運氣: 65, 財富: 60 },
+    stats: { 戰力: 85, 生命: 90, 能量: 75, 智商: 75, 魅力: 70, 運氣: 65, 財富: 60 },
     skills: { "火焰操控": { realm: "頂尖", proficiency: 500 }, "戰鬥術": { realm: "大師", proficiency: 400 } },
     inventory: ["火焰令牌", "五行旗幟"],
     relationships: { "主導者明皇": 90, "叛教者": 0 },
     memory: [] },
   { id: "traitor", name: "叛教者", title: "黑暗叛徒", sect: "暗黑組織", loc: "光明頂", align: "evil",
     personality: "逃離光焰議會的叛徒，充滿怨恨",
-    stats: { 戰力: 80, 生命: 85, 內力: 70, 智商: 85, 魅力: 60, 運氣: 55, 財富: 75 },
+    stats: { 戰力: 80, 生命: 85, 能量: 70, 智商: 85, 魅力: 60, 運氣: 55, 財富: 75 },
     skills: { "暗能量操控": { realm: "大師", proficiency: 450 }, "背叛術": { realm: "精通", proficiency: 300 } },
     inventory: ["暗黑手冊", "暗能量晶體"],
     relationships: { "主導者明皇": 0, "火焰使者": 0, "總管太監": 80 },
@@ -1936,21 +1936,21 @@ const NPC_AGENTS = [
   // ===== 黑木崖 =====
   { id: "chamberlain", name: "總管太監", title: "日月光基地下首領", sect: "暗潮議會", loc: "黑木崖", align: "evil",
     personality: "權傾朝野的陰謀家，笑裡藏刀",
-    stats: { 戰力: 35, 生命: 70, 內力: 65, 智商: 95, 魅力: 80, 運氣: 60, 財富: 100 },
+    stats: { 戰力: 35, 生命: 70, 能量: 65, 智商: 95, 魅力: 80, 運氣: 60, 財富: 100 },
     skills: { "暗能量操控": { realm: "頂尖", proficiency: 500 }, "權謀術": { realm: "頂尖", proficiency: 500 } },
     inventory: ["暗潮議會令牌", "情報網絡圖"],
     relationships: { "叛教者": 80, "暗影殺手": 100 },
     memory: [] },
   { id: "shadow_assassin", name: "暗影殺手", title: "暗潮議會刺客", sect: "暗潮議會", loc: "黑木崖", align: "evil",
     personality: "無聲無息的死亡使者",
-    stats: { 戰力: 80, 生命: 80, 內力: 60, 智商: 85, 魅力: 55, 運氣: 50, 財富: 70 },
+    stats: { 戰力: 80, 生命: 80, 能量: 60, 智商: 85, 魅力: 55, 運氣: 50, 財富: 70 },
     skills: { "隱身術": { realm: "頂尖", proficiency: 500 }, "暗殺術": { realm: "大師", proficiency: 450 } },
     inventory: ["暗殺匕首", "隱身披風"],
     relationships: { "總管太監": 100 },
     memory: [] },
   { id: "double_agent", name: "雙面間諜", title: "多重身份", sect: "未知", loc: "黑木崖", align: "neutral",
     personality: "沒人知道他的真實立場",
-    stats: { 戰力: 18, 生命: 70, 內力: 35, 智商: 92, 魅力: 85, 運氣: 75, 財富: 85 },
+    stats: { 戰力: 18, 生命: 70, 能量: 35, 智商: 92, 魅力: 85, 運氣: 75, 財富: 85 },
     skills: { "偽裝術": { realm: "頂尖", proficiency: 500 }, "情報收集": { realm: "大師", proficiency: 450 } },
     inventory: ["變色面具", "加密通訊器"],
     relationships: { "總管太監": 50, "賞金獵人雷": 60 },
@@ -2092,7 +2092,7 @@ async function worldTick(useAI, apiKey) {
   for (const player of getAllPlayers()) {
     if (player.alive) {
       player.stats.生命 = Math.min(player.maxStats.生命, player.stats.生命 + 5);
-      player.stats.內力 = Math.min(player.maxStats.內力, player.stats.內力 + 2);
+      player.stats.能量 = Math.min(player.maxStats.能量, player.stats.能量 + 2);
       savePlayer(player);
     }
   }
@@ -2318,7 +2318,7 @@ async function agentThink(agent, apiKey) {
     const damage = Math.floor(Math.random() * 25) + 5;
     agent.stats.生命 = Math.max(10, (agent.stats.生命 || 100) - damage);
     if (Math.random() < 0.3) {
-      agent.stats.內力 = Math.min(100, (agent.stats.內力 || 50) + 5);
+      agent.stats.能量 = Math.min(100, (agent.stats.能量 || 50) + 5);
     }
   } else if (eventType === "奇遇") {
     // 奇遇可能獲得好處
@@ -2439,7 +2439,7 @@ function createPlayer(discordId, name, gender, sect) {
     stats: {
       戰力: 30 + Math.floor(Math.random() * 10),
       生命: 100,
-      內力: 30,
+      能量: 30,
       智商: 60 + Math.floor(Math.random() * 15),
       魅力: 60 + Math.floor(Math.random() * 15),
       運氣: 60 + Math.floor(Math.random() * 15),
@@ -2450,7 +2450,7 @@ function createPlayer(discordId, name, gender, sect) {
     
     maxStats: {
       生命: 100,
-      內力: 100
+      能量: 100
     },
     
     skills: {},
@@ -2519,11 +2519,37 @@ function normalizeAlignmentValue(alignment) {
   return text;
 }
 
+function normalizeEnergyStatSchema(player) {
+  if (!player || typeof player !== 'object') return;
+  if (!player.stats || typeof player.stats !== 'object') player.stats = {};
+  if (!player.maxStats || typeof player.maxStats !== 'object') player.maxStats = {};
+
+  // 舊資料相容：把 legacy 內力欄位轉成能量，避免畫面再出現內力字樣。
+  if (player.stats.能量 === undefined && player.stats.內力 !== undefined) {
+    player.stats.能量 = player.stats.內力;
+  }
+  if (player.maxStats.能量 === undefined && player.maxStats.內力 !== undefined) {
+    player.maxStats.能量 = player.maxStats.內力;
+  }
+
+  if (player.stats.能量 === undefined) player.stats.能量 = 30;
+  if (player.maxStats.能量 === undefined) player.maxStats.能量 = 100;
+  player.stats.能量 = Math.max(0, Number(player.stats.能量 || 0));
+  player.maxStats.能量 = Math.max(1, Number(player.maxStats.能量 || 100));
+  if (player.stats.能量 > player.maxStats.能量) {
+    player.stats.能量 = player.maxStats.能量;
+  }
+
+  delete player.stats.內力;
+  delete player.maxStats.內力;
+}
+
 function savePlayer(player) {
   const playerDir = path.join(DATA_DIR, 'players');
   if (!fs.existsSync(playerDir)) fs.mkdirSync(playerDir, { recursive: true });
   if (player && typeof player === 'object') {
     player.alignment = normalizeAlignmentValue(player.alignment);
+    normalizeEnergyStatSchema(player);
   }
   normalizePlayerMemorySchema(player);
   ensureLongTermMemoryDigest(player, true);
@@ -2536,6 +2562,7 @@ function loadPlayer(discordId) {
   if (fs.existsSync(playerFile)) {
     const player = JSON.parse(fs.readFileSync(playerFile, 'utf8'));
     player.alignment = normalizeAlignmentValue(player.alignment);
+    normalizeEnergyStatSchema(player);
     normalizePlayerMemorySchema(player);
     ensureLongTermMemoryDigest(player, false);
     ensurePlayerMemoryIndexed(player);
@@ -2551,6 +2578,7 @@ function getAllPlayers() {
   return files.map(f => {
     const player = normalizePlayerMemorySchema(JSON.parse(fs.readFileSync(path.join(playerDir, f), 'utf8')));
     player.alignment = normalizeAlignmentValue(player.alignment);
+    normalizeEnergyStatSchema(player);
     ensureLongTermMemoryDigest(player, false);
     ensurePlayerMemoryIndexed(player);
     return player;
@@ -2579,14 +2607,14 @@ const HERBS = {
   "雪蓮": { 功效: "療傷", 等級: 4, 屬性: { 止血: 8, 溫陽: 4 } },
   "田七": { 功效: "活血化瘀", 等級: 2, 屬性: { 活血: 5, 止血: 3 } },
   "茯苓": { 功效: "利水滲濕", 等級: 2, 屬性: { 利水: 5, 補氣: 2 } },
-  "毒蛇膽": { 功效: "大增能量", 等級: 4, 屬性: { 內力: 15, 毒性: 3 } },
+  "毒蛇膽": { 功效: "大增能量", 等級: 4, 屬性: { 能量: 15, 毒性: 3 } },
   "蜈蚣": { 功效: "以毒攻毒", 等級: 3, 屬性: { 解毒: 8, 毒性: 5 } },
   "蜂蜜": { 功效: "調和藥性", 等級: 1, 屬性: { 調和: 10, 補氣: 1 } },
   "食鹽": { 功效: "消炎", 等級: 1, 屬性: { 消炎: 3 } }
 };
 
 function craftingLogic(ingredients) {
-  let totalProps = { 清熱: 0, 止血: 0, 補氣: 0, 解毒: 0, 毒性: 0, 溫陽: 0, 活血: 0, 內力: 0 };
+  let totalProps = { 清熱: 0, 止血: 0, 補氣: 0, 解毒: 0, 毒性: 0, 溫陽: 0, 活血: 0, 能量: 0 };
   let itemLevel = 0;
   
   for (const herb of ingredients) {

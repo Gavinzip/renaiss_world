@@ -235,14 +235,14 @@ const ENEMIES = {
   "山匪嘍囉": {
     name: "山匪嘍囉",
     type: "bandit",
-    stats: { 戰力: 25, 生命: 80, 內力: 10 },
+    stats: { 戰力: 25, 生命: 80, 能量: 10 },
     loot: ["Rns10-30", "乾糧"],
     dropRate: 0.3
   },
   "山匪首領": {
     name: "山匪首領",
     type: "bandit",
-    stats: { 戰力: 65, 生命: 200, 內力: 40 },
+    stats: { 戰力: 65, 生命: 200, 能量: 40 },
     loot: ["Rns50-100", "黑風刀法技術檔案", "山寨地契"],
     dropRate: 0.15
   },
@@ -250,28 +250,28 @@ const ENEMIES = {
     name: "野狼王",
     type: "maniac",
     forced: true, // 強制戰鬥
-    stats: { 戰力: 88, 生命: 300, 內力: 50 },
+    stats: { 戰力: 88, 生命: 300, 能量: 50 },
     loot: ["Rns100-200", "血刃協議", "狼牙項鍊"],
     dropRate: 0.05
   },
   "血刀門徒": {
     name: "血刀門徒",
     type: "sect",
-    stats: { 戰力: 55, 生命: 150, 內力: 35 },
+    stats: { 戰力: 55, 生命: 150, 能量: 35 },
     loot: ["Rns30-60", "血刀技術檔案"],
     dropRate: 0.2
   },
   "守閣羅漢": {
     name: "守閣羅漢",
     type: "guardian",
-    stats: { 戰力: 70, 生命: 250, 內力: 60 },
+    stats: { 戰力: 70, 生命: 250, 能量: 60 },
     loot: ["Rns40-80", "強化模組片段"],
     dropRate: 0.1
   },
   "島上守護": {
     name: "島上守護",
     type: "guardian",
-    stats: { 戰力: 75, 生命: 280, 內力: 70 },
+    stats: { 戰力: 75, 生命: 280, 能量: 70 },
     loot: ["Rns50-100", "古代核心檔案片段"],
     dropRate: 0.08
   }

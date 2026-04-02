@@ -65,11 +65,18 @@ try {
 
 const AI_MAX_RETRIES = 3;
 const AI_TIMEOUT_MS = 90000;
-const STORY_TIMEOUT_MS = Math.max(10000, Number(process.env.STORY_TIMEOUT_MS || 30000));
-const CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.CHOICE_TIMEOUT_MS || 26000));
-const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000));
+const STORY_TIMEOUT_MS = Math.max(15000, Number(process.env.STORY_TIMEOUT_MS || 30000) * 2);
+const CHOICE_TIMEOUT_MS = Math.max(12000, Number(process.env.CHOICE_TIMEOUT_MS || 26000) * 2);
+const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(10000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000) * 2);
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
+const PERF_MAX_SAMPLES = Math.max(10, Math.min(300, Number(process.env.AI_PERF_MAX_SAMPLES || 80)));
+
+const AI_PERF = {
+  story: [],
+  choices: [],
+  initialChoices: []
+};
 
 const FACTION_DISPLAY_MAP = Object.freeze({
   '正派': '信標聯盟',
@@ -106,6 +113,37 @@ const NARRATIVE_TERM_REPLACEMENTS = [
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function recordAIPerf(kind = 'story', ms = 0) {
+  const key = kind === 'choices' || kind === 'initialChoices' ? kind : 'story';
+  const value = Math.max(0, Number(ms || 0));
+  if (!Number.isFinite(value)) return;
+  const bucket = AI_PERF[key];
+  bucket.push(value);
+  if (bucket.length > PERF_MAX_SAMPLES) bucket.splice(0, bucket.length - PERF_MAX_SAMPLES);
+}
+
+function summarizeAIPerfBucket(list = []) {
+  if (!Array.isArray(list) || list.length === 0) {
+    return { count: 0, avgMs: 0, p95Ms: 0, maxMs: 0 };
+  }
+  const sorted = [...list].sort((a, b) => a - b);
+  const count = sorted.length;
+  const sum = sorted.reduce((acc, cur) => acc + cur, 0);
+  const avgMs = Math.round(sum / count);
+  const p95Idx = Math.max(0, Math.min(count - 1, Math.ceil(count * 0.95) - 1));
+  const p95Ms = Math.round(sorted[p95Idx]);
+  const maxMs = Math.round(sorted[count - 1]);
+  return { count, avgMs, p95Ms, maxMs };
+}
+
+function getAIPerfStats() {
+  return {
+    story: summarizeAIPerfBucket(AI_PERF.story),
+    choices: summarizeAIPerfBucket(AI_PERF.choices),
+    initialChoices: summarizeAIPerfBucket(AI_PERF.initialChoices)
+  };
 }
 
 function mapFactionLabel(raw = '') {
@@ -1074,6 +1112,49 @@ function hasThreatCue(text = '') {
   return THREAT_KEYWORDS.some(k => source.includes(k));
 }
 
+function buildDeterministicFallbackStory({
+  player = null,
+  pet = null,
+  previousAction = '',
+  previousOutcome = '',
+  previousStorySummary = '',
+  playerLang = 'zh-TW',
+  location = ''
+} = {}) {
+  const safeName = String(player?.name || '冒險者').trim() || '冒險者';
+  const safePet = String(pet?.name || '夥伴').trim() || '夥伴';
+  const safeLocation = String(location || player?.location || '未知區域').trim() || '未知區域';
+  const action = String(previousAction || '繼續探索').trim();
+  const outcome = String(previousOutcome || '').trim();
+  const summary = String(previousStorySummary || '').trim();
+
+  if (playerLang === 'en') {
+    return (
+      `${safeName} and ${safePet} moved through ${safeLocation} while regrouping after "${action}". ` +
+      `${outcome ? `Current result: ${outcome}. ` : ''}` +
+      `They checked nearby merchants, scanned container labels, and marked two leads that can be traced next. ` +
+      `${summary ? `Context retained: ${summary.slice(0, 120)}. ` : ''}` +
+      `The atmosphere stayed tense, but the route ahead remained open for the next decision.`
+    );
+  }
+  if (playerLang === 'zh-CN') {
+    return (
+      `${safeName}与${safePet}在${safeLocation}一带重新整队，承接你刚才的行动「${action}」。` +
+      `${outcome ? `目前结果：${outcome}。` : ''}` +
+      `他们先确认周边摊位与封存舱标签，锁定了两条可继续追查的来源线索。` +
+      `${summary ? `前情保留：${summary.slice(0, 90)}。` : ''}` +
+      `现场气氛仍然紧绷，但下一步行动窗口已经打开。`
+    );
+  }
+  return (
+    `${safeName}與${safePet}在${safeLocation}一帶重新整隊，承接你剛才的行動「${action}」。` +
+    `${outcome ? `目前結果：${outcome}。` : ''}` +
+    `他們先確認周邊攤位與封存艙標籤，鎖定了兩條可繼續追查的來源線索。` +
+    `${summary ? `前情保留：${summary.slice(0, 90)}。` : ''}` +
+    `現場氣氛仍然緊繃，但下一步行動窗口已經打開。`
+  );
+}
+
 function choiceMentionsThreat(choice) {
   if (!choice || typeof choice !== 'object') return false;
   const text = [choice.name || '', choice.choice || '', choice.desc || '', choice.tag || ''].join(' ');
@@ -1428,7 +1509,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
         model,
         maxTokens: 1600,
         timeoutMs: STORY_TIMEOUT_MS,
-        retries: 2
+        retries: 3
       });
       const normalizedStory = normalizeOutputByLanguage(story, playerLang);
       if (!normalizedStory || normalizedStory.length < 120) {
@@ -1436,8 +1517,10 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
       }
 
       if (normalizedStory.length > 2600) {
+        recordAIPerf('story', Date.now() - startedAt);
         return normalizedStory.substring(0, 2600) + '...[故事過長已截斷]';
       }
+      recordAIPerf('story', Date.now() - startedAt);
       console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
       return normalizedStory;
     } catch (e) {
@@ -1445,7 +1528,21 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
     }
   }
 
-  throw new Error('AI story generation failed (no fallback story)');
+  const fallbackStory = normalizeOutputByLanguage(
+    buildDeterministicFallbackStory({
+      player,
+      pet,
+      previousAction,
+      previousOutcome,
+      previousStorySummary,
+      playerLang,
+      location
+    }),
+    playerLang
+  );
+  recordAIPerf('story', Date.now() - startedAt);
+  console.warn('[Storyteller] generateStory 使用本地保底故事，避免中斷流程');
+  return fallbackStory;
 }
 
 // ========== AI 生成選項（帶風險標籤+更具體）============
@@ -1582,7 +1679,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       model: MINIMAX_MODEL,
       maxTokens: 700,
       timeoutMs: CHOICE_TIMEOUT_MS,
-      retries: 2
+      retries: 3
     });
 
     const choices = [];
@@ -1639,6 +1736,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     const finalChoices = enforceThreatChoiceContinuity(groundedChoices, previousStory || '', playerLang, {
       anchors: storyAnchors
     });
+    recordAIPerf('choices', Date.now() - startedAt);
     console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms`);
     return finalChoices;
   } catch (e) {
@@ -1647,6 +1745,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     const finalChoices = enforceThreatChoiceContinuity(fallbackChoices, previousStory || '', playerLang, {
       anchors: storyAnchors
     });
+    recordAIPerf('choices', Date.now() - startedAt);
     return finalChoices.slice(0, 7);
   }
 }
@@ -1730,7 +1829,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       label: 'generateInitialChoices',
       maxTokens: 700,
       timeoutMs: CHOICE_TIMEOUT_MS,
-      retries: 2
+      retries: 3
     });
 
     const choices = [];
@@ -1761,11 +1860,13 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     }
     const normalized = choices.slice(0, 7).map(c => normalizeChoiceByLanguage(c, playerLang));
     const finalChoices = normalized;
+    recordAIPerf('initialChoices', Date.now() - startedAt);
     console.log(`[AI][generateInitialChoices] total ${Date.now() - startedAt}ms`);
     return finalChoices;
   } catch (e) {
     console.error('[AI] 生成開場選項失敗，改用本地保底選項:', e.message);
     const fallbackChoices = buildDeterministicFallbackChoices(player, '', playerLang);
+    recordAIPerf('initialChoices', Date.now() - startedAt);
     return fallbackChoices.slice(0, 7);
   }
 }
@@ -1774,6 +1875,7 @@ module.exports = {
   generateStory,
   generateChoicesWithAI,
   generateInitialChoices,
+  getAIPerfStats,
   RENAISS_NPCS,
   RENAISS_LOCATIONS
 };

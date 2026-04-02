@@ -333,7 +333,7 @@ function applyWishOutcome(player, outcome) {
 
   player.stats.財富 = Math.max(0, (player.stats.財富 || 0) + goldDelta);
   player.stats.生命 = clamp((player.stats.生命 || 0) + hpDelta, 0, player.maxStats.生命 || 100);
-  player.stats.內力 = clamp((player.stats.內力 || 0) + innerDelta, 0, player.maxStats.內力 || 100);
+  player.stats.能量 = clamp((player.stats.能量 || 0) + innerDelta, 0, player.maxStats.能量 || 100);
   player.stats.運氣 = clamp((player.stats.運氣 || 50) + luckDelta, 1, 100);
 
   let itemGranted = '';
@@ -346,7 +346,7 @@ function applyWishOutcome(player, outcome) {
   const summaryLines = [];
   if (goldDelta !== 0) summaryLines.push(`💰 Rns ${goldDelta > 0 ? '+' : ''}${goldDelta}`);
   if (hpDelta !== 0) summaryLines.push(`❤️ 生命 ${hpDelta > 0 ? '+' : ''}${hpDelta}`);
-  if (innerDelta !== 0) summaryLines.push(`🌀 內力 ${innerDelta > 0 ? '+' : ''}${innerDelta}`);
+  if (innerDelta !== 0) summaryLines.push(`🌀 能量 ${innerDelta > 0 ? '+' : ''}${innerDelta}`);
   if (luckDelta !== 0) summaryLines.push(`🍀 幸運 ${luckDelta > 0 ? '+' : ''}${luckDelta}`);
   if (itemGranted) summaryLines.push(`🎁 獲得道具：${itemGranted}`);
 

@@ -194,7 +194,7 @@ function generateNarrative(agent) {
     agent.stats.生命 = Math.min(100, (agent.stats.生命 || 50) + 30);
   }
   if (action === "訓練") {
-    agent.stats.內力 = Math.min(100, (agent.stats.內力 || 50) + 5);
+    agent.stats.能量 = Math.min(100, (agent.stats.能量 || 50) + 5);
   }
   
   narrative = sanitizeWorldText(narrative);

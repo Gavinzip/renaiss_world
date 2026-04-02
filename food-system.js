@@ -206,12 +206,12 @@ function eatFood(entity, food) {
         results.push(`生命 -${effect.value}`);
         break;
       case 'mp':
-        entity.stats.內力 = Math.min(entity.maxStats?.內力 || 100, entity.stats.內力 + effect.value);
-        results.push(`內力 +${effect.value}`);
+        entity.stats.能量 = Math.min(entity.maxStats?.能量 || 100, (entity.stats.能量 || 0) + effect.value);
+        results.push(`能量 +${effect.value}`);
         break;
       case 'mpDamage':
-        entity.stats.內力 = Math.max(0, entity.stats.內力 - effect.value);
-        results.push(`內力 -${effect.value}`);
+        entity.stats.能量 = Math.max(0, (entity.stats.能量 || 0) - effect.value);
+        results.push(`能量 -${effect.value}`);
         break;
       case 'attackUp':
         entity.stats.戰力 = (entity.stats.戰力 || 30) + effect.value;
