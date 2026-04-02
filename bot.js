@@ -116,8 +116,8 @@ function t(key) {
 
 function getMarketTypeLabel(marketType = 'renaiss') {
   return String(marketType || '').trim().toLowerCase() === 'digital'
-    ? 'Digital 商城'
-    : 'Renaiss 商城';
+    ? '神秘鑑價站'
+    : '鑑價站';
 }
 
 function formatFinanceAmount(amount = 0) {
@@ -814,8 +814,8 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       profile: '💳 檔案',
       gacha: '🎰 抽獎',
       map: '🗺️ 地圖',
-      quickShopReady: '🏪 商城',
-      quickShopCooldown: (remaining) => `🏪 商城 ${remaining}T`
+      quickShopReady: '🏪 鑑價站',
+      quickShopCooldown: (remaining) => `🏪 鑑價站 ${remaining}T`
     },
     'zh-CN': {
       inventory: '🎒 背包',
@@ -824,8 +824,8 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       profile: '💳 档案',
       gacha: '🎰 抽奖',
       map: '🗺️ 地图',
-      quickShopReady: '🏪 商城',
-      quickShopCooldown: (remaining) => `🏪 商城 ${remaining}T`
+      quickShopReady: '🏪 鉴价站',
+      quickShopCooldown: (remaining) => `🏪 鉴价站 ${remaining}T`
     },
     en: {
       inventory: '🎒 Bag',
@@ -834,8 +834,8 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       profile: '💳 Profile',
       gacha: '🎰 Draw',
       map: '🗺️ Map',
-      quickShopReady: '🏪 Shop',
-      quickShopCooldown: (remaining) => `🏪 Shop ${remaining}T`
+      quickShopReady: '🏪 Appraisal',
+      quickShopCooldown: (remaining) => `🏪 Appraisal ${remaining}T`
     }
   };
   return map[lang] || map['zh-TW'];
@@ -852,7 +852,7 @@ function appendMainMenuUtilityButtons(buttons = [], player = null) {
     new ButtonBuilder().setCustomId('open_profile').setLabel(labels.profile).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_gacha').setLabel(labels.gacha).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_map').setLabel(labels.map).setStyle(ButtonStyle.Secondary),
-    buildQuickShopButton(player, 'renaiss')
+    buildQuickShopButton(player)
   );
   return list;
 }
@@ -1150,10 +1150,10 @@ function rewriteScratchChoiceToShop(choice, player = null) {
   return {
     ...choice,
     action: marketAction,
-    tag: marketAction === 'market_digital' ? '[🕳️精明殺價]' : '[🏪公道鑑價]',
-    name: marketAction === 'market_digital' ? '前往流動賣場' : '前往公道賣場',
-    choice: `先進入${location}附近商城，再到櫃檯選擇刮刮樂`,
-    desc: '刮刮樂只在商城內操作，不會在主選項直接執行'
+    tag: marketAction === 'market_digital' ? '[🕳️神秘鑑價]' : '[🏪鑑價站]',
+    name: marketAction === 'market_digital' ? '前往神秘鑑價站' : '前往附近鑑價站',
+    choice: `先進入${location}附近鑑價站，再到櫃檯選擇刮刮樂`,
+    desc: '刮刮樂只在鑑價站內操作，不會在主選項直接執行'
   };
 }
 
@@ -1261,8 +1261,7 @@ function getQuickShopCooldownInfo(player) {
   };
 }
 
-function buildQuickShopButton(player, marketType = 'renaiss') {
-  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+function buildQuickShopButton(player) {
   const cd = getQuickShopCooldownInfo(player);
   const uiLang = getPlayerUILang(player);
   const labels = getUtilityButtonLabels(uiLang);
@@ -1270,7 +1269,7 @@ function buildQuickShopButton(player, marketType = 'renaiss') {
     ? labels.quickShopReady
     : labels.quickShopCooldown(cd.remaining);
   return new ButtonBuilder()
-    .setCustomId(`quick_shop_${safeMarket}`)
+    .setCustomId('quick_shop_entry')
     .setLabel(label.slice(0, 20))
     .setStyle(ButtonStyle.Success)
     .setDisabled(!cd.ready);
@@ -1535,18 +1534,18 @@ function createGuaranteedMarketChoice(player) {
   if (preferRenaiss) {
     return {
       action: 'market_renaiss',
-      tag: '[🏪公道鑑價]',
-      name: '前往公道鑑價站',
-      choice: `帶著手邊素材到${location}的 Renaiss 鑑價站先做真偽檢測`,
+      tag: '[🏪鑑價站]',
+      name: '前往附近鑑價站',
+      choice: `帶著手邊素材到${location}附近鑑價站先做真偽檢測`,
       desc: '先看檢測結果與行情，再決定是否出售'
     };
   }
   return {
     action: 'market_digital',
-    tag: newbieMask ? '[🧩友善報價]' : '[🕳️精明殺價]',
-    name: '拜訪流動收購商',
-    choice: `在${location}港邊找流動收購商做一輪檢測後議價`,
-    desc: '外表很友善，但條款細節要自己看清楚'
+    tag: newbieMask ? '[🧩友善鑑價]' : '[🕳️神秘鑑價]',
+    name: '前往神秘鑑價站',
+    choice: `在${location}附近找一間神秘鑑價站，先做檢測再議價`,
+    desc: '表面條件看似優惠，簽之前先看細節'
   };
 }
 
@@ -4901,8 +4900,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  if (customId.startsWith('quick_shop_')) {
-    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+  if (customId === 'quick_shop_entry' || customId.startsWith('quick_shop_')) {
+    const explicitMarket = customId.includes('_renaiss') || customId.includes('_digital')
+      ? parseMarketTypeFromCustomId(customId, 'renaiss')
+      : null;
+    const marketType = explicitMarket || (Math.random() < 0.5 ? 'renaiss' : 'digital');
     const player = CORE.loadPlayer(user.id);
     if (!player) {
       await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
@@ -4911,7 +4913,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
     const cd = getQuickShopCooldownInfo(player);
     if (!cd.ready) {
-      const replyContent = `⏳ 快速商城冷卻中，還要 **${cd.remaining} 回合** 才能再次使用。`;
+      const replyContent = `⏳ 快速鑑價站冷卻中，還要 **${cd.remaining} 回合** 才能再次使用。`;
       if (interaction.deferred || interaction.replied) {
         await interaction.followUp({ content: replyContent, ephemeral: true }).catch(() => {});
       } else {
@@ -4920,7 +4922,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    openShopSession(player, marketType, '快速進入商城');
+    openShopSession(player, marketType, '快速進入鑑價站');
     player.lastQuickShopTurn = cd.currentTurn;
     player.lastMarketTurn = cd.currentTurn;
     rememberPlayer(player, {
@@ -5223,10 +5225,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
       return;
     }
     ECON.ensurePlayerEconomy(player);
-    const scratch = ECON.playScratchLottery(player);
+    const scratch = ECON.playScratchLottery(player, { marketType });
+    const scratchPlace = marketType === 'digital' ? '神秘鑑價站' : '鑑價站';
     rememberPlayer(player, {
       type: '經濟',
-      content: `小賣部刮刮樂（投入 ${scratch.cost || 100} Rns 代幣）`,
+      content: `${scratchPlace}刮刮樂（投入 ${scratch.cost || 100} Rns 代幣）`,
       outcome: scratch.win
         ? `中獎 ${scratch.reward || 0} Rns 代幣｜淨 ${scratch.net >= 0 ? '+' : ''}${scratch.net}`
         : `未中獎｜獎池 ${scratch.jackpotPool || 0} Rns 代幣`,
@@ -5237,14 +5240,14 @@ CLIENT.on('interactionCreate', async (interaction) => {
       recordCashflow(player, {
         amount: -Number(scratch.cost || 0),
         category: 'scratch_cost',
-        source: '小賣部刮刮樂投入',
+        source: marketType === 'digital' ? '神秘鑑價站刮刮樂投入' : '鑑價站刮刮樂投入',
         marketType
       });
       if (Number(scratch.reward || 0) > 0) {
         recordCashflow(player, {
           amount: Number(scratch.reward || 0),
           category: 'scratch_reward',
-          source: '小賣部刮刮樂中獎',
+          source: marketType === 'digital' ? '神秘鑑價站刮刮樂中獎' : '鑑價站刮刮樂中獎',
           marketType
         });
       }
@@ -6975,7 +6978,7 @@ async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', n
   ].filter(Boolean).join('\n');
 
   const embed = new EmbedBuilder()
-    .setTitle(`🏪 玩家商城｜${marketLabel}`)
+    .setTitle(`🏪 玩家鑑價站｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(desc)
     .addFields(
@@ -7032,7 +7035,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
   const rows = [];
   if (actionButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(actionButtons));
   rows.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回商城').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回鑑價站').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
   ));
 
@@ -7068,7 +7071,7 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss') {
   const rows = [];
   if (cancelButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(cancelButtons));
   rows.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回商城').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回鑑價站').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
   ));
   await interaction.update({ embeds: [embed], components: rows });
@@ -7723,7 +7726,7 @@ async function handleMarketPostModal(interaction, user, listingType = 'sell', ma
     })
     .catch(() => false);
   if (!updated) {
-    await interaction.reply({ content: `✅ ${successText}\n請回到「背包 → 商城」查看。`, ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: `✅ ${successText}\n請回到「背包 → 鑑價站」查看。`, ephemeral: true }).catch(() => {});
   }
 }
 

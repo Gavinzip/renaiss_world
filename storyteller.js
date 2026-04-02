@@ -405,7 +405,8 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', 
 2. 兩筆語氣必須明顯不同。
 3. ${digitalRule}
 4. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐。
-5. 直接輸出 JSON。`;
+5. 文案禁止直接寫勢力名稱（例如 Renaiss、Digital），只能用「鑑價站／神秘鑑價站」表述。
+6. 直接輸出 JSON。`;
 
   const response = await callAI(prompt, 0.92, {
     label: 'systemChoice.market',
@@ -422,15 +423,49 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', 
     if (!item || !item.name || !item.choice || !item.desc || !item.tag) {
       throw new Error(`Incomplete market choice for ${action}`);
     }
-    mapped.push(normalizeChoiceByLanguage({
+    const normalized = normalizeChoiceByLanguage({
       action,
       name: String(item.name).trim(),
       choice: String(item.choice).trim(),
       desc: String(item.desc).trim(),
       tag: String(item.tag).trim()
-    }, playerLang));
+    }, playerLang);
+    mapped.push(sanitizeMarketChoiceText(normalized, playerLang));
   }
   return mapped;
+}
+
+function sanitizeMarketChoiceText(choice = {}, playerLang = 'zh-TW') {
+  if (!choice || typeof choice !== 'object') return choice;
+  const action = String(choice.action || '').trim();
+  if (action !== 'market_renaiss' && action !== 'market_digital') return choice;
+
+  const isEn = playerLang === 'en';
+  const isCn = playerLang === 'zh-CN';
+  const stationLabel = isEn
+    ? (action === 'market_digital' ? 'mysterious appraisal station' : 'appraisal station')
+    : (isCn
+      ? (action === 'market_digital' ? '神秘鉴价站' : '鉴价站')
+      : (action === 'market_digital' ? '神秘鑑價站' : '鑑價站'));
+
+  const replaceBrand = (value = '') => String(value || '')
+    .replace(/\bRenaiss\b/giu, stationLabel)
+    .replace(/\bDigital\b/giu, stationLabel)
+    .replace(/Renaiss\s*(商城|鑑價站|鉴价站)/gu, stationLabel)
+    .replace(/Digital\s*(商城|鑑價站|鉴价站)/gu, stationLabel);
+
+  const next = { ...choice };
+  next.name = replaceBrand(next.name);
+  next.choice = replaceBrand(next.choice);
+  next.desc = replaceBrand(next.desc);
+
+  if (action === 'market_renaiss' && /神秘/u.test(String(next.name || ''))) {
+    next.name = isEn ? 'Visit nearby appraisal station' : (isCn ? '前往附近鉴价站' : '前往附近鑑價站');
+  }
+  if (action === 'market_digital' && !/神秘|mysterious/iu.test(String(next.name || ''))) {
+    next.name = isEn ? 'Visit mysterious appraisal station' : (isCn ? '前往神秘鉴价站' : '前往神秘鑑價站');
+  }
+  return next;
 }
 
 function buildLocationFeatureText(location = '') {
@@ -844,7 +879,9 @@ const CHOICE_BANNED_PHRASES = [
 const CHOICE_VAGUE_PHRASES = [
   /追尋神秘交易/gu,
   /追問她留下的線索|追查她留下的線索|查她的線索/gu,
-  /某個線索|不明線索|神秘線索(?!來源)/gu
+  /某個線索|不明線索|神秘線索(?!來源)/gu,
+  /持續追查來源與流向|继续追查来源与流向/gu,
+  /現場目擊者逐一確認出現時間|现场目击者逐一确认出现时间/gu
 ];
 
 const CHOICE_ENTITY_TOKENS = [
@@ -958,28 +995,28 @@ function pickAnchorBundle(anchors = [], location = '') {
 function buildGroundedReplacementChoice(index = 0, anchors = [], playerLang = 'zh-TW', location = '') {
   const { contextAnchor, safeObject, safePlace, contextIsLocation } = pickAnchorBundle(anchors, location);
   const traceTextTw = contextIsLocation
-    ? `在「${contextAnchor}」持續追查來源與流向`
-    : `沿著「${contextAnchor}」繼續追查來源與流向`;
+    ? `沿著${contextAnchor}周邊攤位追查剛被移走物件的去向`
+    : `追查「${contextAnchor}」由誰交接、最後流向哪個攤位`;
   const witnessTextTw = contextIsLocation
-    ? `向「${contextAnchor}」現場目擊者逐一確認出現時間`
-    : `向現場目擊者逐一確認「${contextAnchor}」出現時間`;
-  const inspectTextTw = `把「${safeObject}」送去${safePlace}就近檢測點做真偽鑑定`;
+    ? `詢問${contextAnchor}附近工人，確認可疑人物最後離開方向`
+    : `向現場人員核對「${contextAnchor}」最後一次被看到的時間`;
+  const inspectTextTw = `把「${safeObject}」帶去${safePlace}附近鑑價站做真偽檢測`;
 
   const traceTextCn = contextIsLocation
-    ? `在「${contextAnchor}」持续追查来源与流向`
-    : `沿着「${contextAnchor}」继续追查来源与流向`;
+    ? `沿着${contextAnchor}周边摊位追查刚被移走物件的去向`
+    : `追查「${contextAnchor}」由谁交接、最后流向哪个摊位`;
   const witnessTextCn = contextIsLocation
-    ? `向「${contextAnchor}」现场目击者逐一确认出现时间`
-    : `向现场目击者逐一确认「${contextAnchor}」出现时间`;
-  const inspectTextCn = `把「${safeObject}」送去${safePlace}就近检测点做真伪鉴定`;
+    ? `询问${contextAnchor}附近工人，确认可疑人物最后离开方向`
+    : `向现场人员核对「${contextAnchor}」最后一次被看到的时间`;
+  const inspectTextCn = `把「${safeObject}」带去${safePlace}附近鉴价站做真伪检测`;
 
   const traceTextEn = contextIsLocation
-    ? `Continue tracing source and flow in "${contextAnchor}"`
-    : `Follow the trail behind "${contextAnchor}" and trace source records`;
+    ? `Check stalls around "${contextAnchor}" and trace where the removed item went`
+    : `Trace who handled "${contextAnchor}" and where it was moved next`;
   const witnessTextEn = contextIsLocation
-    ? `Ask witnesses on-site in "${contextAnchor}" to rebuild the timeline`
-    : `Ask nearby witnesses specifically about "${contextAnchor}"`;
-  const inspectTextEn = `Send "${safeObject}" to a nearby lab in ${safePlace} for authenticity scan`;
+    ? `Ask workers near "${contextAnchor}" which way the suspicious person left`
+    : `Verify when "${contextAnchor}" was last seen with nearby witnesses`;
+  const inspectTextEn = `Bring "${safeObject}" to a nearby appraisal station in ${safePlace} for authenticity scan`;
 
   if (playerLang === 'en') {
     const templates = [
@@ -1020,8 +1057,13 @@ function enforceChoiceGrounding(choices = [], { anchors = [], storyText = '', pl
     const hasBannedPhrase = hasAnyRegex(text, CHOICE_BANNED_PHRASES);
     const hasVaguePhrase = hasAnyRegex(text, CHOICE_VAGUE_PHRASES);
     const hasUnanchoredEntity = hasUnanchoredEntityToken(text, anchors);
+    const locationAsObjectMisuse = location
+      ? text.includes(`把「${location}」送`) ||
+        text.includes(`向「${location}」現場目擊者`) ||
+        text.includes(`在「${location}」持續追查來源與流向`)
+      : false;
 
-    if (!hasAnchor || hasBannedPhrase || hasVaguePhrase || hasUnanchoredEntity) {
+    if (!hasAnchor || hasBannedPhrase || hasVaguePhrase || hasUnanchoredEntity || locationAsObjectMisuse) {
       const replacement = buildGroundedReplacementChoice(idx, anchors, playerLang, location);
       if (!storySignals.market && /交易|成交|收購|鑑價/u.test(String(replacement.choice || ''))) {
         return buildGroundedReplacementChoice(idx + 1, anchors, playerLang, location);
@@ -1654,7 +1696,7 @@ ${anchorText}
 5. 每個選項至少包含 1 個「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
 6. 不可憑空新增前文不存在的關鍵道具/暗號/座標，除非先交代如何取得
 7. 若寫「線索」，必須明說來源（例如哪個人、哪個艙、哪個檢測結果）
-8. 刮刮樂只允許在商城互動中出現，這裡禁止輸出「刮刮樂」相關選項
+8. 刮刮樂只允許在鑑價站互動中出現，這裡禁止輸出「刮刮樂」相關選項
 9. 地名只能用於「在某地調查/前往某地」，禁止把地名當物件（例如禁止「把廣州送去檢測」）
 10. 禁止與「最近已做過的選擇」產生同動詞同目的的重複（例如連續多次「檢測」「詢問」「追查同線索」）
 11. 5 個選項要有足夠發散度，避免都在做同一件事（例如至少涵蓋 2-3 種不同目的）
@@ -1814,7 +1856,7 @@ async function generateInitialChoices(player, pet) {
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
 4. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐
 5. 避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴，優先使用收藏語彙
-6. 刮刮樂只允許在商城互動中出現，這裡禁止輸出「刮刮樂」相關選項
+6. 刮刮樂只允許在鑑價站互動中出現，這裡禁止輸出「刮刮樂」相關選項
 
 風險標籤：
 - [🔥高風險] - 可能危險
