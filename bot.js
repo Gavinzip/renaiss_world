@@ -1382,6 +1382,11 @@ function ensurePlayerGenerationSchema(player) {
     player.generationHistory = [];
     mutated = true;
   }
+  const normalizedMapViewMode = normalizeMapViewMode(player.mapViewMode);
+  if (player.mapViewMode !== normalizedMapViewMode) {
+    player.mapViewMode = normalizedMapViewMode;
+    mutated = true;
+  }
   if (!Number.isFinite(Number(player.lastQuickShopTurn))) {
     player.lastQuickShopTurn = 0;
     mutated = true;
@@ -2635,6 +2640,16 @@ function startTypingIndicator(channel, intervalMs = 6500) {
 
 const MAP_PAGE_SIZE = 8;
 
+function normalizeMapViewMode(mode, fallback = (MAP_ENABLE_WIDE_ANSI ? 'ascii' : 'text')) {
+  const raw = String(mode || '').trim().toLowerCase();
+  if (raw === 'ascii' || raw === 'text') return raw;
+  return fallback === 'ascii' ? 'ascii' : 'text';
+}
+
+function getPlayerMapViewMode(player) {
+  return normalizeMapViewMode(player?.mapViewMode);
+}
+
 function saveMapReturnSnapshot(player, message) {
   if (!player || !message) return;
   const embeds = Array.isArray(message.embeds) ? message.embeds.map(e => e.toJSON()) : [];
@@ -2843,11 +2858,12 @@ function maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice)
   return null;
 }
 
-function buildMapComponents(page, currentLocation, canOpenPortal = false) {
+function buildMapComponents(page, currentLocation, canOpenPortal = false, mapViewMode = 'text') {
   const maxPage = Math.max(0, Math.ceil(MAP_LOCATIONS.length / MAP_PAGE_SIZE) - 1);
   const safePage = Math.max(0, Math.min(page, maxPage));
   const start = safePage * MAP_PAGE_SIZE;
   const pageLocations = MAP_LOCATIONS.slice(start, start + MAP_PAGE_SIZE);
+  const safeMapViewMode = normalizeMapViewMode(mapViewMode);
 
   const rows = [];
   for (let i = 0; i < pageLocations.length; i += 4) {
@@ -2883,6 +2899,18 @@ function buildMapComponents(page, currentLocation, canOpenPortal = false) {
       .setStyle(ButtonStyle.Primary));
   }
   rows.push(new ActionRowBuilder().addComponents(navButtons));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`map_view_text_${safePage}`)
+      .setLabel('📄 文字版')
+      .setStyle(safeMapViewMode === 'text' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(safeMapViewMode === 'text'),
+    new ButtonBuilder()
+      .setCustomId(`map_view_ascii_${safePage}`)
+      .setLabel('🧩 ASCII版')
+      .setStyle(safeMapViewMode === 'ascii' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(safeMapViewMode === 'ascii')
+  ));
 
   return { rows, safePage, maxPage, pageLocations };
 }
@@ -2902,8 +2930,9 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     ? getPortalDestinations(player.location || '')
     : [];
   const canOpenPortal = Boolean(player.portalMenuOpen && nearbyPortals.length > 0);
-  const { rows, safePage, maxPage, pageLocations } = buildMapComponents(page, player.location, canOpenPortal);
-  const useWideAnsiMap = MAP_ENABLE_WIDE_ANSI;
+  const mapViewMode = getPlayerMapViewMode(player);
+  const { rows, safePage, maxPage, pageLocations } = buildMapComponents(page, player.location, canOpenPortal, mapViewMode);
+  const useWideAnsiMap = mapViewMode === 'ascii';
   const renderedMap = useWideAnsiMap
     ? (typeof buildIslandMapAnsi === 'function'
       ? buildIslandMapAnsi(player.location)
@@ -2937,6 +2966,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const mapDesc =
     mapBlock +
     `\n**目前位置：** ◉${player.location || '未知'}◉（地圖中已高亮）` +
+    `\n**地圖顯示：** ${useWideAnsiMap ? 'ASCII 版' : '文字版'}` +
     `\n**區域難度：** ${currentProfile ? `D${currentProfile.difficulty}` : '未知'}` +
     (locationContext ? `\n**當前地區情報：** ${locationContext}` : '') +
     `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
@@ -3638,6 +3668,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'map_back_main' ||
       customId === 'map_open_portal' ||
       customId.startsWith('map_page_') ||
+      customId.startsWith('map_view_') ||
       customId.startsWith('map_loc_') ||
       customId.startsWith('portal_jump_') ||
       customId.startsWith('map_goto_');
@@ -3955,6 +3986,25 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   if (customId === 'open_map') {
     await showIslandMap(interaction, user, 0);
+    return;
+  }
+
+  if (customId.startsWith('map_view_')) {
+    const match = String(customId).match(/^map_view_(text|ascii)(?:_(\d+))?$/);
+    const mode = normalizeMapViewMode(match?.[1] || 'text');
+    const page = Number.parseInt(match?.[2] || '0', 10);
+    const safePage = Number.isNaN(page) ? 0 : page;
+    const player = CORE.loadPlayer(user.id);
+    if (player) {
+      player.mapViewMode = mode;
+      CORE.savePlayer(player);
+    }
+    await showIslandMap(
+      interaction,
+      user,
+      safePage,
+      `✅ 已切換為 ${mode === 'ascii' ? 'ASCII 地圖' : '文字地圖'}`
+    );
     return;
   }
 
