@@ -110,6 +110,7 @@ function buildDefaultWorldState() {
 }
 
 let world = buildDefaultWorldState();
+const MAX_WORLD_EVENTS = 5;
 
 const DIGITAL_ROAMER_TOTAL = 20;
 const DIGITAL_ROAMER_GROUPS = Object.freeze(['Nemo', 'Wolf', 'Adaloc', 'Hom']);
@@ -868,8 +869,9 @@ function pushFactionHistory(state, item) {
 }
 
 function pushWorldEvent(eventObj) {
+  if (!Array.isArray(world.events)) world.events = [];
   world.events.unshift(eventObj);
-  if (world.events.length > 80) world.events.length = 80;
+  if (world.events.length > MAX_WORLD_EVENTS) world.events.length = MAX_WORLD_EVENTS;
 }
 
 async function maybeRunFactionSkirmish(apiKey = '') {
@@ -1646,7 +1648,7 @@ function isNPCAlive(npcId) {
       // 加入世界事件
       const npc = getNPCById(npcId);
       const npcName = npc ? npc.name : npcId;
-      world.events.unshift({
+      pushWorldEvent({
         day: world.day,
         type: 'npc_respawn',
         message: `✨ ${npcName} 康復歸來！`,
@@ -1674,7 +1676,7 @@ function killNPC(npcId, killerId, isMonster = false) {
   const npcName = npc ? npc.name : npcId;
   const typeLabel = isMonster ? '怪物' : 'NPC';
   
-  world.events.unshift({
+  pushWorldEvent({
     day: world.day,
     type: isMonster ? 'monster_death' : 'npc_death',
     message: `💀 ${typeLabel} ${npcName} 已被玩家 ${killerId} 擊殺！預計 ${RESPAWN_HOURS} 小時後重生。`,
@@ -1693,8 +1695,10 @@ function getNPCDeathInfo(npcId) {
   return world.npcStatus[npcId];
 }
 
-function getRecentWorldEvents(limit = 10) {
-  return world.events.slice(0, limit);
+function getRecentWorldEvents(limit = MAX_WORLD_EVENTS) {
+  if (!Array.isArray(world.events)) return [];
+  const targetLimit = Math.max(1, Math.min(MAX_WORLD_EVENTS, Number(limit) || MAX_WORLD_EVENTS));
+  return world.events.slice(0, targetLimit);
 }
 
 function getRespawnTime(npcId) {
@@ -2339,8 +2343,7 @@ async function agentThink(agent, apiKey) {
 }
 
 function addEvent(msg) {
-  world.events.unshift(`[Day ${world.day}] ${msg}`);
-  if (world.events.length > 50) world.events.pop();
+  pushWorldEvent(`[Day ${world.day}] ${msg}`);
 }
 
 function saveWorld() {
@@ -2364,6 +2367,13 @@ function loadWorld() {
     } catch (e) {}
   }
   if (ensureDigitalRoamers(agents)) changed = true;
+  if (!Array.isArray(world.events)) {
+    world.events = [];
+    changed = true;
+  } else if (world.events.length > MAX_WORLD_EVENTS) {
+    world.events = world.events.slice(0, MAX_WORLD_EVENTS);
+    changed = true;
+  }
   ensureFactionWarState();
   if (changed) saveWorld();
 }

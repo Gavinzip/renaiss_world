@@ -1039,6 +1039,7 @@ function executeEvent(event, player) {
 
 // ============== 世界公告系統 ==============
 const WORLD_EVENTS_FILE = path.join(__dirname, 'data', 'world_events.json');
+const WORLD_EVENTS_MAX = 5;
 
 function getWorldEvents() {
   if (!fs.existsSync(WORLD_EVENTS_FILE)) {
@@ -1058,8 +1059,8 @@ function addWorldEvent(message, type = 'normal') {
     type,
     timestamp: Date.now()
   });
-  // 只保留最近100條
-  data.events = data.events.slice(0, 100);
+  // 只保留最近 5 條
+  data.events = data.events.slice(0, WORLD_EVENTS_MAX);
   fs.writeFileSync(WORLD_EVENTS_FILE, JSON.stringify(data, null, 2));
 }
 

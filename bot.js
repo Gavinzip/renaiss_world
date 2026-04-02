@@ -2924,8 +2924,8 @@ function normalizeWorldEventEntry(entry, source) {
   };
 }
 
-function getMergedWorldEvents(limit = 3) {
-  const targetLimit = Math.max(1, Number(limit) || 3);
+function getMergedWorldEvents(limit = 5) {
+  const targetLimit = Math.max(1, Math.min(5, Number(limit) || 5));
   const coreEvents = (CORE.getRecentWorldEvents(targetLimit * 2) || [])
     .map(e => normalizeWorldEventEntry(e, 'core'))
     .filter(e => e && e.message);
@@ -8687,7 +8687,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         );
       }
 
-      const worldEvents = getMergedWorldEvents(3);
+      const worldEvents = getMergedWorldEvents(5);
       let worldEventsText = '';
       if (worldEvents.length > 0) {
         worldEventsText = '\n\n📢 **世界事件：**\n' + worldEvents.map(e => e.message || e).join('\n');

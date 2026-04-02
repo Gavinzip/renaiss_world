@@ -7,6 +7,40 @@
 
 const PET = require('./pet-system');
 const CORE = require('./game-core');
+const PET_MOVE_LOADOUT_LIMIT = 5;
+
+function ensureAutoEquipOnLearn(pet, learnedMoveId) {
+  if (!pet || !learnedMoveId) return false;
+  const attackIds = (Array.isArray(pet.moves) ? pet.moves : [])
+    .filter((m) => !(m?.effect && m.effect.flee))
+    .map((m) => String(m?.id || '').trim())
+    .filter(Boolean);
+  if (!attackIds.includes(String(learnedMoveId))) return false;
+
+  const existed = Array.isArray(pet.activeMoveIds) ? pet.activeMoveIds : [];
+  const selected = [];
+  for (const rawId of existed) {
+    const id = String(rawId || '').trim();
+    if (!id || selected.includes(id) || !attackIds.includes(id)) continue;
+    selected.push(id);
+    if (selected.length >= PET_MOVE_LOADOUT_LIMIT) break;
+  }
+
+  if (selected.length === 0) {
+    for (const id of attackIds) {
+      if (id === String(learnedMoveId)) continue;
+      selected.push(id);
+      if (selected.length >= PET_MOVE_LOADOUT_LIMIT) break;
+    }
+  }
+
+  if (selected.length >= PET_MOVE_LOADOUT_LIMIT) return false;
+  if (!selected.includes(String(learnedMoveId))) {
+    selected.push(String(learnedMoveId));
+  }
+  pet.activeMoveIds = selected.slice(0, PET_MOVE_LOADOUT_LIMIT);
+  return true;
+}
 
 // ============== 扭蛋配置 ==============
 const GACHA_CONFIG = {
@@ -233,6 +267,7 @@ function learnDrawnMove(playerId, moveData) {
     ...moveData,
     currentProficiency: 0
   });
+  ensureAutoEquipOnLearn(pet, moveData.id);
   
   PET.savePet(pet);
   
