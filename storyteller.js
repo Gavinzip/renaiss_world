@@ -68,6 +68,7 @@ const AI_TIMEOUT_MS = 90000;
 const STORY_TIMEOUT_MS = Math.max(15000, Number(process.env.STORY_TIMEOUT_MS || 30000) * 2);
 const CHOICE_TIMEOUT_MS = Math.max(12000, Number(process.env.CHOICE_TIMEOUT_MS || 26000) * 2);
 const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(10000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000) * 2);
+const CHOICE_OUTPUT_COUNT = 5;
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
 const PERF_MAX_SAMPLES = Math.max(10, Math.min(300, Number(process.env.AI_PERF_MAX_SAMPLES || 80)));
@@ -472,11 +473,11 @@ function getNearbySystemAvailability(location = '') {
 async function injectPortalChoice(choices, location, playerLang = 'zh-TW', options = {}) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
   const destinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
-  if (!destinations || destinations.length === 0) return base.slice(0, 7);
+  if (!destinations || destinations.length === 0) return base.slice(0, CHOICE_OUTPUT_COUNT);
   const forcePortal = Boolean(options?.forcePortal);
   const storyPortalCue = Boolean(options?.storySignals?.portal);
   const { nearPortal } = getNearbySystemAvailability(location);
-  if (!forcePortal && !nearPortal && !storyPortalCue) return base.slice(0, 7);
+  if (!forcePortal && !nearPortal && !storyPortalCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
 
   const withoutPortal = base.filter(c => c.action !== 'teleport' && c.action !== 'portal_intent');
   const portalChoice = await generateSystemChoiceWithAI({
@@ -492,7 +493,7 @@ async function injectPortalChoice(choices, location, playerLang = 'zh-TW', optio
     withoutPortal.push(portalChoice);
   }
 
-  return withoutPortal.slice(0, 7);
+  return withoutPortal.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
 async function injectWishPoolChoice(
@@ -502,11 +503,11 @@ async function injectWishPoolChoice(
   options = {}
 ) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
-  if (base.some(c => c.action === 'wish_pool')) return base.slice(0, 7);
+  if (base.some(c => c.action === 'wish_pool')) return base.slice(0, CHOICE_OUTPUT_COUNT);
   const { nearWishPool } = getNearbySystemAvailability(location);
   const forceWishPool = Boolean(options?.forceWishPool);
   const storyWishCue = Boolean(options?.storySignals?.wishPool);
-  if (!forceWishPool && !nearWishPool && !storyWishCue) return base.slice(0, 7);
+  if (!forceWishPool && !nearWishPool && !storyWishCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
 
   const wishChoice = await generateSystemChoiceWithAI({
     action: 'wish_pool',
@@ -517,7 +518,7 @@ async function injectWishPoolChoice(
   } else {
     base.push(wishChoice);
   }
-  return base.slice(0, 7);
+  return base.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
 async function injectMarketChoices(
@@ -531,7 +532,7 @@ async function injectMarketChoices(
   const forceMarket = Boolean(options?.forceMarket);
   const storyMarketCue = Boolean(options?.storySignals?.market);
   const { nearMarket } = getNearbySystemAvailability(location);
-  if (!forceMarket && !nearMarket && !storyMarketCue) return base.slice(0, 7);
+  if (!forceMarket && !nearMarket && !storyMarketCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
   const removeActions = new Set(['market_renaiss', 'market_digital']);
   let work = base.filter(c => !removeActions.has(c.action));
   const marketChoices = await generateMarketChoicesWithAI(playerLang, location, newbieMask);
@@ -565,15 +566,15 @@ async function injectMarketChoices(
     work[replaceIdx] = marketChoice;
   }
 
-  return work.slice(0, 7);
+  return work.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
 async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = '', options = {}) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
-  if (base.some(c => c.action === 'mentor_spar')) return base.slice(0, 7);
+  if (base.some(c => c.action === 'mentor_spar')) return base.slice(0, CHOICE_OUTPUT_COUNT);
   const { nearMentor } = getNearbySystemAvailability(location);
   const storyMentorCue = Boolean(options?.storySignals?.mentor);
-  if (!nearMentor && !storyMentorCue) return base.slice(0, 7);
+  if (!nearMentor && !storyMentorCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
 
   let mentorChoice = null;
   try {
@@ -601,7 +602,7 @@ async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = 
   ]);
   if (base.length < 7) {
     base.push(mentorChoice);
-    return base.slice(0, 7);
+    return base.slice(0, CHOICE_OUTPUT_COUNT);
   }
 
   let replaceIdx = -1;
@@ -613,7 +614,7 @@ async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = 
   }
   if (replaceIdx < 0) replaceIdx = base.length - 1;
   base[replaceIdx] = mentorChoice;
-  return base.slice(0, 7);
+  return base.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
 function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
@@ -1099,7 +1100,7 @@ function buildDeterministicFallbackChoices(player, previousStory = '', playerLan
   };
 
   const picked = threat ? pack.threat : pack.normal;
-  return picked.slice(0, 7).map((choice) => normalizeChoiceByLanguage(choice, playerLang));
+  return picked.slice(0, CHOICE_OUTPUT_COUNT).map((choice) => normalizeChoiceByLanguage(choice, playerLang));
 }
 
 const THREAT_KEYWORDS = [
@@ -1256,7 +1257,7 @@ function enforceThreatChoiceContinuity(choices = [], previousStory = '', playerL
     upsertCriticalChoice(work, createThreatCounterChoice(playerLang, anchors));
   }
 
-  return work.slice(0, 7);
+  return work.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
 async function injectSystemChoicesSafely(
@@ -1271,7 +1272,7 @@ async function injectSystemChoicesSafely(
     forceMarket = false
   } = {}
 ) {
-  let work = Array.isArray(baseChoices) ? baseChoices.slice(0, 7) : [];
+  let work = Array.isArray(baseChoices) ? baseChoices.slice(0, CHOICE_OUTPUT_COUNT) : [];
   const storySignals = buildStorySystemSignals(storyText);
   try {
     work = await injectPortalChoice(work, location, playerLang, { forcePortal, storySignals });
@@ -1293,7 +1294,7 @@ async function injectSystemChoicesSafely(
   } catch (e) {
     console.error('[AI] injectMentorSparChoice 失敗，略過:', e?.message || e);
   }
-  return Array.isArray(work) ? work.slice(0, 7) : [];
+  return Array.isArray(work) ? work.slice(0, CHOICE_OUTPUT_COUNT) : [];
 }
 
 async function callAI(prompt, temperature = 0.9, options = {}) {
@@ -1597,6 +1598,18 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const storyFocus = buildStoryFocusForChoices(previousStory || '');
   const fullStoryText = String(previousStory || '').trim();
   const sourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
+  const recentChoiceText = Array.isArray(player?.recentChoiceHistory)
+    ? player.recentChoiceHistory
+      .slice(-5)
+      .map((item, idx) => {
+        const action = String(item?.action || 'unknown');
+        const locationHint = String(item?.location || '').trim();
+        const choiceLine = String(item?.choice || '').trim();
+        return `${idx + 1}. [${action}] ${choiceLine}${locationHint ? ` @${locationHint}` : ''}`;
+      })
+      .filter(Boolean)
+      .join('\n')
+    : '';
   const storyAnchors = extractStoryAnchors(fullStoryText, npcs, location, sourceChoiceText);
   const anchorText = storyAnchors.length > 0 ? storyAnchors.join('、') : '（無）';
   
@@ -1614,6 +1627,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 當地NPC：${npcStatusText || '沒有人'}
 語言設定：${playerLang}
 上一個選擇：${sourceChoiceText || '（無）'}
+最近已做過的選擇（避免重複）：${recentChoiceText || '（無）'}
 ${memorySection}
 
 【完整故事全文（必讀）】
@@ -1632,7 +1646,7 @@ ${storyFocus.closing || '（無）'}
 ${anchorText}
 
 【任務】
-根據上面的故事，生成7個獨特的冒險選項。${langInstruction}。要求：
+根據上面的故事，生成5個獨特且合理的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意！拒絕無聊！
 2. 要符合故事的劇情發展
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
@@ -1642,6 +1656,8 @@ ${anchorText}
 7. 若寫「線索」，必須明說來源（例如哪個人、哪個艙、哪個檢測結果）
 8. 刮刮樂只允許在商城互動中出現，這裡禁止輸出「刮刮樂」相關選項
 9. 地名只能用於「在某地調查/前往某地」，禁止把地名當物件（例如禁止「把廣州送去檢測」）
+10. 禁止與「最近已做過的選擇」產生同動詞同目的的重複（例如連續多次「檢測」「詢問」「追查同線索」）
+11. 5 個選項要有足夠發散度，避免都在做同一件事（例如至少涵蓋 2-3 種不同目的）
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
@@ -1664,14 +1680,12 @@ ${anchorText}
 禁止使用跳 tone 行銷詞：一鍵成交、立即變現、秒賺、躺賺。
 並避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴（可用：真偽鑑定、來源線索、藏品修復、封存編號）。
 
-${langInstruction}輸出7個選項，每行一個。例如：
+${langInstruction}輸出5個選項，每行一個。例如：
 [⚔️會戰鬥] 衝上去阻止：飛身撲向失控的飛行器（會進入戰鬥）
 [🔥高風險] 追進暗巷：代價不明但可能有好處
 [🤝需社交] 直接詢問：禮貌地向對方表明來意
 [🔍需探索] 搜索周圍：檢查附近的線索
-[🎁高回報] 接受交易：對方開出的條件很誘人
-[💰需花錢] 購買物資：在商店補充必需品
-[❓有驚喜] 嘗試呼喚：看寵物感應到了什麼`;
+[🎁高回報] 接受交易：對方開出的條件很誘人`;
 
   try {
     const result = await callAI(prompt, 1.0, {
@@ -1686,7 +1700,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     const normalizedResult = normalizeOutputByLanguage(result, playerLang);
     const lines = normalizedResult.split('\n').filter(line => line.trim());
 
-    for (const line of lines.slice(0, 7)) {
+    for (const line of lines.slice(0, CHOICE_OUTPUT_COUNT)) {
       // 解析格式：「[標籤] 動作：描述」
       const tagMatch = line.match(/\[([^\]]+)\]\s*(.+?)[：:]\s*(.+)/);
 
@@ -1723,10 +1737,10 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       }
     }
 
-    if (choices.length < 5) {
+    if (choices.length < CHOICE_OUTPUT_COUNT) {
       throw new Error(`choices too few: ${choices.length}`);
     }
-    const normalized = choices.slice(0, 7).map(c => normalizeChoiceByLanguage(c, playerLang));
+    const normalized = choices.slice(0, CHOICE_OUTPUT_COUNT).map(c => normalizeChoiceByLanguage(c, playerLang));
     const groundedChoices = enforceChoiceGrounding(normalized, {
       anchors: storyAnchors,
       storyText: fullStoryText,
@@ -1746,7 +1760,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       anchors: storyAnchors
     });
     recordAIPerf('choices', Date.now() - startedAt);
-    return finalChoices.slice(0, 7);
+    return finalChoices.slice(0, CHOICE_OUTPUT_COUNT);
   }
 }
 
@@ -1794,7 +1808,7 @@ async function generateInitialChoices(player, pet) {
 語言設定：${playerLang}
 
 【任務】
-玩家剛來到${location}，請設計7個吸引人的冒險選項。${langInstruction}。要求：
+玩家剛來到${location}，請設計5個吸引人的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意、有畫面感
 2. 不要無聊選項
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
@@ -1815,14 +1829,12 @@ async function generateInitialChoices(player, pet) {
 1. 真正會立刻戰鬥的選項，句尾要加「（會進入戰鬥）」。
 2. [⚔️會戰鬥] 多數是衝突鋪陳，不要全部都即時開打。
 
-${langInstruction}輸出7個選項，每行一個。例如：
+${langInstruction}輸出5個選項，每行一個。例如：
 [🔍需探索] 走進修復台：檢查藏品上新出現的紋路
 [🤝需社交] 拜訪鑑定員：詢問這批藏品來源是否可信
 [⚔️會戰鬥] 參加比武：廣場有寵物對戰賽事（會進入戰鬥）
 [🎁高回報] 追查遺失藏品：找到稀有真品線索
-[❓有驚喜] 找人問路：隨機找個路人攀談
-[💰需花錢] 購買檢測耗材：補充掃描與封存工具
-[🔥高風險] 探索禁區：據說那裡有寶藏`;
+[❓有驚喜] 找人問路：隨機找個路人攀談`;
 
   try {
     const result = await callAI(prompt, 1.0, {
@@ -1836,7 +1848,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     const normalizedResult = normalizeOutputByLanguage(result, playerLang);
     const lines = normalizedResult.split('\n').filter(line => line.trim());
 
-    for (const line of lines.slice(0, 7)) {
+    for (const line of lines.slice(0, CHOICE_OUTPUT_COUNT)) {
       const tagMatch = line.match(/\[([^\]]+)\]\s*(.+?)[：:]\s*(.+)/);
 
       if (tagMatch) {
@@ -1855,10 +1867,10 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       }
     }
 
-    if (choices.length < 5) {
+    if (choices.length < CHOICE_OUTPUT_COUNT) {
       throw new Error(`initial choices too few: ${choices.length}`);
     }
-    const normalized = choices.slice(0, 7).map(c => normalizeChoiceByLanguage(c, playerLang));
+    const normalized = choices.slice(0, CHOICE_OUTPUT_COUNT).map(c => normalizeChoiceByLanguage(c, playerLang));
     const finalChoices = normalized;
     recordAIPerf('initialChoices', Date.now() - startedAt);
     console.log(`[AI][generateInitialChoices] total ${Date.now() - startedAt}ms`);
@@ -1867,7 +1879,7 @@ ${langInstruction}輸出7個選項，每行一個。例如：
     console.error('[AI] 生成開場選項失敗，改用本地保底選項:', e.message);
     const fallbackChoices = buildDeterministicFallbackChoices(player, '', playerLang);
     recordAIPerf('initialChoices', Date.now() - startedAt);
-    return fallbackChoices.slice(0, 7);
+    return fallbackChoices.slice(0, CHOICE_OUTPUT_COUNT);
   }
 }
 

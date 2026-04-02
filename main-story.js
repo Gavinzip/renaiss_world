@@ -17,6 +17,7 @@ const STORY_ACTS = {
 
 const DIGITAL_KINGS = ['Nemo', 'Wolf', 'Adaloc', 'Hom'];
 const KING_ENCOUNTER_GAP_EVENTS = Math.max(1, Number(process.env.KING_ENCOUNTER_GAP_EVENTS || 2));
+const ASSASSIN_PRESSURE_GAP_EVENTS = Math.max(2, Number(process.env.ASSASSIN_PRESSURE_GAP_EVENTS || 4));
 
 const ENDING_RULES = {
   order: { fakeRate: 0.12, ambushRate: 0.15, volatility: 0.08, rewardVariance: 0.2 },
@@ -76,6 +77,7 @@ function ensureMainStoryState(player) {
       pressure: 0,
       eventCount: 0,
       lastTravelHintEventCount: -999,
+      lastAssassinPressureEventCount: -999,
       defeatedKings: [],
       lastKingEncounterEventCount: -999,
       pendingKing: null,
@@ -94,6 +96,9 @@ function ensureMainStoryState(player) {
   }
   if (!Number.isFinite(Number(player.mainStory.lastTravelHintEventCount))) {
     player.mainStory.lastTravelHintEventCount = -999;
+  }
+  if (!Number.isFinite(Number(player.mainStory.lastAssassinPressureEventCount))) {
+    player.mainStory.lastAssassinPressureEventCount = -999;
   }
   normalizeKingProgressState(player.mainStory);
   return player.mainStory;
@@ -271,10 +276,26 @@ function maybeTriggerPassiveStory(player, context = {}) {
       return triggered;
     }
     markNode(state, 4, 'act4_war', 'Act4 -> 蒙面狩獵觸發');
-    triggered.overrideResult = buildMaskedAssassinEncounter();
-    triggered.announcement = `💀 ${player.name}遭遇了暗潮覆面獵手的狩獵測試。`;
-    triggered.memory = '覆面獵手突襲了你。';
+    state.lastAssassinPressureEventCount = count;
+    triggered.appendText = '📖 **主線異動**：你察覺自己被一路跟監，追兵開始試探你的路線與節奏。';
+    triggered.memory = '你被暗潮勢力盯上，追兵開始尾隨試探。';
     return triggered;
+  }
+
+  if (state.node === 'act4_war' && count < 10) {
+    const sinceLastPressure = count - Number(state.lastAssassinPressureEventCount || -999);
+    if (count >= 9 && sinceLastPressure >= ASSASSIN_PRESSURE_GAP_EVENTS) {
+      state.lastAssassinPressureEventCount = count;
+      if (Math.random() < 0.42) {
+        triggered.overrideResult = buildMaskedAssassinEncounter();
+        triggered.announcement = `💀 ${player.name}遭遇了暗潮覆面獵手的狩獵測試。`;
+        triggered.memory = '覆面獵手現身並發動了突襲。';
+      } else {
+        triggered.appendText = '📖 **主線異動**：你察覺追兵近在咫尺，但對方仍在試探，尚未正面開戰。';
+        triggered.memory = '追兵尚未開戰，但你確定自己正在被鎖定。';
+      }
+      return triggered;
+    }
   }
 
   if (state.node === 'act4_war' && count >= 10) {

@@ -460,7 +460,7 @@ function trackActiveGameMessage(player, channelId, messageId) {
 
 const STORY_GEN_LOCKS = new Map();
 const STORY_GEN_LOCK_TTL_MS = 180000;
-const CHOICE_POOL_COUNT = 7;
+const CHOICE_POOL_COUNT = 5;
 const CHOICE_DISPLAY_COUNT = 5;
 const BATTLE_ESTIMATE_SIMULATIONS = Math.max(20, Math.min(500, Number(process.env.BATTLE_ESTIMATE_SIMULATIONS || 100)));
 const BATTLE_ESTIMATE_MAX_TURNS = 16;
@@ -490,6 +490,9 @@ const ROAM_MOVE_BASE_CHANCE = Math.max(0, Math.min(0.95, Number(process.env.ROAM
 const ROAM_MOVE_EXPLORE_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_EXPLORE_BONUS || 0.16)));
 const ROAM_MOVE_WANDER_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_WANDER_BONUS || 0.2)));
 const STORY_THREAT_SCORE_THRESHOLD = Math.max(10, Math.min(90, Number(process.env.STORY_THREAT_SCORE_THRESHOLD || 38)));
+const RECENT_CHOICE_HISTORY_LIMIT = Math.max(8, Math.min(64, Number(process.env.RECENT_CHOICE_HISTORY_LIMIT || 24)));
+const CHOICE_REPEAT_ACTION_COOLDOWN_TURNS = Math.max(1, Math.min(8, Number(process.env.CHOICE_REPEAT_ACTION_COOLDOWN_TURNS || 3)));
+const CHOICE_REPEAT_SIMILARITY_THRESHOLD = Math.max(0.7, Math.min(0.95, Number(process.env.CHOICE_REPEAT_SIMILARITY_THRESHOLD || 0.82)));
 const MENTOR_BLOCKED_SECT_PATTERN = /(暗潮議會|暗黑組織|沙盜團|馬賊團|反派|Digital|混亂|滲透|刺客|盜匪)/iu;
 
 function tryAcquireStoryLock(userId, reason = 'story') {
@@ -796,15 +799,59 @@ function buildEventChoiceButtons(choices = []) {
   });
 }
 
+function getPlayerUILang(player = null) {
+  const raw = String(player?.language || CONFIG.LANGUAGE || 'zh-TW').trim();
+  if (raw === 'zh-CN' || raw === 'en') return raw;
+  return 'zh-TW';
+}
+
+function getUtilityButtonLabels(lang = 'zh-TW') {
+  const map = {
+    'zh-TW': {
+      inventory: '🎒 背包',
+      moves: '📜 招式',
+      character: '👤 個人',
+      profile: '💳 檔案',
+      gacha: '🎰 抽獎',
+      map: '🗺️ 地圖',
+      quickShopReady: '🏪 商城',
+      quickShopCooldown: (remaining) => `🏪 商城 ${remaining}T`
+    },
+    'zh-CN': {
+      inventory: '🎒 背包',
+      moves: '📜 招式',
+      character: '👤 个人',
+      profile: '💳 档案',
+      gacha: '🎰 抽奖',
+      map: '🗺️ 地图',
+      quickShopReady: '🏪 商城',
+      quickShopCooldown: (remaining) => `🏪 商城 ${remaining}T`
+    },
+    en: {
+      inventory: '🎒 Bag',
+      moves: '📜 Moves',
+      character: '👤 Character',
+      profile: '💳 Profile',
+      gacha: '🎰 Draw',
+      map: '🗺️ Map',
+      quickShopReady: '🏪 Shop',
+      quickShopCooldown: (remaining) => `🏪 Shop ${remaining}T`
+    }
+  };
+  return map[lang] || map['zh-TW'];
+}
+
 function appendMainMenuUtilityButtons(buttons = [], player = null) {
   const list = Array.isArray(buttons) ? buttons : [];
+  const uiLang = getPlayerUILang(player);
+  const labels = getUtilityButtonLabels(uiLang);
   list.push(
-    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_inventory').setLabel(labels.inventory).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_moves').setLabel(labels.moves).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_character').setLabel(labels.character).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_profile').setLabel(labels.profile).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_gacha').setLabel(labels.gacha).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_map').setLabel(labels.map).setStyle(ButtonStyle.Secondary),
     buildQuickShopButton(player, 'renaiss')
   );
   return list;
@@ -865,6 +912,103 @@ function textIncludesAnyKeyword(text = '', keywords = []) {
   return keywords.some((keyword) => source.includes(keyword));
 }
 
+function normalizeChoiceFingerprintText(text = '') {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[（(][^）)]*[）)]/g, ' ')
+    .replace(/[^\p{L}\p{N}\u4e00-\u9fff]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildChoiceFingerprint(choice = {}) {
+  const action = String(choice?.action || '').trim().toLowerCase();
+  const text = normalizeChoiceFingerprintText([
+    choice?.name || '',
+    choice?.choice || '',
+    choice?.desc || ''
+  ].join(' '));
+  return `${action}|${text}`.slice(0, 240);
+}
+
+function computeChoiceSimilarityByTokens(a = '', b = '') {
+  const ta = normalizeChoiceFingerprintText(a).split(' ').filter(Boolean);
+  const tb = normalizeChoiceFingerprintText(b).split(' ').filter(Boolean);
+  if (ta.length === 0 || tb.length === 0) return 0;
+  const sa = new Set(ta);
+  const sb = new Set(tb);
+  let inter = 0;
+  for (const token of sa) {
+    if (sb.has(token)) inter += 1;
+  }
+  const union = new Set([...sa, ...sb]).size || 1;
+  return inter / union;
+}
+
+function normalizeRecentChoiceHistory(list = []) {
+  const arr = Array.isArray(list) ? list : [];
+  const normalized = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const action = String(item.action || '').trim().toLowerCase();
+    const choiceText = String(item.choice || '').trim().slice(0, 220);
+    if (!choiceText) continue;
+    const fingerprint = String(item.fingerprint || '').trim() || buildChoiceFingerprint({
+      action,
+      choice: choiceText,
+      name: String(item.name || ''),
+      desc: String(item.desc || '')
+    });
+    normalized.push({
+      action,
+      choice: choiceText,
+      name: String(item.name || '').trim().slice(0, 80),
+      desc: String(item.desc || '').trim().slice(0, 120),
+      location: String(item.location || '').trim().slice(0, 32),
+      turn: Number.isFinite(Number(item.turn)) ? Math.max(0, Math.floor(Number(item.turn))) : 0,
+      at: Number.isFinite(Number(item.at)) ? Number(item.at) : Date.now(),
+      fingerprint: fingerprint.slice(0, 240)
+    });
+  }
+  return normalized.slice(-RECENT_CHOICE_HISTORY_LIMIT);
+}
+
+function ensureRecentChoiceHistory(player) {
+  if (!player || typeof player !== 'object') return [];
+  if (!Array.isArray(player.recentChoiceHistory)) {
+    player.recentChoiceHistory = [];
+  }
+  const normalized = normalizeRecentChoiceHistory(player.recentChoiceHistory);
+  if (JSON.stringify(player.recentChoiceHistory) !== JSON.stringify(normalized)) {
+    player.recentChoiceHistory = normalized;
+  }
+  return player.recentChoiceHistory;
+}
+
+function getRecentChoiceHistory(player, limit = 8) {
+  const list = ensureRecentChoiceHistory(player);
+  const max = Math.max(1, Math.min(32, Number(limit) || 8));
+  return list.slice(-max).reverse();
+}
+
+function recordPlayerChoiceHistory(player, event = {}, selectedChoice = '') {
+  if (!player) return;
+  const list = ensureRecentChoiceHistory(player);
+  const record = {
+    action: String(event?.action || '').trim().toLowerCase(),
+    choice: String(selectedChoice || event?.choice || event?.name || '').trim().slice(0, 220),
+    name: String(event?.name || '').trim().slice(0, 80),
+    desc: String(event?.desc || '').trim().slice(0, 120),
+    location: String(player?.location || '').trim().slice(0, 32),
+    turn: getPlayerStoryTurns(player),
+    at: Date.now()
+  };
+  if (!record.choice) return;
+  record.fingerprint = buildChoiceFingerprint(record);
+  list.push(record);
+  player.recentChoiceHistory = normalizeRecentChoiceHistory(list);
+}
+
 function getNearbySystemAvailabilityForChoiceScoring(location = '', player = null) {
   const featureText = buildLocationFeatureTextForChoiceScoring(location);
   const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
@@ -901,11 +1045,16 @@ function buildChoiceContextSignals(player = null) {
   const threatScore = computeStoryThreatScore(storyText);
   const travelIntent = hasRoamTravelIntentText([endingFocus, previousAction].filter(Boolean).join(' '));
   const location = String(player?.location || '');
+  const currentTurn = getPlayerStoryTurns(player);
+  const recentChoices = getRecentChoiceHistory(player, 10);
   const nearby = getNearbySystemAvailabilityForChoiceScoring(location, player);
   return {
     storyText,
     endingFocus,
     previousAction,
+    currentTurn,
+    location,
+    recentChoices,
     turnsInLocation,
     nearCompletion,
     travelGateCue,
@@ -966,6 +1115,27 @@ function computeChoiceContinuityScore(choice, signals = {}) {
     score += 8;
   }
 
+  const recentChoices = Array.isArray(signals.recentChoices) ? signals.recentChoices : [];
+  if (recentChoices.length > 0) {
+    const currentFingerprintText = normalizeChoiceFingerprintText(text);
+    const currentLocation = String(signals.location || '').trim();
+    const currentTurn = Number(signals.currentTurn || 0);
+    let maxSim = 0;
+    for (const recent of recentChoices) {
+      const recentText = normalizeChoiceFingerprintText(recent.choice || '');
+      const sim = computeChoiceSimilarityByTokens(currentFingerprintText, recentText);
+      if (sim > maxSim) maxSim = sim;
+      const sameAction = action && String(recent.action || '') === action;
+      const sameLocation = !currentLocation || !recent.location || String(recent.location) === currentLocation;
+      const turnGap = Math.max(0, currentTurn - Number(recent.turn || 0));
+      if (sameAction && sameLocation && turnGap <= CHOICE_REPEAT_ACTION_COOLDOWN_TURNS) {
+        score -= 42;
+      }
+    }
+    if (maxSim >= CHOICE_REPEAT_SIMILARITY_THRESHOLD) score -= 70;
+    else if (maxSim >= CHOICE_REPEAT_SIMILARITY_THRESHOLD - 0.12) score -= 40;
+  }
+
   return score;
 }
 
@@ -1011,11 +1181,35 @@ function normalizeEventChoices(player = null, choices = []) {
 
   const selected = [];
   const categoryCount = new Map();
+  const selectedFingerprints = [];
   const maxPerCategory = 2;
+  const isNearDuplicate = (choice) => {
+    const text = normalizeChoiceFingerprintText([
+      choice?.name || '',
+      choice?.choice || '',
+      choice?.desc || ''
+    ].join(' '));
+    if (!text) return false;
+    for (const prev of selectedFingerprints) {
+      const sim = computeChoiceSimilarityByTokens(text, prev);
+      if (sim >= CHOICE_REPEAT_SIMILARITY_THRESHOLD) return true;
+    }
+    return false;
+  };
+  const pushSelectedFingerprint = (choice) => {
+    const text = normalizeChoiceFingerprintText([
+      choice?.name || '',
+      choice?.choice || '',
+      choice?.desc || ''
+    ].join(' '));
+    if (text) selectedFingerprints.push(text);
+  };
   const preserved = pickCriticalSystemChoices(pool, Math.min(2, maxPick));
   for (const choice of preserved) {
     if (selected.includes(choice)) continue;
+    if (isNearDuplicate(choice)) continue;
     selected.push(choice);
+    pushSelectedFingerprint(choice);
     const category = getChoiceRiskCategory(choice);
     categoryCount.set(category, Number(categoryCount.get(category) || 0) + 1);
     if (selected.length >= maxPick) return selected.slice(0, maxPick);
@@ -1024,9 +1218,11 @@ function normalizeEventChoices(player = null, choices = []) {
   for (const item of scored) {
     const choice = item.choice;
     if (selected.includes(choice)) continue;
+    if (isNearDuplicate(choice)) continue;
     const currentCount = Number(categoryCount.get(item.category) || 0);
     if (currentCount >= maxPerCategory && selected.length < Math.max(3, maxPick - 1)) continue;
     selected.push(choice);
+    pushSelectedFingerprint(choice);
     categoryCount.set(item.category, currentCount + 1);
     if (selected.length >= maxPick) break;
   }
@@ -1034,7 +1230,9 @@ function normalizeEventChoices(player = null, choices = []) {
   if (selected.length < maxPick) {
     for (const item of scored) {
       if (selected.includes(item.choice)) continue;
+      if (isNearDuplicate(item.choice) && selected.length >= 3) continue;
       selected.push(item.choice);
+      pushSelectedFingerprint(item.choice);
       if (selected.length >= maxPick) break;
     }
   }
@@ -1066,7 +1264,11 @@ function getQuickShopCooldownInfo(player) {
 function buildQuickShopButton(player, marketType = 'renaiss') {
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const cd = getQuickShopCooldownInfo(player);
-  const label = cd.ready ? '🏪 快速商城' : `🏪 商城 ${cd.remaining}T`;
+  const uiLang = getPlayerUILang(player);
+  const labels = getUtilityButtonLabels(uiLang);
+  const label = cd.ready
+    ? labels.quickShopReady
+    : labels.quickShopCooldown(cd.remaining);
   return new ButtonBuilder()
     .setCustomId(`quick_shop_${safeMarket}`)
     .setLabel(label.slice(0, 20))
@@ -1799,6 +2001,11 @@ function ensurePlayerGenerationSchema(player) {
   const normalizedNpcLog = normalizeNpcDialogueLog(player.npcDialogueLog);
   if (JSON.stringify(player.npcDialogueLog || []) !== JSON.stringify(normalizedNpcLog)) {
     player.npcDialogueLog = normalizedNpcLog;
+    mutated = true;
+  }
+  const normalizedRecentChoices = normalizeRecentChoiceHistory(player.recentChoiceHistory);
+  if (JSON.stringify(player.recentChoiceHistory || []) !== JSON.stringify(normalizedRecentChoices)) {
+    player.recentChoiceHistory = normalizedRecentChoices;
     mutated = true;
   }
 
@@ -8171,6 +8378,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       tags: ['main_story']
     });
   }
+
+  recordPlayerChoiceHistory(player, event, selectedChoice);
 
   const outcomeParts = [];
   if (result?.type) outcomeParts.push(`類型:${result.type}`);
