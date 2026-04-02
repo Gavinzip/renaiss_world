@@ -65,9 +65,11 @@ try {
 
 const AI_MAX_RETRIES = 3;
 const AI_TIMEOUT_MS = 90000;
+const AI_MAX_RESPONSE_TOKENS = Math.max(512, Number(process.env.AI_MAX_RESPONSE_TOKENS || 4096));
 const STORY_TIMEOUT_MS = Math.max(15000, Number(process.env.STORY_TIMEOUT_MS || 30000) * 2);
 const CHOICE_TIMEOUT_MS = Math.max(12000, Number(process.env.CHOICE_TIMEOUT_MS || 26000) * 2);
 const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(10000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000) * 2);
+const CHOICE_MAX_TOKENS = Math.max(700, Number(process.env.CHOICE_MAX_TOKENS || 3000));
 const CHOICE_OUTPUT_COUNT = 5;
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
@@ -974,6 +976,35 @@ function escapeRegex(source = '') {
 }
 
 function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
+  const payload = extractJsonPayload(raw);
+  if (payload && payload.startsWith('[')) {
+    try {
+      const parsedJson = JSON.parse(payload);
+      if (Array.isArray(parsedJson) && parsedJson.length > 0) {
+        const mapped = parsedJson
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const name = String(item.name || item.action || '').trim();
+            const choice = String(item.choice || item.text || item.desc || '').trim();
+            const desc = String(item.desc || item.choice || item.text || '').trim();
+            const tag = String(item.tag || '').trim();
+            if (!choice || !tag) return null;
+            return normalizeChoiceByLanguage({
+              name: name || choice.slice(0, 15),
+              choice,
+              desc: desc || choice,
+              tag: tag.startsWith('[') ? tag : `[${tag}]`
+            }, playerLang);
+          })
+          .filter(Boolean);
+        if (mapped.length > 0) return mapped.slice(0, CHOICE_OUTPUT_COUNT);
+      }
+    } catch {
+      const looseParsed = parseLooseChoiceArray(payload, playerLang);
+      if (looseParsed.length > 0) return looseParsed.slice(0, CHOICE_OUTPUT_COUNT);
+    }
+  }
+
   const lines = String(raw || '')
     .split('\n')
     .map((line) => line.trim())
@@ -1004,6 +1035,44 @@ function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
     }, playerLang));
   }
   return parsed.slice(0, CHOICE_OUTPUT_COUNT);
+}
+
+function parseLooseChoiceArray(text = '', playerLang = 'zh-TW') {
+  const source = String(text || '');
+  if (!source) return [];
+  const objectBlocks = source.match(/\{[\s\S]*?\}/g) || [];
+  const out = [];
+
+  const readField = (block = '', keys = []) => {
+    for (const key of keys) {
+      const patterns = [
+        new RegExp(`[\"'“”]?${key}[\"'“”]?\\s*:\\s*\"([^\"]+)\"`, 'u'),
+        new RegExp(`[\"'“”]?${key}[\"'“”]?\\s*:\\s*'([^']+)'`, 'u'),
+        new RegExp(`[\"'“”]?${key}[\"'“”]?\\s*[:：]\\s*([^,\\n\\r}\\]]+)`, 'u')
+      ];
+      for (const pattern of patterns) {
+        const match = block.match(pattern);
+        if (match && match[1]) return String(match[1]).trim();
+      }
+    }
+    return '';
+  };
+
+  for (const block of objectBlocks) {
+    const name = readField(block, ['name', 'title', 'action']);
+    const choice = readField(block, ['choice', 'text', 'option', 'content', 'desc']);
+    const desc = readField(block, ['desc', 'description', 'detail', 'choice', 'text']);
+    const tag = readField(block, ['tag', 'risk', 'label']);
+    if (!choice || !tag) continue;
+    out.push(normalizeChoiceByLanguage({
+      name: name || choice.slice(0, 15),
+      choice,
+      desc: desc || choice,
+      tag: tag.startsWith('[') ? tag : `[${tag}]`
+    }, playerLang));
+    if (out.length >= CHOICE_OUTPUT_COUNT) break;
+  }
+  return out;
 }
 
 function validateChoiceSet(choices = [], { anchors = [], location = '', previousStory = '' } = {}) {
@@ -1046,8 +1115,12 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
   }
 
   if (duplicateCount > 0) issues.push(`有 ${duplicateCount} 個重複選項`);
-  if (anchorList.length > 0 && anchorHitCount < 3) {
-    issues.push(`至少 3 個選項需要貼合已出現元素，目前只有 ${anchorHitCount} 個`);
+  const hasPreviousStory = String(previousStory || '').trim().length > 0;
+  const requiredAnchorHits = !hasPreviousStory
+    ? 0
+    : (anchorList.length >= 4 ? 2 : 1);
+  if (requiredAnchorHits > 0 && anchorHitCount < requiredAnchorHits) {
+    issues.push(`至少 ${requiredAnchorHits} 個選項需要貼合已出現元素，目前只有 ${anchorHitCount} 個`);
   }
 
   if (hasThreatCue(previousStory || '')) {
@@ -1187,7 +1260,7 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
 
   const retries = Math.max(1, Number(options.retries || AI_MAX_RETRIES));
   const timeoutMs = Math.max(5000, Number(options.timeoutMs || AI_TIMEOUT_MS));
-  const maxTokens = Math.max(120, Number(options.maxTokens || 700));
+  const maxTokens = Math.max(120, Number(options.maxTokens || AI_MAX_RESPONSE_TOKENS));
   const model = String(options.model || MINIMAX_MODEL);
   const label = String(options.label || 'callAI');
   const hardRule = '\n\n【硬性輸出規則】只輸出最終答案，禁止輸出任何思考過程、XML標籤或系統說明。';
@@ -1204,7 +1277,7 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
             ? '\n上一輪你可能只輸出了<think>內容。這一輪禁止輸出<think>，直接輸出最終內容。'
             : ''
         );
-      const attemptMaxTokens = attempt > 1 ? Math.min(2200, Math.floor(maxTokens * 2)) : maxTokens;
+      const attemptMaxTokens = attempt > 1 ? Math.max(maxTokens, Math.floor(maxTokens * 1.5)) : maxTokens;
       const body = JSON.stringify({
         model,
         messages: [{ role: 'user', content: attemptPrompt }],
@@ -1312,6 +1385,11 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const previousStorySection = previousStorySummary
     ? `\n【前一段故事（重點）】\n${previousStorySummary}`
     : '';
+  const isOpeningBeat = (
+    Number(player?.storyTurns || 0) <= 0 &&
+    !String(player?.currentStory || '').trim() &&
+    !previousChoice
+  );
 
   // 記憶上下文
   const focusedMemory = summarizeContext(memoryContext, 980, 12);
@@ -1326,6 +1404,13 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const npcDialogueSection =
     `\n【可驗證 NPC 對話原句（僅以下內容可被回憶為「曾說過」）】\n` +
     `${buildNpcDialogueEvidenceText(npcDialogueEvidence, playerLang)}`;
+  const openingBeatSection = isOpeningBeat
+    ? `\n【開局敘事硬規則（必須遵守）】
+- 這是玩家第一次踏入世界的開場段落，必須有「剛開局」氛圍。
+- 開頭 1-2 段要自然交代主角自我定位：你是誰、為何來到 Renaiss 海域、此刻第一個短目標是什麼。
+- 不要像履歷或系統說明，必須寫成故事內心與現場感受。
+- 可以用第一人稱或第三人稱，但主角身份描述要明確，不能只叫「冒險者」帶過。`
+    : '';
   
   const prompt = `你是 Renaiss 世界的原創敘事引擎，風格是「科技收藏 + 夥伴協作 + 區域事件」。
 禁止武俠腔、禁止借用任何既有作品專有名詞或角色名。
@@ -1351,6 +1436,7 @@ ${previousStorySection}
 ${memorySection}
 ${inventorySection}
 ${npcDialogueSection}
+${openingBeatSection}
 
 【上一個行動】
 ${previousAction}
@@ -1380,6 +1466,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 20. 若【上一個行動結果】包含移動（例如從 A 到 B／抵達 B），開場 1-2 句必須寫出過場與抵達，不可直接瞬間換景
 21. 角色「手中持有／使用／遞出／展示」的物件，必須來自【玩家背包與可用物件】；若清單沒有，最多只能寫成「想取得/去購買/去詢問」
 22. 禁止憑空產生關鍵道具（通行卡、座標碼、專用藥劑、啟動器等）；若劇情需要，必須先在當下場景明確寫出取得動作
+23. 若本回合為開局段落，必須明確完成主角身份與動機介紹，且語氣要像故事開場而非條列設定
 
 直接開始講：`;
 
@@ -1534,7 +1621,8 @@ ${anchorText}
 根據上面的故事，生成5個獨特且合理的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意！拒絕無聊！
 2. 要符合故事的劇情發展
-3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
+3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
+   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]"}
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前威脅或人物
 5. 每個選項至少包含 1 個「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
 6. 不可憑空新增前文不存在的關鍵道具/暗號/座標，除非先交代如何取得
@@ -1565,26 +1653,21 @@ ${anchorText}
 禁止使用跳 tone 行銷詞：一鍵成交、立即變現、秒賺、躺賺。
 並避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴（可用：真偽鑑定、來源線索、藏品修復、封存編號）。
 
-${langInstruction}輸出5個選項，每行一個。例如：
-[⚔️會戰鬥] 衝上去阻止：飛身撲向失控的飛行器（會進入戰鬥）
-[🔥高風險] 追進暗巷：代價不明但可能有好處
-[🤝需社交] 直接詢問：禮貌地向對方表明來意
-[🔍需探索] 搜索周圍：檢查附近的線索
-[🎁高回報] 接受交易：對方開出的條件很誘人`;
+${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
 
   try {
     let validatedChoices = null;
     let lastIssues = [];
     let feedbackText = '';
 
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < 3; pass++) {
       const passPrompt = feedbackText
         ? `${prompt}\n\n【上一輪違規問題】\n${feedbackText}\n\n請完全重寫 5 個選項，不可沿用上一輪句子。`
         : prompt;
       const result = await callAI(passPrompt, 1.0, {
         label: `generateChoicesWithAI.pass${pass + 1}`,
         model: MINIMAX_MODEL,
-        maxTokens: 700,
+        maxTokens: CHOICE_MAX_TOKENS,
         timeoutMs: CHOICE_TIMEOUT_MS,
         retries: 3
       });
@@ -1665,7 +1748,8 @@ async function generateInitialChoices(player, pet) {
 玩家剛來到${location}，請設計5個吸引人的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意、有畫面感
 2. 不要無聊選項
-3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
+3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
+   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]"}
 4. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐
 5. 避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴，優先使用收藏語彙
 6. 刮刮樂只允許在鑑價站互動中出現，這裡禁止輸出「刮刮樂」相關選項
@@ -1683,12 +1767,7 @@ async function generateInitialChoices(player, pet) {
 1. 真正會立刻戰鬥的選項，句尾要加「（會進入戰鬥）」。
 2. [⚔️會戰鬥] 多數是衝突鋪陳，不要全部都即時開打。
 
-${langInstruction}輸出5個選項，每行一個。例如：
-[🔍需探索] 走進修復台：檢查藏品上新出現的紋路
-[🤝需社交] 拜訪鑑定員：詢問這批藏品來源是否可信
-[⚔️會戰鬥] 參加比武：廣場有寵物對戰賽事（會進入戰鬥）
-[🎁高回報] 追查遺失藏品：找到稀有真品線索
-[❓有驚喜] 找人問路：隨機找個路人攀談`;
+${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
 
   try {
     const initialAnchors = [location, ...npcs.map((npc) => String(npc?.name || '').trim())]
@@ -1698,13 +1777,13 @@ ${langInstruction}輸出5個選項，每行一個。例如：
     let lastIssues = [];
     let feedbackText = '';
 
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < 3; pass++) {
       const passPrompt = feedbackText
         ? `${prompt}\n\n【上一輪違規問題】\n${feedbackText}\n\n請完全重寫 5 個選項，不可沿用上一輪句子。`
         : prompt;
       const result = await callAI(passPrompt, 1.0, {
         label: `generateInitialChoices.pass${pass + 1}`,
-        maxTokens: 700,
+        maxTokens: CHOICE_MAX_TOKENS,
         timeoutMs: CHOICE_TIMEOUT_MS,
         retries: 3
       });
