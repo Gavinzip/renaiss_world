@@ -69,7 +69,7 @@ const WISH = require('./wish-pool-ai');
 const MAIN_STORY = require('./main-story');
 const ECON = require('./economy-system');
 const MEMORY_INDEX = require('./memory-index');
-const { startWorldBackupScheduler } = require('./world-backup');
+const { startWorldBackupScheduler, runWorldBackup } = require('./world-backup');
 const {
   ISLAND_MAP_TEXT,
   buildIslandMapAnsi,
@@ -3964,6 +3964,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     if (commandName === 'warstatus') await handleWarStatus(interaction);
     if (commandName === 'resetdata') await handleResetData(interaction, user);
     if (commandName === 'resetworld') await handleResetWorld(interaction);
+    if (commandName === 'backupworld') await handleBackupWorld(interaction, user);
   } catch (err) {
     console.error(`[Slash] 指令處理失敗 ${commandName}:`, err?.message || err);
     const msg = `❌ 指令執行失敗：${err?.message || err}`;
@@ -4040,6 +4041,55 @@ async function handleResetWorld(interaction) {
       `✅ 已清空【${modeLabel}】。\n` +
       `- core world：${result.core ? '已清空' : '略過'}\n` +
       `- world_events 公告板：${result.board ? '已清空' : '略過'}`,
+    ephemeral: true
+  });
+}
+
+function normalizeBackupNote(note = '') {
+  return String(note || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_\-]/g, '')
+    .slice(0, 36);
+}
+
+async function handleBackupWorld(interaction, user) {
+  const password = String(interaction.options.getString('password') || '').trim();
+  const noteRaw = String(interaction.options.getString('note') || '').trim();
+
+  if (password !== RESETDATA_PASSWORD) {
+    await interaction.reply({ content: '❌ 密碼錯誤，無法執行手動備份。', ephemeral: true });
+    return;
+  }
+
+  await interaction.reply({ content: '⏳ 正在執行手動備份（含玩家、世界、記憶資料）...', ephemeral: true });
+
+  try {
+    if (typeof CORE.saveWorld === 'function') CORE.saveWorld();
+  } catch (e) {
+    console.log('[Backup] 手動備份前 saveWorld 失敗:', e?.message || e);
+  }
+
+  const note = normalizeBackupNote(noteRaw);
+  const reason = note ? `manual:${user.id}:${note}` : `manual:${user.id}`;
+  const result = await runWorldBackup(reason);
+
+  if (result?.ok) {
+    const changedText = result.changed ? '有新變更並已推送' : '沒有新變更（僅完成檢查）';
+    await interaction.followUp({
+      content:
+        `✅ 手動備份完成\n` +
+        `- 狀態：${changedText}\n` +
+        `- 分支：${String(result.branch || 'main')}\n` +
+        `- 原因標記：${String(result.reason || reason)}`,
+      ephemeral: true
+    });
+    return;
+  }
+
+  const failReason = result?.error || result?.reason || 'unknown';
+  await interaction.followUp({
+    content: `❌ 手動備份失敗：${failReason}`,
     ephemeral: true
   });
 }
@@ -9764,6 +9814,24 @@ CLIENT.on('ready', async () => {
           name: 'password',
           description: '安全密碼',
           required: true
+        }
+      ]
+    },
+    {
+      name: 'backupworld',
+      description: '手動備份世界/玩家/記憶資料到備份 Git（需密碼）',
+      options: [
+        {
+          type: 3,
+          name: 'password',
+          description: '安全密碼',
+          required: true
+        },
+        {
+          type: 3,
+          name: 'note',
+          description: '備份備註（可選）',
+          required: false
         }
       ]
     }
