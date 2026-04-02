@@ -3641,7 +3641,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId.startsWith('map_loc_') ||
       customId.startsWith('portal_jump_') ||
       customId.startsWith('map_goto_');
-    if (!isMapFlowButton) {
+    // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
+    const isModalLauncherButton =
+      customId === 'open_wallet_modal' ||
+      customId === 'open_profile';
+    if (!isMapFlowButton && !isModalLauncherButton) {
       await lockPressedButtonImmediately(interaction);
     }
   }
@@ -5818,8 +5822,6 @@ async function showCharacter(interaction, user) {
   }
   
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('pmkt_open_renaiss').setLabel('🏪 Renaiss 商城').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('pmkt_open_digital').setLabel('🕳️ Digital 商城').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('show_finance_ledger').setLabel('💸 資金流水').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Secondary)
   );
