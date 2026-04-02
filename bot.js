@@ -114,6 +114,18 @@ function t(key) {
   return TEXT[CONFIG.LANGUAGE]?.[key] || TEXT['zh-TW'][key] || key;
 }
 
+function getMarketTypeLabel(marketType = 'renaiss') {
+  return String(marketType || '').trim().toLowerCase() === 'digital'
+    ? 'Digital 商城'
+    : 'Renaiss 商城';
+}
+
+function formatFinanceAmount(amount = 0) {
+  const num = Math.floor(Number(amount || 0));
+  if (!Number.isFinite(num)) return '0';
+  return `${num > 0 ? '+' : ''}${num}`;
+}
+
 // ============== 玩家討論串管理 ==============
 function loadPlayerThreads() {
   if (!fs.existsSync(PLAYER_THREADS_FILE)) return {};
@@ -153,7 +165,8 @@ function clearSelfCharacterData(userId) {
     removedPet: false,
     removedThread: false,
     removedWallet: false,
-    clearedSemanticMemory: 0
+    clearedSemanticMemory: 0,
+    clearedNpcQuotes: 0
   };
 
   const playerFile = path.join(PLAYERS_DIR, `${id}.json`);
@@ -189,12 +202,42 @@ function clearSelfCharacterData(userId) {
   if (typeof MEMORY_INDEX.clearPlayerRelatedMemories === 'function') {
     report.clearedSemanticMemory = Number(MEMORY_INDEX.clearPlayerRelatedMemories(id) || 0);
   }
+  if (typeof CORE.clearPlayerNpcQuoteMemory === 'function') {
+    report.clearedNpcQuotes = Number(CORE.clearPlayerNpcQuoteMemory(id) || 0);
+  }
 
   releaseStoryLock(id);
   return report;
 }
 
-function clearAllCharacterData() {
+function clearWorldRuntimeData(mode = 'events') {
+  const report = {
+    mode: (String(mode || '').trim().toLowerCase() === 'all') ? 'all' : 'events',
+    core: false,
+    board: false
+  };
+  try {
+    if (typeof CORE.resetWorldState === 'function') {
+      CORE.resetWorldState({ mode: report.mode });
+      report.core = true;
+    }
+  } catch (e) {
+    console.error('[reset] CORE.resetWorldState 失敗:', e?.message || e);
+  }
+  try {
+    if (typeof EVENTS.clearWorldEvents === 'function') {
+      EVENTS.clearWorldEvents();
+      report.board = true;
+    }
+  } catch (e) {
+    console.error('[reset] EVENTS.clearWorldEvents 失敗:', e?.message || e);
+  }
+  return report;
+}
+
+function clearAllCharacterData(options = {}) {
+  const clearWorld = options?.clearWorld !== false;
+  const worldMode = String(options?.worldMode || 'all').trim().toLowerCase() === 'events' ? 'events' : 'all';
   const report = {
     scope: 'all',
     removedPlayerFiles: 0,
@@ -203,7 +246,10 @@ function clearAllCharacterData() {
     resetThreads: false,
     resetWallets: false,
     resetScratchLottery: false,
-    clearedSemanticMemory: 0
+    clearedSemanticMemory: 0,
+    clearedNpcQuotes: 0,
+    resetWorldCore: false,
+    resetWorldBoard: false
   };
 
   fs.mkdirSync(PLAYERS_DIR, { recursive: true });
@@ -227,6 +273,15 @@ function clearAllCharacterData() {
 
   if (typeof MEMORY_INDEX.clearAllMemories === 'function') {
     report.clearedSemanticMemory = Number(MEMORY_INDEX.clearAllMemories() || 0);
+  }
+  if (typeof CORE.clearAllNpcQuoteMemory === 'function') {
+    report.clearedNpcQuotes = Number(CORE.clearAllNpcQuoteMemory() || 0);
+  }
+
+  if (clearWorld) {
+    const worldReport = clearWorldRuntimeData(worldMode);
+    report.resetWorldCore = Boolean(worldReport.core);
+    report.resetWorldBoard = Boolean(worldReport.board);
   }
 
   STORY_GEN_LOCKS.clear();
@@ -410,6 +465,8 @@ const CUSTOM_INPUT_MAX_LENGTH = 120;
 const EARLY_GAME_GOLD_GUARANTEE_TURNS = Math.max(1, Math.min(10, Number(process.env.EARLY_GAME_GOLD_GUARANTEE_TURNS || 5)));
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
 const PET_MOVE_LOADOUT_LIMIT = Math.max(1, Math.min(5, Number(process.env.PET_MOVE_LOADOUT_LIMIT || 5)));
+const SHOP_SELL_SELECT_LIMIT = 25;
+const NPC_DIALOGUE_LOG_LIMIT = Math.max(20, Math.min(200, Number(process.env.NPC_DIALOGUE_LOG_LIMIT || 80)));
 const STARTER_FIVE_PULL_COUNT = 5;
 const GENERATION_HISTORY_LIMIT = Math.max(5, Math.min(100, Number(process.env.GENERATION_HISTORY_LIMIT || 20)));
 const MAP_ENABLE_WIDE_ANSI = String(process.env.MAP_ENABLE_WIDE_ANSI || '0') === '1';
@@ -417,9 +474,12 @@ const MARKET_GUARANTEE_GAP_TURNS = Math.max(1, Math.min(8, Number(process.env.MA
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
 const PORTAL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.PORTAL_GUIDE_MIN_TURNS || 1)));
 const WISH_POOL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.WISH_POOL_GUIDE_MIN_TURNS || 2)));
+const PET_PASSIVE_HEAL_PER_STORY_TURN = Math.max(0, Math.min(30, Number(process.env.PET_PASSIVE_HEAL_PER_STORY_TURN || 10)));
+const QUICK_SHOP_COOLDOWN_TURNS = Math.max(1, Math.min(20, Number(process.env.QUICK_SHOP_COOLDOWN_TURNS || 5)));
 const ROAM_MOVE_BASE_CHANCE = Math.max(0, Math.min(0.95, Number(process.env.ROAM_MOVE_BASE_CHANCE || 0.42)));
 const ROAM_MOVE_EXPLORE_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_EXPLORE_BONUS || 0.16)));
 const ROAM_MOVE_WANDER_BONUS = Math.max(0, Math.min(0.5, Number(process.env.ROAM_MOVE_WANDER_BONUS || 0.2)));
+const STORY_THREAT_SCORE_THRESHOLD = Math.max(10, Math.min(90, Number(process.env.STORY_THREAT_SCORE_THRESHOLD || 38)));
 const RISK_CATEGORY_WEIGHTS = Object.freeze({
   high_risk: 10,
   spend: 10,
@@ -512,6 +572,20 @@ function isImmediateBattleChoice(choice) {
   return /[（(]\s*會進入戰鬥\s*[)）]/u.test(text) || /(即時戰鬥|立刻開打|立即戰鬥)/u.test(text);
 }
 
+function isHostileImmediateBattleChoice(choice) {
+  if (!choice || typeof choice !== 'object') return false;
+  if (String(choice.action || '') === 'mentor_spar') return false;
+  if (String(choice.action || '') === 'fight') return true;
+  const text = [
+    choice.tag || '',
+    choice.name || '',
+    choice.choice || '',
+    choice.desc || ''
+  ].join(' ');
+  if (/(友誼賽|切磋|比試)/u.test(text)) return false;
+  return /[（(]\s*會進入戰鬥\s*[)）]/u.test(text) || /(即時戰鬥|立刻開打|立即戰鬥)/u.test(text);
+}
+
 function ensureBattleMarkerSuffix(text, choice) {
   const source = String(text || '').trim();
   if (!source) return source;
@@ -553,6 +627,90 @@ function stripChoicePrefix(text) {
     .replace(/^[\p{Extended_Pictographic}]+\s*/u, '')
     .replace(/^(探索|社交|戰鬥|購買|花錢|高風險|高回報|驚喜|傳送|許願)[：:]\s*/u, '');
   return clean.trim();
+}
+
+function stripImmediateBattleMarker(text) {
+  let cleaned = String(text || '').trim();
+  if (!cleaned) return cleaned;
+  cleaned = cleaned
+    .replace(/[（(]\s*會進入戰鬥(?:｜[^)）]+)?\s*[)）]/gu, '')
+    .replace(/(?:，|、)?\s*(即時戰鬥|立刻開打|立即戰鬥)\s*/gu, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return cleaned;
+}
+
+function extractStoryEndingFocus(story = '') {
+  const text = String(story || '').trim();
+  if (!text) return '';
+  const chunks = text
+    .split(/\n+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (chunks.length === 0) return text.slice(-220);
+  const tail = chunks.slice(-3).join('\n');
+  return tail || text.slice(-220);
+}
+
+function computeStoryThreatScore(story = '') {
+  const text = extractStoryEndingFocus(story);
+  if (!text) return 0;
+
+  const heavyRules = [
+    /殺機|追殺|伏擊|突襲|夜襲|追兵|圍攻|獵手|刺客/gu,
+    /開戰|交戰|決戰|血戰|對峙|火拼|廝殺/gu,
+    /敵人|敵方|仇家|威脅升級|失控|崩潰/gu
+  ];
+  const mediumRules = [
+    /危險|危機|警示|衝突|對抗|埋伏|不妙/gu,
+    /可疑|異常|緊張|壓迫感|不安|騷動/gu
+  ];
+  const calmRules = [
+    /補給|休整|交談|閒聊|交易|觀察|談判|勘查|巡查/gu
+  ];
+
+  let score = 0;
+  for (const pattern of heavyRules) {
+    const count = (text.match(pattern) || []).length;
+    score += Math.min(3, count) * 18;
+  }
+  for (const pattern of mediumRules) {
+    const count = (text.match(pattern) || []).length;
+    score += Math.min(4, count) * 8;
+  }
+  for (const pattern of calmRules) {
+    const count = (text.match(pattern) || []).length;
+    score -= Math.min(3, count) * 6;
+  }
+
+  return Math.max(0, Math.min(100, score));
+}
+
+function downgradeImmediateBattleChoice(choice) {
+  if (!choice || typeof choice !== 'object') return choice;
+  if (!isHostileImmediateBattleChoice(choice)) return choice;
+  const next = { ...choice };
+  const rawChoice = String(next.choice || next.name || '').trim();
+  const cleanedChoice = stripImmediateBattleMarker(rawChoice);
+  next.choice = cleanedChoice || `${rawChoice}（先偵查局勢）`;
+  next.desc = stripImmediateBattleMarker(String(next.desc || '').trim()) || '先觀察局勢並整備，必要時再戰。';
+  if (String(next.action || '') === 'fight') {
+    next.action = 'conflict';
+  }
+  if (/[⚔️]/u.test(String(next.tag || '')) || /會戰鬥/u.test(String(next.tag || ''))) {
+    next.tag = '[🔥高風險]';
+  }
+  return next;
+}
+
+function applyStoryThreatGate(player, choices = []) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean) : [];
+  if (list.length === 0) return list;
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const threatScore = computeStoryThreatScore(storyText);
+  const allowImmediateBattle = threatScore >= STORY_THREAT_SCORE_THRESHOLD;
+  if (allowImmediateBattle) return list;
+  return list.map((choice) => downgradeImmediateBattleChoice(choice));
 }
 
 function formatChoiceText(choice) {
@@ -637,6 +795,20 @@ function buildEventChoiceButtons(choices = []) {
   });
 }
 
+function appendMainMenuUtilityButtons(buttons = [], player = null) {
+  const list = Array.isArray(buttons) ? buttons : [];
+  list.push(
+    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary),
+    buildQuickShopButton(player, 'renaiss')
+  );
+  return list;
+}
+
 function isPortalChoice(choice) {
   if (!choice || typeof choice !== 'object') return false;
   const action = String(choice.action || '');
@@ -719,6 +891,55 @@ function normalizeEventChoices(choices = []) {
 function getPlayerStoryTurns(player) {
   const turns = Number(player?.storyTurns || 0);
   return Number.isFinite(turns) ? Math.max(0, Math.floor(turns)) : 0;
+}
+
+function getQuickShopCooldownInfo(player) {
+  const currentTurn = getPlayerStoryTurns(player);
+  const lastTurn = Number(player?.lastQuickShopTurn || 0);
+  const safeLastTurn = Number.isFinite(lastTurn) ? Math.max(0, Math.floor(lastTurn)) : 0;
+  const nextReadyTurn = safeLastTurn > 0
+    ? safeLastTurn + QUICK_SHOP_COOLDOWN_TURNS
+    : QUICK_SHOP_COOLDOWN_TURNS;
+  const remaining = Math.max(0, nextReadyTurn - currentTurn);
+  return {
+    currentTurn,
+    lastTurn: safeLastTurn,
+    nextReadyTurn,
+    remaining,
+    ready: remaining <= 0
+  };
+}
+
+function buildQuickShopButton(player, marketType = 'renaiss') {
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const cd = getQuickShopCooldownInfo(player);
+  const label = cd.ready ? '🏪 快速商城' : `🏪 商城 ${cd.remaining}T`;
+  return new ButtonBuilder()
+    .setCustomId(`quick_shop_${safeMarket}`)
+    .setLabel(label.slice(0, 20))
+    .setStyle(ButtonStyle.Success)
+    .setDisabled(!cd.ready);
+}
+
+function extractStoryTailLine(story = '', maxChars = 70) {
+  const text = String(story || '').trim();
+  if (!text) return '';
+  const lines = text
+    .split('\n')
+    .map((line) => line.replace(/\*\*/g, '').trim())
+    .filter(Boolean);
+  const tail = lines.length > 0 ? lines[lines.length - 1] : text;
+  return tail.length > maxChars ? `${tail.slice(0, maxChars)}...` : tail;
+}
+
+function buildQuickShopNarrativeNotice(player, marketType = 'renaiss') {
+  const marketLabel = getMarketTypeLabel(marketType);
+  const location = String(player?.location || '附近據點');
+  const tail = extractStoryTailLine(player?.currentStory || '', 76);
+  if (tail) {
+    return `🧭 你在${location}暫時收束行程，沿著熟悉招牌快步走進${marketLabel}。\n📖 承接前情：${tail}`;
+  }
+  return `🧭 你在${location}短暫補給，決定先進入${marketLabel}處理交易，再回到原本冒險。`;
 }
 
 function incrementPlayerStoryTurns(player, amount = 1) {
@@ -902,6 +1123,12 @@ function isMarketChoice(choice) {
   return /(鑑價|賣場|市場|收購|估價)/.test(text);
 }
 
+function hasMarketNarrativeCue(story = '') {
+  const text = String(story || '');
+  if (!text) return false;
+  return /(市集|攤位|商店|商家|交易|收購|鑑價|鑑定|封存艙|修復臺|修復台|倉管|商人|老闆|貨艙|臨時艙)/u.test(text);
+}
+
 function createGuaranteedMarketChoice(player) {
   const location = String(player?.location || '附近據點');
   const newbieMask = isDigitalMaskPhaseForPlayer(player);
@@ -911,16 +1138,16 @@ function createGuaranteedMarketChoice(player) {
       action: 'market_renaiss',
       tag: '[🏪公道鑑價]',
       name: '前往公道鑑價站',
-      choice: `帶著素材到${location}的 Renaiss 鑑價站估價出售`,
-      desc: '價格透明、成交穩定，適合把戰利品快速變現'
+      choice: `帶著手邊素材到${location}的 Renaiss 鑑價站先做真偽檢測`,
+      desc: '先看檢測結果與行情，再決定是否出售'
     };
   }
   return {
     action: 'market_digital',
     tag: newbieMask ? '[🧩友善報價]' : '[🕳️精明殺價]',
     name: '拜訪流動收購商',
-    choice: `在${location}港邊找流動收購商談一筆快速交易`,
-    desc: '報價看似誘人，條款細節需要你自己判斷'
+    choice: `在${location}港邊找流動收購商做一輪檢測後議價`,
+    desc: '外表很友善，但條款細節要自己看清楚'
   };
 }
 
@@ -932,12 +1159,17 @@ function ensureMarketChoiceAvailability(player, choices = []) {
   const state = syncLocationArcLocation(player);
   const turnsInLocation = Number(state?.turnsInLocation || 0);
   const exposure = getCurrentLocationExposure(player);
-  const forceByLocationArc = !exposure?.marketShown && turnsInLocation >= 1;
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const marketCue = hasMarketNarrativeCue(storyText);
+  const forceByLocationArc = marketCue && !exposure?.marketShown && turnsInLocation >= 1;
 
   const currentTurn = getPlayerStoryTurns(player);
   const lastMarketTurn = Number(player.lastMarketTurn || 0);
   const turnsSinceMarket = Math.max(0, currentTurn - lastMarketTurn);
-  if (!forceByLocationArc && turnsSinceMarket < MARKET_GUARANTEE_GAP_TURNS) return list;
+  const hardGap = Math.max(2, MARKET_GUARANTEE_GAP_TURNS * 2);
+  if (!marketCue && turnsSinceMarket < hardGap) return list;
+  if (marketCue && !forceByLocationArc && turnsSinceMarket < MARKET_GUARANTEE_GAP_TURNS) return list;
+  if (!marketCue && Math.random() > 0.35) return list;
 
   const injected = createGuaranteedMarketChoice(player);
   const protectedActions = new Set(['portal_intent', 'wish_pool', 'scratch_lottery', 'custom_input']);
@@ -1013,6 +1245,7 @@ function ensureEarlyGameIncomeChoice(player, choices = []) {
 function applyChoicePolicy(player, choices = []) {
   let list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
+  list = applyStoryThreatGate(player, list);
   list = ensurePortalChoiceAvailability(player, list);
   list = ensureWishPoolChoiceAvailability(player, list);
   list = ensureMarketChoiceAvailability(player, list);
@@ -1097,6 +1330,42 @@ function normalizeGenerationStatus(status) {
   return 'idle';
 }
 
+function normalizeNpcDialogueLog(logs = []) {
+  const list = Array.isArray(logs) ? logs : [];
+  const normalized = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const speaker = String(item.speaker || '').trim().slice(0, 24);
+    const text = String(item.text || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    if (!speaker || !text) continue;
+    normalized.push({
+      speaker,
+      text,
+      location: String(item.location || '').trim().slice(0, 24),
+      source: String(item.source || 'npc').trim().slice(0, 24),
+      at: Number.isFinite(Number(item.at)) ? Number(item.at) : Date.now()
+    });
+  }
+  return normalized.slice(-NPC_DIALOGUE_LOG_LIMIT);
+}
+
+function appendNpcDialogueLog(player, payload = {}) {
+  if (!player || typeof player !== 'object') return;
+  ensurePlayerGenerationSchema(player);
+  const speaker = String(payload.speaker || '').trim().slice(0, 24);
+  const text = String(payload.text || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  if (!speaker || !text) return;
+  const logs = Array.isArray(player.npcDialogueLog) ? player.npcDialogueLog : [];
+  logs.push({
+    speaker,
+    text,
+    location: String(payload.location || player.location || '').trim().slice(0, 24),
+    source: String(payload.source || 'npc').trim().slice(0, 24),
+    at: Date.now()
+  });
+  player.npcDialogueLog = normalizeNpcDialogueLog(logs);
+}
+
 function ensurePlayerGenerationSchema(player) {
   if (!player || typeof player !== 'object') return false;
   let mutated = false;
@@ -1111,6 +1380,21 @@ function ensurePlayerGenerationSchema(player) {
   }
   if (!Array.isArray(player.generationHistory)) {
     player.generationHistory = [];
+    mutated = true;
+  }
+  if (!Number.isFinite(Number(player.lastQuickShopTurn))) {
+    player.lastQuickShopTurn = 0;
+    mutated = true;
+  } else {
+    const normalizedLastQuickShopTurn = Math.max(0, Math.floor(Number(player.lastQuickShopTurn)));
+    if (normalizedLastQuickShopTurn !== Number(player.lastQuickShopTurn)) {
+      player.lastQuickShopTurn = normalizedLastQuickShopTurn;
+      mutated = true;
+    }
+  }
+  const normalizedNpcLog = normalizeNpcDialogueLog(player.npcDialogueLog);
+  if (JSON.stringify(player.npcDialogueLog || []) !== JSON.stringify(normalizedNpcLog)) {
+    player.npcDialogueLog = normalizedNpcLog;
     mutated = true;
   }
 
@@ -1371,6 +1655,21 @@ function shouldTriggerBattle(event, result) {
   return isImmediateBattleChoice(event);
 }
 
+function applyPassivePetRecovery(pet, amount = PET_PASSIVE_HEAL_PER_STORY_TURN) {
+  if (!pet || typeof pet !== 'object') return 0;
+  const heal = Math.max(0, Math.floor(Number(amount) || 0));
+  if (heal <= 0) return 0;
+  const status = String(pet.status || '').trim();
+  if (status === '蛋' || status === '死亡' || status === '休眠') return 0;
+  const maxHp = Math.max(1, Number(pet.maxHp || 0));
+  const currentHp = Math.max(0, Number(pet.hp || 0));
+  if (maxHp <= 0 || currentHp <= 0 || currentHp >= maxHp) return 0;
+  const nextHp = Math.min(maxHp, currentHp + heal);
+  const gained = Math.max(0, nextHp - currentHp);
+  if (gained > 0) pet.hp = nextHp;
+  return gained;
+}
+
 function getLocationDifficultyForPlayer(player) {
   const profile = typeof getLocationProfile === 'function'
     ? getLocationProfile(player?.location)
@@ -1407,11 +1706,11 @@ function buildNpcCompanionPet(enemy, player) {
   const baseHp = Number(existing?.hp || existing?.maxHp || enemy?.maxHp || enemy?.hp || 50);
 
   const petAttack = newbieZone
-    ? Math.max(4, Math.floor(baseAttack * 0.28))
-    : Math.max(8, Math.floor(baseAttack * 0.42));
+    ? Math.max(7, Math.floor(baseAttack * 0.45))
+    : Math.max(10, Math.floor(baseAttack * 0.52));
   const petHp = newbieZone
-    ? Math.max(18, Math.floor(baseHp * 0.3))
-    : Math.max(30, Math.floor(baseHp * 0.45));
+    ? Math.max(26, Math.floor(baseHp * 0.42))
+    : Math.max(36, Math.floor(baseHp * 0.52));
 
   return {
     name: String(existing?.name || fallbackName),
@@ -1429,9 +1728,9 @@ function applyNpcCompanionPet(enemy, player) {
 
   const npcPet = buildNpcCompanionPet(enemy, player);
   const newbieZone = getLocationDifficultyForPlayer(player) <= 2;
-  const atkGain = Math.max(1, Math.floor(npcPet.attack * (newbieZone ? 0.35 : 0.55)));
-  const hpGain = Math.max(1, Math.floor(npcPet.maxHp * (newbieZone ? 0.25 : 0.4)));
-  const defGain = Math.max(1, Math.floor(npcPet.attack * (newbieZone ? 0.06 : 0.12)));
+  const atkGain = Math.max(1, Math.floor(npcPet.attack * (newbieZone ? 0.6 : 0.68)));
+  const hpGain = Math.max(1, Math.floor(npcPet.maxHp * (newbieZone ? 0.45 : 0.5)));
+  const defGain = Math.max(1, Math.floor(npcPet.attack * (newbieZone ? 0.1 : 0.14)));
 
   enemy.npcPet = npcPet;
   enemy.attack = Math.max(1, Number(enemy.attack || 0) + atkGain);
@@ -1519,8 +1818,7 @@ function inferEnemyNameFromContext(event, result, player) {
     event?.name,
     event?.choice,
     event?.desc,
-    result?.message,
-    player?.currentStory
+    result?.message
   ];
   for (const text of parts) {
     const inferred = inferEnemyNameFromText(text);
@@ -1545,22 +1843,22 @@ function applyBeginnerZoneEnemyBalance(enemy, player) {
   const playerLevel = Math.max(1, Number(player?.level || 1));
   if (difficulty > 2 || playerLevel > 6) return enemy;
 
-  // 新手區不再過度下修，避免「全普通招也 100% 勝率」的情況
-  const hpScale = difficulty <= 1 ? 0.94 : 0.97;
-  const atkScale = difficulty <= 1 ? 0.90 : 0.95;
-  const defScale = difficulty <= 1 ? 0.90 : 0.95;
-  const minHp = Math.max(36, 34 + playerLevel * 10 + difficulty * 4);
-  const minAtk = Math.max(10, 11 + playerLevel * 2 + (difficulty - 1));
-  const minDef = Math.max(4, 3 + Math.floor(playerLevel * 0.9));
+  // 新手區保護保留，但避免過弱導致「幾乎 100% 勝率」
+  const hpScale = difficulty <= 1 ? 0.98 : 1.0;
+  const atkScale = difficulty <= 1 ? 0.96 : 1.0;
+  const defScale = difficulty <= 1 ? 0.96 : 1.0;
+  const minHp = Math.max(44, 54 + playerLevel * 11 + difficulty * 6);
+  const minAtk = Math.max(14, 18 + playerLevel * 2 + (difficulty - 1) * 2);
+  const minDef = Math.max(5, 5 + Math.floor(playerLevel * 1.2));
   const maxHp = difficulty <= 1
-    ? Math.max(72, 82 + playerLevel * 12)
-    : Math.max(108, 112 + playerLevel * 14);
+    ? Math.max(86, 104 + playerLevel * 13)
+    : Math.max(120, 132 + playerLevel * 15);
   const maxAtk = difficulty <= 1
-    ? Math.max(18, 20 + playerLevel * 2)
-    : Math.max(24, 25 + playerLevel * 2);
+    ? Math.max(24, 30 + playerLevel * 2)
+    : Math.max(30, 34 + playerLevel * 2);
   const maxDef = difficulty <= 1
-    ? Math.max(10, 10 + Math.floor(playerLevel * 0.8))
-    : Math.max(14, 14 + Math.floor(playerLevel * 0.9));
+    ? Math.max(14, 14 + Math.floor(playerLevel))
+    : Math.max(18, 18 + Math.floor(playerLevel * 1.1));
 
   const scaledHp = Math.max(minHp, Math.floor((enemy.hp || 1) * hpScale));
   enemy.hp = Math.min(maxHp, scaledHp);
@@ -1576,9 +1874,9 @@ function applyBeginnerZoneDangerVariant(enemy, player) {
   const difficulty = getLocationDifficultyForPlayer(player);
   const playerLevel = Math.max(1, Number(player?.level || 1));
   if (difficulty > 2 || playerLevel > 8) return enemy;
-  if (Math.random() > 0.3) return enemy; // 約 30% 出現偏強敵
+  if (Math.random() > 0.42) return enemy; // 約 42% 出現偏強敵
 
-  const powerScale = difficulty <= 1 ? 1.22 : 1.26;
+  const powerScale = difficulty <= 1 ? 1.26 : 1.3;
   enemy.hp = Math.max(1, Math.floor((enemy.hp || 1) * powerScale));
   enemy.maxHp = Math.max(enemy.hp, Math.floor((enemy.maxHp || enemy.hp || 1) * powerScale));
   enemy.attack = Math.max(1, Math.floor((enemy.attack || 1) * (powerScale + 0.05)));
@@ -1592,6 +1890,12 @@ function buildEnemyForBattle(event, result, player, options = {}) {
   const requestedEnemyName = getBattleEnemyName(event, result, player, options);
   const base = BATTLE.createEnemy(requestedEnemyName, level);
   const sourceEnemy = result?.enemy || event?.enemy || {};
+  const factionText = String(sourceEnemy?.faction || sourceEnemy?.side || '').toLowerCase();
+  const explicitVillain = Boolean(
+    sourceEnemy?.villain === true ||
+    sourceEnemy?.isVillain === true ||
+    /digital|chaos|dark|暗潮|反派|機變/u.test(factionText)
+  );
   const enemyName = sourceEnemy.name || requestedEnemyName || base.name;
   const resolvedIsMonster = resolveEnemyIsMonster(sourceEnemy, enemyName);
   const hp = sourceEnemy.hp || sourceEnemy.maxHp || base.hp;
@@ -1606,14 +1910,26 @@ function buildEnemyForBattle(event, result, player, options = {}) {
     maxHp: sourceEnemy.maxHp || hp,
     attack: sourceEnemy.attack || base.attack,
     defense: sourceEnemy.defense ?? base.defense,
-    moves: sourceEnemy.moves || base.moves,
+    moves: BATTLE.buildEnemyMoveLoadout(
+      enemyName,
+      level,
+      sourceEnemy.moves || base.moves || [],
+      {
+        villain: explicitVillain,
+        attack: sourceEnemy.attack || base.attack || 12
+      }
+    ),
     reward: { ...reward, gold: rewardGold },
     isMonster: resolvedIsMonster,
-    companionPet: sourceEnemy.companionPet
+    companionPet: sourceEnemy.companionPet,
+    ignoreBeginnerBalance: Boolean(sourceEnemy.ignoreBeginnerBalance || base.ignoreBeginnerBalance),
+    ignoreBeginnerDanger: Boolean(sourceEnemy.ignoreBeginnerDanger || base.ignoreBeginnerDanger)
   };
   applyNpcCompanionPet(enemy, player);
-  if (!options?.skipBeginnerBalance) applyBeginnerZoneEnemyBalance(enemy, player);
-  if (!options?.skipBeginnerDanger) applyBeginnerZoneDangerVariant(enemy, player);
+  const skipBalance = options?.skipBeginnerBalance || enemy.ignoreBeginnerBalance;
+  const skipDanger = options?.skipBeginnerDanger || enemy.ignoreBeginnerDanger;
+  if (!skipBalance) applyBeginnerZoneEnemyBalance(enemy, player);
+  if (!skipDanger) applyBeginnerZoneDangerVariant(enemy, player);
   return enemy;
 }
 
@@ -1773,6 +2089,20 @@ function composePostBattleStory(player, outcomeLine, detail = '', epilogue = '',
   if (summary) parts.push(`戰況摘要：${summary}`);
   if (epilogue) parts.push(epilogue);
   const merged = parts.filter(Boolean).join('\n\n');
+  if (merged.length <= 2200) return merged;
+  return merged.slice(merged.length - 2200);
+}
+
+function composeActionBridgeStory(player, triggerChoice = '', resultText = '') {
+  const prev = String(player?.currentStory || '').trim();
+  const trigger = String(triggerChoice || '').trim();
+  const summary = summarizeBattleDetailForStory(resultText, 420);
+  const parts = [];
+  if (prev) parts.push(prev);
+  if (trigger) parts.push(`你剛做出的行動：${trigger}`);
+  if (summary) parts.push(`現場結果：${summary}`);
+  const merged = parts.filter(Boolean).join('\n\n');
+  if (!merged) return prev;
   if (merged.length <= 2200) return merged;
   return merged.slice(merged.length - 2200);
 }
@@ -2358,16 +2688,32 @@ function buildPortalUsageGuide(player) {
   return `🌀 **傳送門操作：** 先按「🗺️ 地圖」→ 再按「🌀 傳送門」→ 選目的地（如：${preview}）。`;
 }
 
-function isRoamEligibleAction(event, result) {
+function hasRoamTravelIntentText(text = '') {
+  return /(漫步|四處|探索|巡路|遠行|前進|離開|換個地點|別處|沿路|追查|趕往|前往|移動|轉往|繞行|穿越|傳送門|節點)/u.test(String(text || ''));
+}
+
+function hasConflictCueText(text = '') {
+  return /(戰鬥|開打|殺手|刺客|獵手|伏擊|追兵|敵人|敵方|圍攻|對峙|攔截|夜襲|突襲|可疑人物|強制|壓制|控制可疑)/u.test(String(text || ''));
+}
+
+function isRoamEligibleAction(player, event, result) {
   const action = String(event?.action || '');
   const type = String(result?.type || '');
+  const text = [event?.name || '', event?.choice || '', event?.desc || '', result?.message || ''].join(' ');
+  const travelIntent = hasRoamTravelIntentText(text);
+  const exploreLike = ['explore', 'travel', 'risk', 'surprise', 'hunt', 'forage'].includes(action) || ['explore', 'travel'].includes(type);
   if (!event || !result) return false;
+  if (shouldTriggerBattle(event, result)) return false;
   if (['combat', 'travel', 'portal_ready', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'main_story'].includes(type)) {
     return false;
   }
-  if (['teleport', 'portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'mentor_spar'].includes(action)) {
+  if (['teleport', 'portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'mentor_spar', 'fight'].includes(action)) {
     return false;
   }
+  if (hasConflictCueText(text)) return false;
+  if (!travelIntent && !exploreLike) return false;
+  const storyThreat = computeStoryThreatScore(player?.currentStory || '');
+  if (!travelIntent && storyThreat >= Math.max(24, STORY_THREAT_SCORE_THRESHOLD - 6)) return false;
   return true;
 }
 
@@ -2376,12 +2722,18 @@ function getRoamMoveChance(event, result) {
   const action = String(event?.action || '');
   const type = String(result?.type || '');
   const text = [event?.name || '', event?.choice || '', event?.desc || '', result?.message || ''].join(' ');
+  const travelIntent = hasRoamTravelIntentText(text);
   if (action === 'explore' || type === 'explore') chance += ROAM_MOVE_EXPLORE_BONUS;
-  if (/漫步|四處|探索|巡路|遠行|前進|離開|換個地點|別處|沿路|追查/u.test(text)) {
+  if (travelIntent) {
     chance += ROAM_MOVE_WANDER_BONUS;
+  } else {
+    chance -= 0.12;
   }
   if (/傳送門|市集|商店|鑑價|許願池/u.test(text)) {
     chance += 0.08;
+  }
+  if (hasConflictCueText(text)) {
+    chance = Math.min(chance, 0.06);
   }
   return Math.max(0, Math.min(0.92, chance));
 }
@@ -2415,7 +2767,7 @@ function pickRoamDestination(player) {
 
 function maybeApplyRoamMovement(player, event, result, queueMemory) {
   if (!player || !event || !result) return null;
-  if (!isRoamEligibleAction(event, result)) return null;
+  if (!isRoamEligibleAction(player, event, result)) return null;
   const chance = getRoamMoveChance(event, result);
   if (Math.random() > chance) return null;
 
@@ -2898,6 +3250,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     if (commandName === 'start') await handleStart(interaction, user);
     if (commandName === 'warstatus') await handleWarStatus(interaction);
     if (commandName === 'resetdata') await handleResetData(interaction, user);
+    if (commandName === 'resetworld') await handleResetWorld(interaction);
   } catch (err) {
     console.error(`[Slash] 指令處理失敗 ${commandName}:`, err?.message || err);
     const msg = `❌ 指令執行失敗：${err?.message || err}`;
@@ -2924,14 +3277,16 @@ async function handleResetData(interaction, user) {
   }
 
   if (scope === 'all') {
-    const report = clearAllCharacterData();
+    const report = clearAllCharacterData({ clearWorld: true, worldMode: 'all' });
     await interaction.reply({
       content:
         `✅ 已清空【所有人】角色資料。\n` +
         `- 玩家檔：${report.removedPlayerFiles} 筆\n` +
         `- 舊記憶檔：${report.removedLegacyMemoryFiles} 筆\n` +
         `- 向量記憶刪除：${report.clearedSemanticMemory} 筆\n` +
-        `- pets/player_threads/user_wallets/scratch_lottery 已重置`,
+        `- NPC 引言記憶刪除：${report.clearedNpcQuotes} 筆\n` +
+        `- pets/player_threads/user_wallets/scratch_lottery 已重置\n` +
+        `- 世界重置：core=${report.resetWorldCore ? '已清空' : '略過'}｜公告板=${report.resetWorldBoard ? '已清空' : '略過'}`,
       ephemeral: true
     });
     return;
@@ -2945,7 +3300,33 @@ async function handleResetData(interaction, user) {
       `- 寵物：${report.removedPet ? '已刪除' : '無'}\n` +
       `- 討論串綁定：${report.removedThread ? '已清除' : '無'}\n` +
       `- 錢包綁定：${report.removedWallet ? '已清除' : '無'}\n` +
-      `- 向量記憶刪除：${report.clearedSemanticMemory} 筆`,
+      `- 向量記憶刪除：${report.clearedSemanticMemory} 筆\n` +
+      `- NPC 引言記憶刪除：${report.clearedNpcQuotes} 筆`,
+    ephemeral: true
+  });
+}
+
+async function handleResetWorld(interaction) {
+  const mode = String(interaction.options.getString('mode') || 'events').trim().toLowerCase();
+  const password = String(interaction.options.getString('password') || '').trim();
+
+  if (password !== RESETDATA_PASSWORD) {
+    await interaction.reply({ content: '❌ 密碼錯誤，無法清空世界資料。', ephemeral: true });
+    return;
+  }
+
+  if (mode !== 'events' && mode !== 'all') {
+    await interaction.reply({ content: '❌ mode 只能是 events 或 all。', ephemeral: true });
+    return;
+  }
+
+  const result = clearWorldRuntimeData(mode);
+  const modeLabel = mode === 'all' ? '世界完整狀態（含天數/天氣/傳聞）' : '世界事件與傳聞';
+  await interaction.reply({
+    content:
+      `✅ 已清空【${modeLabel}】。\n` +
+      `- core world：${result.core ? '已清空' : '略過'}\n` +
+      `- world_events 公告板：${result.board ? '已清空' : '略過'}`,
     ephemeral: true
   });
 }
@@ -3319,6 +3700,35 @@ CLIENT.on('interactionCreate', async (interaction) => {
       await showMovesList(interaction, user, pet.id, `已為 ${pet.name} 設定上陣招式：${selectedNames}`);
       return;
     }
+
+    if (customId.startsWith('shop_sell_select_')) {
+      const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+      const player = CORE.loadPlayer(user.id);
+      if (!player) {
+        await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+        return;
+      }
+      if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss')) {
+        await interaction.reply({ content: '⚠️ 請先在商店內操作掛賣。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const options = Array.isArray(player.shopSession.sellDraftOptions) ? player.shopSession.sellDraftOptions : [];
+      const raw = String(interaction.values?.[0] || '');
+      const idx = Number(raw.replace('sellidx_', ''));
+      if (!Number.isFinite(idx) || idx < 0 || idx >= options.length) {
+        await interaction.reply({ content: '⚠️ 掛賣選項已失效，請重新打開掛賣選單。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const spec = options[idx];
+      if (!spec || typeof spec !== 'object') {
+        await interaction.reply({ content: '⚠️ 掛賣選項資料錯誤，請重新選擇。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      player.shopSession.pendingSellSpec = spec;
+      CORE.savePlayer(player);
+      await showWorldShopSellModal(interaction, marketType, spec);
+      return;
+    }
   }
   
   // ===== 錢包 Modal 按鈕 =====
@@ -3335,6 +3745,19 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // ===== 錢包綁定 Modal =====
   if (customId === 'wallet_bind_modal') {
     await handleWalletBind(interaction, user);
+    return;
+  }
+
+  if (customId.startsWith('pmkt_modal_sell_') || customId.startsWith('pmkt_modal_buy_')) {
+    const listingType = customId.startsWith('pmkt_modal_buy_') ? 'buy' : 'sell';
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await handleMarketPostModal(interaction, user, listingType, marketType);
+    return;
+  }
+
+  if (customId.startsWith('shop_sell_modal_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await handleWorldShopSellModal(interaction, user, marketType);
     return;
   }
   
@@ -3703,6 +4126,286 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // ===== 顯示行囊 =====
   if (customId === 'show_inventory') {
     await showInventory(interaction, user);
+    return;
+  }
+
+  if (customId === 'show_finance_ledger') {
+    await showFinanceLedger(interaction, user);
+    return;
+  }
+
+  if (customId.startsWith('quick_shop_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const cd = getQuickShopCooldownInfo(player);
+    if (!cd.ready) {
+      const replyContent = `⏳ 快速商城冷卻中，還要 **${cd.remaining} 回合** 才能再次使用。`;
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({ content: replyContent, ephemeral: true }).catch(() => {});
+      } else {
+        await interaction.reply({ content: replyContent, ephemeral: true }).catch(() => {});
+      }
+      return;
+    }
+
+    openShopSession(player, marketType, '快速進入商城');
+    player.lastQuickShopTurn = cd.currentTurn;
+    player.lastMarketTurn = cd.currentTurn;
+    rememberPlayer(player, {
+      type: '商店',
+      content: `快速進入${getMarketTypeLabel(marketType)}`,
+      outcome: `第${cd.currentTurn}回合觸發`,
+      importance: 1,
+      tags: ['market', marketType, 'quick_shop']
+    });
+    CORE.savePlayer(player);
+
+    await showWorldShopScene(interaction, user, marketType, buildQuickShopNarrativeNotice(player, marketType));
+    return;
+  }
+
+  if (customId === 'pmkt_open_renaiss' || customId === 'pmkt_open_digital') {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showPlayerMarketMenu(interaction, user, marketType);
+    return;
+  }
+
+  if (customId.startsWith('pmkt_view_sell_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showPlayerMarketListings(interaction, user, marketType);
+    return;
+  }
+
+  if (customId.startsWith('pmkt_my_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showMyMarketListings(interaction, user, marketType);
+    return;
+  }
+
+  if (customId.startsWith('pmkt_post_sell_')) {
+    await interaction.reply({ content: '⚠️ 背包視圖不能直接掛賣，請先在劇情中進入商店。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  if (customId.startsWith('pmkt_post_buy_')) {
+    await interaction.reply({ content: '⚠️ 已停用買單功能，現在只保留賣單市場。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  if (customId.startsWith('pmkt_buy_')) {
+    const listingId = customId.replace('pmkt_buy_', '').trim();
+    const buyer = CORE.loadPlayer(user.id);
+    if (!buyer) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(buyer);
+    const outcome = ECON.buyFromSellListing(buyer, listingId, {
+      loadPlayerById: (id) => CORE.loadPlayer(id),
+      savePlayerById: (p) => CORE.savePlayer(p)
+    });
+    if (!outcome?.success) {
+      await interaction.reply({ content: `❌ 成交失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    CORE.savePlayer(buyer);
+    const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
+      ? `｜${outcome.deliveryNotes.join('；')}`
+      : '';
+    await showPlayerMarketMenu(
+      interaction,
+      user,
+      outcome.marketType || 'renaiss',
+      `成交成功：買入 ${outcome.itemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}`
+    );
+    return;
+  }
+
+  if (customId.startsWith('pmkt_fill_')) {
+    await interaction.reply({ content: '⚠️ 已停用買單功能，現在只保留賣單市場。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  if (customId.startsWith('pmkt_cancel_')) {
+    const listingId = customId.replace('pmkt_cancel_', '').trim();
+    const owner = CORE.loadPlayer(user.id);
+    if (!owner) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(owner);
+    const outcome = ECON.cancelMyListing(owner, listingId);
+    if (!outcome?.success) {
+      await interaction.reply({ content: `❌ 取消失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    CORE.savePlayer(owner);
+    await showPlayerMarketMenu(
+      interaction,
+      user,
+      outcome.marketType || 'renaiss',
+      `已取消掛單：${outcome.itemName} x${outcome.quantity}`
+    );
+    return;
+  }
+
+  if (customId.startsWith('shop_open_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showWorldShopScene(interaction, user, marketType);
+    return;
+  }
+
+  if (customId.startsWith('shop_post_sell_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showWorldShopSellPicker(interaction, user, marketType);
+    return;
+  }
+
+  if (customId.startsWith('shop_npc_haggle_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(player);
+    const worldDay = Number(CORE.getWorld()?.day || 1);
+    const sellResult = await ECON.sellPlayerAtMarket(player, marketType, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
+    if (!sellResult || sellResult.error) {
+      await interaction.reply({ content: `❌ 議價失敗：${sellResult?.error || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (Number(sellResult.totalGold || 0) > 0) {
+      recordCashflow(player, {
+        amount: Number(sellResult.totalGold || 0),
+        category: marketType === 'digital' ? 'market_digital_sell' : 'market_renaiss_sell',
+        source: `${getMarketTypeLabel(marketType)} 商店議價售出 ${sellResult.soldCount} 件`,
+        marketType
+      });
+    }
+    rememberPlayer(player, {
+      type: '交易',
+      content: `商店內與${sellResult.npcName}議價`,
+      outcome: `售出 ${sellResult.soldCount} 件，結算 ${sellResult.totalGold} Rns`,
+      importance: 2,
+      tags: ['market', marketType, 'shop_haggle']
+    });
+    CORE.appendNpcMemory(sellResult.npcName, user.id, {
+      type: '交易',
+      content: `${player.name} 在商店櫃台議價並售出 ${sellResult.soldCount} 件物資`,
+      outcome: `結算 ${sellResult.totalGold} Rns`,
+      location: player.location,
+      tags: ['market', marketType, 'private'],
+      importance: marketType === 'digital' ? 3 : 2
+    }, { scope: 'private' });
+    if (typeof CORE.appendNpcQuoteMemory === 'function') {
+      const pitchMatch = String(sellResult.message || '').match(/🏪\s*[^：:\n]+[：:]\s*([^\n]+)/u);
+      const pitchText = String(pitchMatch?.[1] || '').trim();
+      if (pitchText) {
+        CORE.appendNpcQuoteMemory(user.id, {
+          npcId: sellResult.npcName,
+          npcName: sellResult.npcName,
+          speaker: sellResult.npcName,
+          text: pitchText,
+          location: player.location,
+          source: marketType === 'digital' ? 'shop_haggle_digital' : 'shop_haggle_renaiss'
+        });
+      }
+    }
+    CORE.savePlayer(player);
+    await showWorldShopScene(
+      interaction,
+      user,
+      marketType,
+      `${sellResult.npcName} 完成估價結算：+${Number(sellResult.totalGold || 0)} Rns（${Number(sellResult.soldCount || 0)} 件）`
+    );
+    return;
+  }
+
+  if (customId.startsWith('shop_buy_item_')) {
+    const listingId = customId.replace('shop_buy_item_', '').trim();
+    const buyer = CORE.loadPlayer(user.id);
+    if (!buyer) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(buyer);
+    const outcome = ECON.buyFromSellListing(buyer, listingId, {
+      loadPlayerById: (id) => CORE.loadPlayer(id),
+      savePlayerById: (p) => CORE.savePlayer(p)
+    });
+    if (!outcome?.success) {
+      await interaction.reply({ content: `❌ 購買失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    CORE.savePlayer(buyer);
+    const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
+      ? `｜${outcome.deliveryNotes.join('；')}`
+      : '';
+    await showWorldShopBuyPanel(
+      interaction,
+      user,
+      outcome.marketType || 'renaiss',
+      `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}`
+    );
+    return;
+  }
+
+  if (customId.startsWith('shop_buy_point_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(player);
+    const cost = 200;
+    const currentGold = Number(player?.stats?.財富 || 0);
+    if (currentGold < cost) {
+      await interaction.reply({ content: `❌ Rns 不足，購買 1 點加成需要 ${cost} Rns。`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    player.stats.財富 = Math.max(0, currentGold - cost);
+    player.upgradePoints = Number(player.upgradePoints || 0) + 1;
+    recordCashflow(player, {
+      amount: -cost,
+      category: 'shop_upgrade_point',
+      source: `${getMarketTypeLabel(marketType)} 購買加成點數 +1`,
+      marketType
+    });
+    CORE.savePlayer(player);
+    await showWorldShopBuyPanel(
+      interaction,
+      user,
+      marketType,
+      `已購買加成點數 +1（花費 ${cost} Rns）。目前點數：${Number(player.upgradePoints || 0)}`
+    );
+    return;
+  }
+
+  if (customId.startsWith('shop_buy_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    await showWorldShopBuyPanel(interaction, user, marketType);
+    return;
+  }
+
+  if (customId === 'shop_leave') {
+    const player = CORE.loadPlayer(user.id);
+    const pet = PET.loadPet(user.id);
+    if (!player || !pet || !interaction.channel?.isThread()) {
+      await interaction.reply({ content: '⚠️ 請回到遊戲討論串使用。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    leaveShopSession(player);
+    CORE.savePlayer(player);
+    await interaction.deferUpdate().catch(() => {});
+    await sendMainMenuToThread(interaction.channel, player, pet, interaction);
+    await interaction.message.delete().catch(() => {});
     return;
   }
   
@@ -4341,6 +5044,16 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
 
   const worldIntro = consumeWorldIntroOnce(player);
   const worldIntroBlock = worldIntro ? `🌍 **世界背景導讀**\n${worldIntro}\n\n` : '';
+  const financeNotices = typeof ECON.consumeFinanceNotices === 'function'
+    ? ECON.consumeFinanceNotices(player, 3)
+    : [];
+  if (financeNotices.length > 0) {
+    stateMutated = true;
+    CORE.savePlayer(player);
+  }
+  const financeNoticeBlock = financeNotices.length > 0
+    ? `📬 **交易通知**\n${financeNotices.map((line) => `• ${line}`).join('\n')}\n\n`
+    : '';
   const portalGuideBlock = player?.portalMenuOpen ? `\n\n${buildPortalUsageGuide(player)}` : '';
 
   // 如果沒有暂存的事件選項，才生成新的（防止刷選項）
@@ -4381,7 +5094,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     
     const optionsText = buildChoiceOptionsText(choices, { player, pet });
     
-    const description = `${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n**🆕 選項：**${optionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
+    const description = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n**🆕 選項：**${optionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
     
     const embed = new EmbedBuilder()
       .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -4399,14 +5112,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       );
     
     const buttons = buildEventChoiceButtons(choices);
-    buttons.push(
-      new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
-    );
+    appendMainMenuUtilityButtons(buttons, player);
     const components = [];
     for (let i = 0; i < buttons.length; i += 5) {
       components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
@@ -4461,7 +5167,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   const loadingHint = hasRecoverableStoryOnly
     ? 'AI 說書人正在補齊上次中斷的選項...'
     : 'AI 說書人正在構思故事...';
-  const loadingDesc = `${worldIntroBlock}**狀態：【${statusBar}】**\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
+  const loadingDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
   
   const loadingEmbed = new EmbedBuilder()
     .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -4470,14 +5176,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   
   // 構建按鈕
   const buttons = [];
-  buttons.push(
-    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
-  );
+  appendMainMenuUtilityButtons(buttons, player);
   
   const components = [];
   for (let i = 0; i < buttons.length; i += 5) {
@@ -4581,7 +5280,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       }
 
       const storyFirstDesc =
-        `${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n` +
+        `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n` +
         (hasRecoverableStoryOnly
           ? '⏳ *已恢復上次故事，正在補齊選項...*'
           : '⏳ *故事已送達，正在生成選項...*');
@@ -4647,21 +5346,14 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       const newOptionsText = buildChoiceOptionsText(normalizedNewChoices, { player, pet });
 
       const newButtons = buildEventChoiceButtons(normalizedNewChoices);
-      newButtons.push(
-        new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
-      );
+      appendMainMenuUtilityButtons(newButtons, player);
 
       const newComponents = [];
       for (let i = 0; i < newButtons.length; i += 5) {
         newComponents.push(new ActionRowBuilder().addComponents(newButtons.slice(i, i + 5)));
       }
 
-      const aiDesc = `${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n**🆕 新選項：**${newOptionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
+      const aiDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n**🆕 新選項：**${newOptionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
 
       const aiEmbed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -4975,6 +5667,15 @@ async function handleGachaResult(interaction, user, count) {
     await interaction.update({ content: `❌ ${result.reason}`, components: [] });
     return;
   }
+
+  if (Number(result.cost || 0) > 0) {
+    recordCashflow(player, {
+      amount: -Number(result.cost || 0),
+      category: 'gacha_draw',
+      source: `扭蛋 ${count === 10 ? '十連' : '單抽'}`,
+      marketType: 'renaiss'
+    });
+  }
   
   const resultsText = result.draws.map((r, i) => formatGachaSlotLine(r, i)).join('\n\n');
   
@@ -5117,7 +5818,10 @@ async function showCharacter(interaction, user) {
   }
   
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('pmkt_open_renaiss').setLabel('🏪 Renaiss 商城').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('pmkt_open_digital').setLabel('🕳️ Digital 商城').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_finance_ledger').setLabel('💸 資金流水').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Secondary)
   );
   
   await interaction.update({ embeds: [embed], components: [row] });
@@ -5266,6 +5970,618 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
 
   const components = rowMoveAssign ? [rowPetSelect, rowMoveAssign, rowButtons] : [rowPetSelect, rowButtons];
   await interaction.update({ embeds: [embed], content: null, components });
+}
+
+function recordCashflow(player, entry = {}) {
+  if (!player || typeof player !== 'object') return;
+  if (typeof ECON.appendFinanceLedger !== 'function') return;
+  ECON.appendFinanceLedger(player, entry);
+}
+
+function buildFinanceLedgerText(player, limit = 20) {
+  const rows = Array.isArray(player?.financeLedger)
+    ? player.financeLedger.slice(0, Math.max(1, Math.min(40, Number(limit) || 20)))
+    : [];
+  if (rows.length === 0) return '（尚無資金流水）';
+  return rows.map((row, idx) => {
+    const sign = Number(row?.amount || 0) > 0 ? '+' : '';
+    const source = String(row?.source || row?.category || '資金異動').slice(0, 56);
+    const bal = Number(row?.balanceAfter || 0);
+    return `${idx + 1}. ${sign}${Number(row?.amount || 0)} Rns｜${source}｜餘額 ${bal}`;
+  }).join('\n');
+}
+
+async function showFinanceLedger(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const ledgerText = buildFinanceLedgerText(player, 20);
+  const notices = Array.isArray(player.financeNotices) ? player.financeNotices.slice(0, 5) : [];
+  const noticeText = notices.length > 0 ? notices.map((n, i) => `${i + 1}. ${n}`).join('\n') : '（目前無未讀）';
+
+  const embed = new EmbedBuilder()
+    .setTitle('💸 資金流水')
+    .setColor(0x1f9d55)
+    .setDescription('以下為你最近的收入與支出紀錄。')
+    .addFields(
+      { name: '💰 目前 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: false },
+      { name: '📬 未讀金流通知', value: noticeText.slice(0, 1024), inline: false },
+      { name: '📒 最近 20 筆流水', value: ledgerText.slice(0, 1024), inline: false }
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
+function parseMarketTypeFromCustomId(customId = '', fallback = 'renaiss') {
+  if (String(customId || '').includes('_digital')) return 'digital';
+  if (String(customId || '').includes('_renaiss')) return 'renaiss';
+  return fallback === 'digital' ? 'digital' : 'renaiss';
+}
+
+function buildMarketListingLine(listing = {}, idx = 0) {
+  const qty = Math.max(1, Number(listing?.quantity || 1));
+  const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
+  const total = Math.max(1, Number(listing?.totalPrice || qty * unitPrice));
+  const owner = String(listing?.ownerName || '匿名玩家');
+  const note = String(listing?.note || '').trim();
+  const noteText = note ? `｜備註:${note}` : '';
+  return `${idx + 1}. ${listing.itemName} x${qty}｜單價 ${unitPrice}｜總價 ${total}｜掛單:${owner}${noteText}`;
+}
+
+async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const marketLabel = getMarketTypeLabel(safeMarket);
+  const openSell = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', limit: 40 }).length;
+  const myOpen = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 80 }).length;
+  const desc = [
+    notice ? `✅ ${notice}` : '',
+    `你目前在 **${marketLabel}（背包視圖）**。`,
+    '這裡可隨時查看市場、購買商品、撤下自己的掛單。',
+    '若要新增掛賣，請在劇情中進入商店後操作。',
+    `市集賣單：${openSell} 筆｜你目前掛單 ${myOpen} 筆`
+  ].filter(Boolean).join('\n');
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🏪 玩家商城｜${marketLabel}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(desc)
+    .addFields(
+      { name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true },
+      { name: '📍 位置', value: `${player.location}`, inline: true }
+    );
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`pmkt_view_sell_${safeMarket}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`pmkt_my_${safeMarket}`).setLabel('📌 我的掛單').setStyle(ButtonStyle.Secondary)
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('show_finance_ledger').setLabel('💸 資金流水').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
+  );
+
+  await interaction.update({ embeds: [embed], components: [row1, row2] });
+}
+
+async function showPlayerMarketListings(interaction, user, marketType = 'renaiss') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const listings = ECON.getMarketListingsView({
+    marketType: safeMarket,
+    type: 'sell',
+    excludeOwnerId: user.id,
+    limit: 6
+  });
+  const title = '🛒 可購買賣單';
+  const listText = listings.length > 0
+    ? listings.map((l, i) => buildMarketListingLine(l, i)).join('\n')
+    : '（目前沒有可成交掛單）';
+
+  const embed = new EmbedBuilder()
+    .setTitle(`${title}｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(listText);
+
+  const actionButtons = [];
+  for (const listing of listings.slice(0, 3)) {
+    actionButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`pmkt_buy_${listing.id}`)
+        .setLabel(`買 ${String(listing.itemName || '物品').slice(0, 12)}`)
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+
+  const rows = [];
+  if (actionButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(actionButtons));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回商城').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
+  ));
+
+  await interaction.update({ embeds: [embed], components: rows });
+}
+
+async function showMyMarketListings(interaction, user, marketType = 'renaiss') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const mine = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 6 });
+
+  const text = mine.length > 0
+    ? mine.map((l, i) => `${i + 1}. ${l.itemName} x${l.quantity}｜單價 ${l.unitPrice}｜總價 ${l.totalPrice}`).join('\n')
+    : '（你目前沒有掛單）';
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📌 我的掛單｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(text);
+
+  const cancelButtons = mine.slice(0, 3).map((listing) =>
+    new ButtonBuilder()
+      .setCustomId(`pmkt_cancel_${listing.id}`)
+      .setLabel(`取消 ${String(listing.itemName || '掛單').slice(0, 12)}`)
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  const rows = [];
+  if (cancelButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(cancelButtons));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回商城').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
+  ));
+  await interaction.update({ embeds: [embed], components: rows });
+}
+
+function buildShopSellDraftOptions(player, ownerId) {
+  ECON.ensurePlayerEconomy(player);
+  const stacked = new Map();
+
+  const addStack = (rawName, source, amount = 1) => {
+    const name = String(rawName || '').trim();
+    if (!name) return;
+    const key = name;
+    const qty = Math.max(1, Math.floor(Number(amount || 1)));
+    const prev = stacked.get(key);
+    if (prev) {
+      prev.quantity += qty;
+      if (!prev.sources.includes(source)) prev.sources.push(source);
+      return;
+    }
+    stacked.set(key, {
+      kind: 'item',
+      sources: [source],
+      itemName: name,
+      quantity: qty
+    });
+  };
+
+  for (const good of Array.isArray(player.tradeGoods) ? player.tradeGoods : []) {
+    addStack(good?.name || '', 'tradeGoods', 1);
+  }
+  for (const herb of Array.isArray(player.herbs) ? player.herbs : []) {
+    addStack(typeof herb === 'string' ? herb : herb?.name || '', 'herbs', 1);
+  }
+  for (const inv of Array.isArray(player.inventory) ? player.inventory : []) {
+    addStack(typeof inv === 'string' ? inv : inv?.name || '', 'inventory', 1);
+  }
+
+  const options = Array.from(stacked.values())
+    .sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || '')))
+    .map((entry) => ({
+      kind: 'item',
+      itemName: String(entry.itemName || '').trim(),
+      quantityMax: Math.max(1, Number(entry.quantity || 1)),
+      itemRef: { kind: 'item', source: Array.isArray(entry.sources) ? entry.sources[0] : 'inventory' },
+      label: String(entry.itemName || '').slice(0, 100),
+      description: `庫存 ${Math.max(1, Number(entry.quantity || 1))} 件｜${(entry.sources || []).join('+')}`
+    }));
+
+  let blockedActiveSkillCount = 0;
+  const ownedPets = getPlayerOwnedPets(ownerId);
+  for (const pet of ownedPets) {
+    if (!pet || !pet.id) continue;
+    const loadout = normalizePetMoveLoadout(pet, true);
+    const activeSet = new Set(loadout.activeMoveIds || []);
+    const attackMoves = getPetAttackMoves(pet);
+    for (const move of attackMoves) {
+      const moveId = String(move?.id || '').trim();
+      if (!moveId) continue;
+      if (activeSet.has(moveId)) {
+        blockedActiveSkillCount += 1;
+        continue;
+      }
+      const moveName = String(move?.name || moveId).trim();
+      if (!moveName) continue;
+      options.push({
+        kind: 'pet_move',
+        itemName: `技能晶片：${moveName}`,
+        quantityMax: 1,
+        itemRef: {
+          kind: 'pet_move',
+          petId: String(pet.id),
+          petName: String(pet.name || '寵物').slice(0, 48),
+          moveId,
+          moveName
+        },
+        label: `${pet.name}｜${moveName}`.slice(0, 100),
+        description: `技能掛賣｜${pet.type || '未知'}｜未上陣`
+      });
+    }
+  }
+
+  return {
+    options: options.slice(0, 80),
+    blockedActiveSkillCount
+  };
+}
+
+async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss', notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
+    await interaction.reply({ content: '⚠️ 只能在商店場景掛賣。請先由劇情進入商店。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const draft = buildShopSellDraftOptions(player, user.id);
+  player.shopSession.sellDraftOptions = draft.options;
+  player.shopSession.pendingSellSpec = null;
+  CORE.savePlayer(player);
+
+  const lines = [];
+  if (notice) lines.push(`✅ ${notice}`);
+  lines.push(`請從下拉選單直接選擇要掛賣的項目（避免打錯字）。`);
+  lines.push(`可選項目：${draft.options.length} 個`);
+  if (draft.blockedActiveSkillCount > 0) {
+    lines.push(`上陣中技能已自動排除：${draft.blockedActiveSkillCount} 招（需先到招式配置卸下）`);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📤 掛賣選單｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(lines.join('\n'))
+    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+
+  if (draft.options.length <= 0) {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('show_moves').setLabel('📜 寵物招式配置').setStyle(ButtonStyle.Primary)
+    );
+    await interaction.update({ embeds: [embed], components: [row] });
+    return;
+  }
+
+  const selectOptions = draft.options.slice(0, SHOP_SELL_SELECT_LIMIT).map((option, idx) => ({
+    label: String(option.label || option.itemName || `選項${idx + 1}`).slice(0, 100),
+    description: String(option.description || '').slice(0, 100) || `最多 ${Math.max(1, Number(option.quantityMax || 1))} 件`,
+    value: `sellidx_${idx}`
+  }));
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`shop_sell_select_${safeMarket}`)
+    .setPlaceholder('選擇要掛賣的道具/技能')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(selectOptions);
+
+  const row1 = new ActionRowBuilder().addComponents(select);
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_moves').setLabel('📜 寵物招式配置').setStyle(ButtonStyle.Primary)
+  );
+  await interaction.update({ embeds: [embed], components: [row1, row2] });
+}
+
+async function showWorldShopSellModal(interaction, marketType = 'renaiss', spec = null) {
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const itemName = String(spec?.itemName || '商品').slice(0, 36);
+  const modal = new ModalBuilder()
+    .setCustomId(`shop_sell_modal_${safeMarket}`)
+    .setTitle(`上架賣單｜${itemName}`);
+
+  const qtyInput = new TextInputBuilder()
+    .setCustomId('shop_sell_qty')
+    .setLabel(spec?.kind === 'pet_move' ? '數量（技能固定為 1）' : '數量')
+    .setPlaceholder(spec?.kind === 'pet_move' ? '固定為 1' : `最多 ${Math.max(1, Number(spec?.quantityMax || 1))} 件`)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(4)
+    .setValue(spec?.kind === 'pet_move' ? '1' : '1');
+
+  const priceInput = new TextInputBuilder()
+    .setCustomId('shop_sell_price')
+    .setLabel('單價（Rns）')
+    .setPlaceholder('例如：120')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(8);
+
+  const noteInput = new TextInputBuilder()
+    .setCustomId('shop_sell_note')
+    .setLabel('備註（可留空）')
+    .setPlaceholder('例如：可議價 / 急售')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(80);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(qtyInput),
+    new ActionRowBuilder().addComponents(priceInput),
+    new ActionRowBuilder().addComponents(noteInput)
+  );
+  await interaction.showModal(modal);
+}
+
+async function handleWorldShopSellModal(interaction, user, marketType = 'renaiss') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
+    await interaction.reply({ content: '⚠️ 你目前不在此商店場景。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const spec = player.shopSession?.pendingSellSpec;
+  if (!spec || typeof spec !== 'object') {
+    await interaction.reply({ content: '⚠️ 掛賣項目已失效，請重新選擇。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const rawQty = Number(interaction.fields.getTextInputValue('shop_sell_qty')?.trim() || 0);
+  const unitPrice = Number(interaction.fields.getTextInputValue('shop_sell_price')?.trim() || 0);
+  const note = interaction.fields.getTextInputValue('shop_sell_note')?.trim() || '';
+  let quantity = Math.max(1, Math.floor(rawQty || 0));
+  if (spec.kind === 'pet_move') {
+    quantity = 1;
+  } else {
+    quantity = Math.min(Math.max(1, Number(spec.quantityMax || 1)), quantity);
+  }
+
+  const result = ECON.createSellListing(player, safeMarket, {
+    itemName: spec.itemName,
+    quantity,
+    unitPrice,
+    note,
+    itemRef: spec.itemRef || { kind: spec.kind || 'item' }
+  });
+
+  if (!result?.success) {
+    await interaction.reply({ content: `❌ 掛單失敗：${result?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  player.shopSession.pendingSellSpec = null;
+  CORE.savePlayer(player);
+  const listing = result.listing || {};
+  const successText = `賣單已上架：${listing.itemName} x${listing.quantity}（單價 ${listing.unitPrice}）`;
+  const updated = await interaction.deferUpdate()
+    .then(async () => {
+      await showWorldShopScene(interaction, user, safeMarket, successText);
+      return true;
+    })
+    .catch(() => false);
+  if (!updated) {
+    await interaction.reply({ content: `✅ ${successText}`, ephemeral: true }).catch(() => {});
+  }
+}
+
+async function showMarketPostModal(interaction, marketType = 'renaiss', listingType = 'sell') {
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const safeType = 'sell';
+  const modal = new ModalBuilder()
+    .setCustomId(`pmkt_modal_${safeType}_${safeMarket}`)
+    .setTitle(`${getMarketTypeLabel(safeMarket)}｜上架賣單`);
+
+  const itemInput = new TextInputBuilder()
+    .setCustomId('pmkt_item_name')
+    .setLabel('物品名稱（需與你持有名稱一致）')
+    .setPlaceholder('例如：月影蘭')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(80);
+  const qtyInput = new TextInputBuilder()
+    .setCustomId('pmkt_qty')
+    .setLabel('數量')
+    .setPlaceholder('例如：2')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(4);
+  const priceInput = new TextInputBuilder()
+    .setCustomId('pmkt_unit_price')
+    .setLabel('單價（Rns）')
+    .setPlaceholder('例如：120')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(8);
+  const noteInput = new TextInputBuilder()
+    .setCustomId('pmkt_note')
+    .setLabel('備註（可留空）')
+    .setPlaceholder('例如：可議價/急售')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(80);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(itemInput),
+    new ActionRowBuilder().addComponents(qtyInput),
+    new ActionRowBuilder().addComponents(priceInput),
+    new ActionRowBuilder().addComponents(noteInput)
+  );
+  await interaction.showModal(modal);
+}
+
+async function handleMarketPostModal(interaction, user, listingType = 'sell', marketType = 'renaiss') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || '')) {
+    await interaction.reply({ content: '⚠️ 只能在商店內掛賣。請先從劇情進入商店。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const itemName = interaction.fields.getTextInputValue('pmkt_item_name')?.trim() || '';
+  const qty = Number(interaction.fields.getTextInputValue('pmkt_qty')?.trim() || 0);
+  const unitPrice = Number(interaction.fields.getTextInputValue('pmkt_unit_price')?.trim() || 0);
+  const note = interaction.fields.getTextInputValue('pmkt_note')?.trim() || '';
+
+  const result = ECON.createSellListing(player, marketType, { itemName, quantity: qty, unitPrice, note });
+
+  if (!result?.success) {
+    await interaction.reply({ content: `❌ 掛單失敗：${result?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  CORE.savePlayer(player);
+  const listing = result.listing || {};
+  const successText = `賣單已上架：${listing.itemName} x${listing.quantity}（單價 ${listing.unitPrice}）`;
+  const updated = await interaction.deferUpdate()
+    .then(async () => {
+      await showWorldShopScene(interaction, user, marketType, successText);
+      return true;
+    })
+    .catch(() => false);
+  if (!updated) {
+    await interaction.reply({ content: `✅ ${successText}\n請回到「背包 → 商城」查看。`, ephemeral: true }).catch(() => {});
+  }
+}
+
+function cloneChoicesForSnapshot(choices = []) {
+  const list = normalizeEventChoices(Array.isArray(choices) ? choices : []);
+  return list.map((choice) => JSON.parse(JSON.stringify(choice)));
+}
+
+function openShopSession(player, marketType = 'renaiss', sourceChoice = '') {
+  if (!player || typeof player !== 'object') return;
+  player.shopSession = {
+    open: true,
+    marketType: marketType === 'digital' ? 'digital' : 'renaiss',
+    enteredAt: Date.now(),
+    sourceChoice: String(sourceChoice || ''),
+    preStory: String(player.currentStory || ''),
+    preChoices: cloneChoicesForSnapshot(player.eventChoices || []),
+    sellDraftOptions: [],
+    pendingSellSpec: null
+  };
+}
+
+function leaveShopSession(player) {
+  if (!player || !player.shopSession) return;
+  const session = player.shopSession;
+  if (String(session.preStory || '').trim()) {
+    player.currentStory = String(session.preStory || '');
+  }
+  if (Array.isArray(session.preChoices) && session.preChoices.length > 0) {
+    player.eventChoices = cloneChoicesForSnapshot(session.preChoices);
+  }
+  delete player.shopSession;
+}
+
+async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const listings = ECON.getMarketListingsView({
+    marketType: safeMarket,
+    type: 'sell',
+    excludeOwnerId: user.id,
+    limit: 6
+  });
+  const listText = listings.length > 0
+    ? listings.map((l, i) => buildMarketListingLine(l, i)).join('\n')
+    : '（目前沒有可購買商品）';
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🛒 商店可購買商品｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(`${notice ? `✅ ${notice}\n\n` : ''}${listText}\n\n加成點數：花費 200 Rns 可獲得 +1 點。`);
+
+  const buyButtons = listings.slice(0, 3).map((listing) =>
+    new ButtonBuilder()
+      .setCustomId(`shop_buy_item_${listing.id}`)
+      .setLabel(`買 ${String(listing.itemName || '商品').slice(0, 11)}`)
+      .setStyle(ButtonStyle.Success)
+  );
+  const rows = [];
+  if (buyButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(buyButtons));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
+  ));
+  await interaction.update({ embeds: [embed], components: rows });
+}
+
+async function showWorldShopScene(interaction, user, marketType = 'renaiss', notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const bossName = safeMarket === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員';
+  const bossTone = safeMarket === 'digital'
+    ? '老闆眼神很熱情，但每句話都像在試探你的底線。'
+    : '老闆把估值表攤在你面前，強調透明與長期信任。';
+  const listingCount = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', limit: 99 }).length;
+  const myCount = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 99 }).length;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🏪 進入商店｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(
+      `${notice ? `${/^[🧭📖]/u.test(String(notice).trim()) ? notice : `✅ ${notice}`}\n\n` : ''}` +
+      `你走進了${getMarketTypeLabel(safeMarket)}，櫃台後方的 **${bossName}** 正看著你。\n` +
+      `${bossTone}\n\n` +
+      `市面賣單：${listingCount} 筆｜你掛單：${myCount} 筆\n` +
+      `請選擇：要掛賣、直接跟老闆議價、看商品，或離開商店。\n` +
+      `掛賣會先出現下拉選單；技能需先從上陣招式卸下才可掛賣。`
+    )
+    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_post_sell_${safeMarket}`).setLabel('📤 掛賣商品').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_npc_haggle_${safeMarket}`).setLabel('🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_buy_${safeMarket}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row1, row2] });
 }
 
 // ============== 行囊/背包 ==============
@@ -5446,55 +6762,61 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       importance: scratch.win ? 2 : 1,
       tags: ['scratch_lottery', scratch.win ? 'win' : 'lose']
     });
+    if (scratch.success) {
+      recordCashflow(player, {
+        amount: -Number(scratch.cost || 0),
+        category: 'scratch_cost',
+        source: '小賣部刮刮樂投入',
+        marketType: 'renaiss'
+      });
+      if (Number(scratch.reward || 0) > 0) {
+        recordCashflow(player, {
+          amount: Number(scratch.reward || 0),
+          category: 'scratch_reward',
+          source: '小賣部刮刮樂中獎',
+          marketType: 'renaiss'
+        });
+      }
+    }
   } else if (event.action === 'market_renaiss' || event.action === 'market_digital') {
     const marketType = event.action === 'market_digital' ? 'digital' : 'renaiss';
-    const sellResult = await ECON.sellPlayerAtMarket(player, marketType, { worldDay });
-    result = {
-      type: marketType === 'digital' ? 'market_digital' : 'market_renaiss',
-      message: sellResult.message,
-      gold: sellResult.totalGold,
-      soldCount: sellResult.soldCount,
-      marketType,
-      npcName: sellResult.npcName,
-      avgRate: sellResult.avgRate,
-      historyRecall: sellResult.historyRecall,
-      digitalRiskScore: sellResult.digitalRiskScore,
-      digitalRiskDelta: sellResult.digitalRiskDelta,
-      digitalMasked: sellResult.digitalMasked,
-      riskHint: sellResult.riskHint,
-      skipGoldApply: true
-    };
-    const digitalMasked = Boolean(sellResult.digitalMasked || isDigitalMaskPhaseForPlayer(player));
-    const digitalRiskText = marketType === 'digital'
-      ? (
-        digitalMasked
-          ? `，市場異常指標 ${Number(sellResult.digitalRiskScore || 0)}/100（+${Number(sellResult.digitalRiskDelta || 0)}）`
-          : `，Digital 詐價風險提示累積值 ${Number(sellResult.digitalRiskScore || 0)}/100（+${Number(sellResult.digitalRiskDelta || 0)}）`
-      )
-      : '';
+    openShopSession(player, marketType, selectedChoice);
     queueMemory({
-      type: '交易',
-      content: selectedChoice,
-      outcome: `售出 ${sellResult.soldCount} 件，結算 ${sellResult.totalGold} Rns 代幣${digitalRiskText}`,
+      type: '商店',
+      content: `進入${getMarketTypeLabel(marketType)}`,
+      outcome: '商店場景開啟',
       importance: 2,
-      tags: ['market', marketType]
+      tags: ['market', marketType, 'shop_enter']
     });
-    CORE.appendNpcMemory(sellResult.npcName, user.id, {
-      type: '交易',
-      content: `${player.name} 在${player.location}出售 ${sellResult.soldCount} 件物資`,
-      outcome: `結算 ${sellResult.totalGold} Rns 代幣`,
-      location: player.location,
-      tags: ['market', marketType, 'private'],
-      importance: marketType === 'digital' ? 3 : 2
-    }, { scope: 'private' });
-    CORE.appendNpcMemory(sellResult.npcName, user.id, {
-      type: '市場見聞',
-      content: `${player.location}有玩家完成一筆市場交易`,
-      outcome: `${sellResult.soldCount} 件貨物流通`,
-      location: player.location,
-      tags: ['market', marketType, 'public_event'],
-      importance: 1
-    }, { scope: 'public' });
+    flushMemories();
+    CORE.savePlayer(player);
+
+    const bossName = marketType === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員';
+    const intro = marketType === 'digital'
+      ? '你推門進入店內，老闆笑著招手，語氣親切卻帶著一絲試探。'
+      : '你走進店內，牆上掛著完整估值表，老闆示意你先看規則。';
+    const embed = new EmbedBuilder()
+      .setTitle(`🏪 ${getMarketTypeLabel(marketType)}`)
+      .setColor(marketType === 'digital' ? 0x9333ea : 0x0ea5e9)
+      .setDescription(
+        `${intro}\n\n` +
+        `櫃台老闆：**${bossName}**\n` +
+        `你可以：掛賣商品、跟老闆議價、買商品，或離開商店回到原本故事。\n` +
+        `掛賣採下拉選單；上陣中的技能請先卸下。`
+      );
+    const row1 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`shop_post_sell_${marketType}`).setLabel('📤 掛賣商品').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`shop_npc_haggle_${marketType}`).setLabel('🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
+    );
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`shop_buy_${marketType}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
+    );
+
+    const shopMsg = await interaction.channel.send({ embeds: [embed], components: [row1, row2] });
+    trackActiveGameMessage(player, interaction.channel?.id, shopMsg.id);
+    await disableMessageComponents(interaction.channel, interaction.message?.id);
+    return;
   } else if (event.action === 'main_story') {
     result = {
       type: 'main_story',
@@ -5633,6 +6955,30 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       tags: [String(event.action || ''), String(result?.type || '')].filter(Boolean)
     });
 
+    if (result?.type === 'combat') {
+      const hasExplicitEnemy = Boolean(result?.enemy?.name || event?.enemy?.name);
+      if (!hasExplicitEnemy && typeof CORE.buildRoamingDigitalEncounterEnemy === 'function') {
+        const roamingEncounter = CORE.buildRoamingDigitalEncounterEnemy(player.location, {
+          limit: 3,
+          forceRelocate: true,
+          persist: true
+        });
+        if (roamingEncounter?.enemy && Math.random() < 0.78) {
+          result.enemy = roamingEncounter.enemy;
+          result.message = `${result.message || event.desc || ''}\n\n${roamingEncounter.hint || ''}`.trim();
+          result.npcId = roamingEncounter.npcId;
+          result.npcGroup = roamingEncounter.group;
+          queueMemory({
+            type: '遭遇',
+            content: `在${player.location}遭遇無名滲透者`,
+            outcome: `分組 ${roamingEncounter.group || '未知'}｜戰鬥即將開始`,
+            importance: 2,
+            tags: ['digital_roamer', 'combat']
+          });
+        }
+      }
+    }
+
     if (result?.type === 'social') {
       const nearbyNpcIds = typeof CORE.getNearbyNpcIds === 'function'
         ? CORE.getNearbyNpcIds(player.location, 1)
@@ -5654,6 +7000,22 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
             result.npcId = targetNpcId;
             result.npcName = npcInfo.name;
             result.npcDialogueGenerated = true;
+            appendNpcDialogueLog(player, {
+              speaker: npcInfo.name,
+              text: npcReply,
+              location: player.location,
+              source: 'social_npc_reply'
+            });
+            if (typeof CORE.appendNpcQuoteMemory === 'function') {
+              CORE.appendNpcQuoteMemory(user.id, {
+                npcId: targetNpcId,
+                npcName: npcInfo.name,
+                speaker: npcInfo.name,
+                text: npcReply,
+                location: player.location,
+                source: 'social_npc_reply'
+              });
+            }
           } catch (npcErr) {
             throw new Error(`NPC 對話生成失敗：${npcErr?.message || npcErr}`);
           }
@@ -5666,10 +7028,20 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     const goldDelta = Number(result.gold || 0);
     if (!result.skipGoldApply && Number.isFinite(goldDelta) && goldDelta !== 0) {
       player.stats.財富 = Math.max(0, Number(player.stats.財富 || 0) + goldDelta);
+      recordCashflow(player, {
+        amount: goldDelta,
+        category: `event_${String(result.type || event.action || 'action')}`.slice(0, 40),
+        source: selectedChoice || event.name || event.action || '事件結算'
+      });
     }
     const cost = Number(result.cost || 0);
     if (Number.isFinite(cost) && cost > 0) {
       player.stats.財富 = Math.max(0, Number(player.stats.財富 || 0) - cost);
+      recordCashflow(player, {
+        amount: -cost,
+        category: `cost_${String(result.type || event.action || 'action')}`.slice(0, 40),
+        source: selectedChoice || event.name || event.action || '事件花費'
+      });
     }
     if (Number.isFinite(Number(result.reputation)) && Number(result.reputation) !== 0) {
       player.reputation = Number(player.reputation || 0) + Number(result.reputation);
@@ -5781,14 +7153,32 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   player.stats.飽腹度 = Math.max(0, (player.stats.飽腹度 || 100) - Math.floor(Math.random() * 5 + 3));
   incrementPlayerStoryTurns(player, 1);
   incrementLocationArcTurns(player, 1);
+  if (typeof CORE.advanceRoamingDigitalVillains === 'function') {
+    CORE.advanceRoamingDigitalVillains({ steps: 1, persist: true });
+  }
   if (event.action === 'market_renaiss' || event.action === 'market_digital') {
     player.lastMarketTurn = getPlayerStoryTurns(player);
   }
   
   // 清除舊選項（必須重新生成）
   player.eventChoices = [];
+  const enteringBattle = shouldTriggerBattle(event, result);
+  if (!enteringBattle) {
+    const passiveHeal = applyPassivePetRecovery(pet, PET_PASSIVE_HEAL_PER_STORY_TURN);
+    if (passiveHeal > 0) {
+      result.passivePetHeal = passiveHeal;
+      queueMemory({
+        type: '恢復',
+        content: `${pet.name} 在行進中恢復`,
+        outcome: `HP +${passiveHeal}`,
+        importance: 1,
+        tags: ['pet_heal', 'passive_regen']
+      });
+      PET.savePet(pet);
+    }
+  }
   
-  if (shouldTriggerBattle(event, result)) {
+  if (enteringBattle) {
     const enemy = buildEnemyForBattle(
       event,
       result,
@@ -5802,10 +7192,10 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       ? `🐾 ${pet.name}`
       : `🧍 ${player.name}(ATK 10)`;
     const enemyPetLine = enemy?.npcPet
-      ? `🐾 對手寵物：${enemy.npcPet.name}（ATK ${enemy.npcPet.attack}${enemy.npcPet.newbieScaled ? '｜新手區弱化' : ''}）\n`
+      ? `🐾 對手寵物：${enemy.npcPet.name}（ATK ${enemy.npcPet.attack}${enemy.npcPet.newbieScaled ? '｜新手區調整' : ''}）\n`
       : '';
     const beginnerGuardText = enemy.beginnerBalanced
-      ? '🛡️ 新手區保護：本場敵人能力已下修\n'
+      ? '🛡️ 新手區保護：本場敵人能力已平衡調整\n'
       : '';
     const beginnerDangerText = enemy.beginnerDanger
       ? '⚠️ 危險提示：這是新手區中的偏強敵，建議先評估勝率再決定是否開戰。\n'
@@ -5870,6 +7260,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   }
   
+  const previousOutcomeText = String(result?.message || event?.desc || '').trim();
+  player.currentStory = composeActionBridgeStory(player, selectedChoice, previousOutcomeText);
   flushMemories();
   startGenerationState(player, {
     source: 'event',
@@ -5957,7 +7349,19 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     try {
       updateGenerationState(player, { phase: 'generating_story' });
       CORE.savePlayer(player);
-      const storyText = await STORY.generateStory(event, player, pet, event, memoryContext);
+      const storyText = await STORY.generateStory(
+        event,
+        player,
+        pet,
+        {
+          name: event?.name || '',
+          choice: selectedChoice,
+          desc: previousOutcomeText || event?.desc || '',
+          action: event?.action || '',
+          outcome: previousOutcomeText || ''
+        },
+        memoryContext
+      );
       if (!storyText) {
         stopLoadingAnimation();
         finishGenerationState(player, 'failed', {
@@ -5993,6 +7397,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       if (result.soldCount > 0) rewardText.push(`🏪 已售出 ${result.soldCount} 件`);
       if (result.item && result.success) rewardText.push(`📦 取得 ${result.item}`);
       if (result.loot?.name) rewardText.push(`🧰 ${result.loot.name}（${result.loot.rarity || '普通'}）`);
+      if (Number(result?.passivePetHeal || 0) > 0) rewardText.push(`🩹 ${pet.name} 行進恢復 +${Number(result.passivePetHeal)} HP`);
       if (Number.isFinite(Number(result.digitalRiskScore))) {
         const score = Number(result.digitalRiskScore);
         const delta = Number(result.digitalRiskDelta || 0);
@@ -6098,14 +7503,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         );
 
       const buttons = buildEventChoiceButtons(newChoices);
-      buttons.push(
-        new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('show_moves').setLabel('📜').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_character').setLabel('👤').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_profile').setLabel('💳').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('open_map').setLabel('🗺️').setStyle(ButtonStyle.Secondary)
-      );
+      appendMainMenuUtilityButtons(buttons, player);
 
       const components = [];
       for (let i = 0; i < buttons.length; i += 5) {
@@ -6244,8 +7642,20 @@ function buildAIBattleStory(rounds, combatant, enemy, finalResult) {
     );
   }
 
-  if (finalResult?.message) {
-    lines.push(`**終局：** ${finalResult.message}`);
+  if (finalResult) {
+    const lastRound = Array.isArray(rounds) && rounds.length > 0 ? rounds[rounds.length - 1] : null;
+    const finisher = String(lastRound?.playerMove || '最後一擊').trim();
+    if (finalResult.victory === true) {
+      const gold = Math.max(0, Number(finalResult?.gold || 0));
+      const wanted = Math.max(0, Number(finalResult?.wantedLevel || 0));
+      const rewardLine = gold > 0 ? `，獲得 ${gold} Rns！` : '。';
+      const wantedLine = wanted > 0 ? `\n⚠️ 你現在是 ${wanted} 級通緝犯！` : '';
+      lines.push(`**終局：** 🏆 ${combatant.name}以「${finisher}」擊倒${enemy.name}${rewardLine}${wantedLine}`);
+    } else if (finalResult.victory === false) {
+      lines.push(`**終局：** 💀 ${combatant.name}不敵${enemy.name}，戰鬥落敗。`);
+    } else if (finalResult?.message) {
+      lines.push(`**終局：** ${String(finalResult.message).split('\n').slice(-1)[0]}`);
+    }
   }
   return lines.join('\n\n');
 }
@@ -6549,6 +7959,12 @@ async function startAutoBattle(interaction, user) {
     }
     const sourceChoice = String(player?.battleState?.sourceChoice || '').trim();
     player.stats.財富 += finalResult.gold;
+    recordCashflow(player, {
+      amount: Number(finalResult.gold || 0),
+      category: 'battle_victory_ai',
+      source: `AI 戰鬥擊敗 ${enemy.name}`,
+      marketType: 'renaiss'
+    });
     const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
@@ -6717,6 +8133,12 @@ async function handleUseMove(interaction, user, moveIndex) {
     }
     const sourceChoice = String(player?.battleState?.sourceChoice || '').trim();
     player.stats.財富 += result.gold;
+    recordCashflow(player, {
+      amount: Number(result.gold || 0),
+      category: 'battle_victory_manual',
+      source: `手動戰鬥擊敗 ${enemy.name}`,
+      marketType: 'renaiss'
+    });
     const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
@@ -6834,6 +8256,12 @@ async function handleBattleWait(interaction, user) {
       return;
     }
     player.stats.財富 += result.gold;
+    recordCashflow(player, {
+      amount: Number(result.gold || 0),
+      category: 'battle_victory_wait',
+      source: `待機反擊擊敗 ${enemy.name}`,
+      marketType: 'renaiss'
+    });
     const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
@@ -6998,6 +8426,28 @@ CLIENT.on('ready', async () => {
           choices: [
             { name: '自己', value: 'self' },
             { name: '所有人', value: 'all' }
+          ]
+        },
+        {
+          type: 3,
+          name: 'password',
+          description: '安全密碼',
+          required: true
+        }
+      ]
+    },
+    {
+      name: 'resetworld',
+      description: '清空世界事件或重置整個世界（需密碼）',
+      options: [
+        {
+          type: 3,
+          name: 'mode',
+          description: '清空範圍：events(只清事件) 或 all(整個世界重置)',
+          required: true,
+          choices: [
+            { name: '世界事件', value: 'events' },
+            { name: '全部世界', value: 'all' }
           ]
         },
         {

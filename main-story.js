@@ -4,6 +4,7 @@
  */
 
 const { sanitizeWorldObject } = require('./style-sanitizer');
+const BATTLE = require('./battle-system');
 
 const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',
@@ -173,17 +174,24 @@ function finalizeEnding(state, player) {
 }
 
 function buildMaskedAssassinEncounter() {
+  const enemy = {
+    id: 'masked_assassin_story',
+    name: '覆面獵手',
+    hp: 130,
+    maxHp: 130,
+    attack: 32,
+    defense: 12,
+    moves: BATTLE.buildEnemyMoveLoadout('覆面獵手', 12, ['突襲', '奪包', '煙霧'], {
+      villain: true,
+      attack: 32
+    }),
+    reward: { gold: [70, 130] },
+    isMonster: true
+  };
   return sanitizeWorldObject({
     type: 'combat',
     message: '💀 你被暗潮勢力注意到了。覆面獵手夜襲而來，先試你深淺。',
-    enemy: {
-      name: '覆面獵手',
-      hp: 130,
-      attack: 32,
-      moves: ['突襲', '奪包', '煙霧'],
-      reward: { gold: [70, 130] },
-      isMonster: true
-    },
+    enemy,
     canFlee: true,
     fleeRate: 0.7,
     fleeAttempts: 2
@@ -194,20 +202,13 @@ function buildKingEncounter(forcedKing = '') {
   const king = DIGITAL_KINGS.includes(String(forcedKing || '').trim())
     ? String(forcedKing || '').trim()
     : DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
+  const kingEnemy = BATTLE.createDigitalKingEnemy(king);
   return sanitizeWorldObject({
     king,
     encounter: {
       type: 'combat',
       message: `👑 四巨頭「${king}」現身，變異寵物在你面前失控咆哮。`,
-      enemy: {
-        name: king,
-        hp: 180,
-        attack: 46,
-        defense: 16,
-        moves: ['變異撕裂', '反噬波動', '技能複製'],
-        reward: { gold: [120, 220] },
-        isMonster: true
-      },
+      enemy: kingEnemy,
       canFlee: true,
       fleeRate: 0.7,
       fleeAttempts: 2

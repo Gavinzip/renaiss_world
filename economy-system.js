@@ -6,6 +6,7 @@
  */
 
 const { getLocationDifficulty } = require('./world-map');
+const PET = require('./pet-system');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -44,10 +45,15 @@ const MAX_APPRAISAL_HISTORY = 28;
 const MINIMAX_MODEL = 'MiniMax-M2.5';
 const AI_TIMEOUT_MS = 12000;
 const SCRATCH_STATE_FILE = path.join(__dirname, 'data', 'scratch_lottery.json');
+const PLAYER_MARKET_FILE = path.join(__dirname, 'data', 'player_market_board.json');
 const SCRATCH_COST = 100;
 const SCRATCH_WIN_RATE = 0.3;
 const SCRATCH_WIN_REWARD = 500;
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
+const MAX_FINANCE_LEDGER = Math.max(40, Number(process.env.MAX_FINANCE_LEDGER || 180));
+const MAX_FINANCE_NOTICES = Math.max(6, Number(process.env.MAX_FINANCE_NOTICES || 24));
+const MAX_MARKET_OPEN_LISTINGS_PER_PLAYER = Math.max(3, Number(process.env.MAX_MARKET_OPEN_LISTINGS_PER_PLAYER || 40));
+const MAX_MARKET_NOTE_LEN = 80;
 
 function ensurePlayerEconomy(player) {
   if (!player || typeof player !== 'object') return;
@@ -66,10 +72,638 @@ function ensurePlayerEconomy(player) {
   if (!Array.isArray(player.marketState.appraisalHistory)) player.marketState.appraisalHistory = [];
   if (!player.stats) player.stats = {};
   if (!Number.isFinite(Number(player.stats.財富))) player.stats.財富 = 0;
+  ensurePlayerFinanceLedger(player);
+}
+
+function ensurePlayerFinanceLedger(player) {
+  if (!player || typeof player !== 'object') return;
+  if (!Array.isArray(player.financeLedger)) player.financeLedger = [];
+  if (!Array.isArray(player.financeNotices)) player.financeNotices = [];
 }
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Number(value) || 0));
+}
+
+function normalizeMarketType(marketType = 'renaiss') {
+  return String(marketType || '').trim().toLowerCase() === 'digital' ? 'digital' : 'renaiss';
+}
+
+function normalizeText(text = '', maxLen = 80) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, Math.max(1, Number(maxLen) || 80));
+}
+
+function makeFinanceNotice(entry = {}) {
+  const amount = Number(entry.amount || 0);
+  const source = normalizeText(entry.source || entry.category || '資金變動', 80);
+  const sign = amount > 0 ? '+' : '';
+  return `💸 ${source}：${sign}${amount} Rns`;
+}
+
+function appendFinanceLedger(player, entry = {}) {
+  ensurePlayerEconomy(player);
+  const amount = Math.floor(Number(entry.amount || 0));
+  if (!Number.isFinite(amount) || amount === 0) return null;
+  const now = Date.now();
+  const record = {
+    id: `flow_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    amount,
+    balanceAfter: Math.floor(Number(player?.stats?.財富 || 0)),
+    category: normalizeText(entry.category || 'misc', 32) || 'misc',
+    source: normalizeText(entry.source || '', 120),
+    marketType: normalizeMarketType(entry.marketType || 'renaiss'),
+    counterpartyId: normalizeText(entry.counterpartyId || '', 36),
+    counterpartyName: normalizeText(entry.counterpartyName || '', 36),
+    refId: normalizeText(entry.refId || '', 36),
+    note: normalizeText(entry.note || '', 160),
+    at: now
+  };
+  player.financeLedger.unshift(record);
+  if (player.financeLedger.length > MAX_FINANCE_LEDGER) {
+    player.financeLedger.length = MAX_FINANCE_LEDGER;
+  }
+  if (!entry.silentNotice) {
+    player.financeNotices.unshift(makeFinanceNotice(record));
+    if (player.financeNotices.length > MAX_FINANCE_NOTICES) {
+      player.financeNotices.length = MAX_FINANCE_NOTICES;
+    }
+  }
+  return record;
+}
+
+function pushFinanceNotice(player, text = '') {
+  ensurePlayerEconomy(player);
+  const note = normalizeText(text, 180);
+  if (!note) return;
+  player.financeNotices.unshift(note);
+  if (player.financeNotices.length > MAX_FINANCE_NOTICES) {
+    player.financeNotices.length = MAX_FINANCE_NOTICES;
+  }
+}
+
+function consumeFinanceNotices(player, limit = 3) {
+  ensurePlayerEconomy(player);
+  const take = Math.max(1, Math.min(8, Number(limit) || 3));
+  return player.financeNotices.splice(0, take);
+}
+
+function loadMarketBoard() {
+  if (!fs.existsSync(PLAYER_MARKET_FILE)) {
+    return { version: 1, updatedAt: Date.now(), listings: [] };
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(PLAYER_MARKET_FILE, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') throw new Error('invalid board');
+    if (!Array.isArray(parsed.listings)) parsed.listings = [];
+    return parsed;
+  } catch {
+    return { version: 1, updatedAt: Date.now(), listings: [] };
+  }
+}
+
+function saveMarketBoard(board) {
+  const safe = board && typeof board === 'object' ? board : { version: 1, listings: [] };
+  if (!Array.isArray(safe.listings)) safe.listings = [];
+  safe.version = 1;
+  safe.updatedAt = Date.now();
+  const dir = path.dirname(PLAYER_MARKET_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(PLAYER_MARKET_FILE, JSON.stringify(safe, null, 2));
+  return safe;
+}
+
+function createListingId() {
+  return `mk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function countOpenListingsByOwner(board, ownerId) {
+  const id = String(ownerId || '').trim();
+  if (!id) return 0;
+  return (board?.listings || []).filter((l) => l && l.status === 'open' && String(l.ownerId || '') === id).length;
+}
+
+function getOpenListingById(board, listingId) {
+  const id = String(listingId || '').trim();
+  if (!id) return null;
+  return (board?.listings || []).find((l) => l && l.status === 'open' && String(l.id || '') === id) || null;
+}
+
+function findAndRemoveNamedItems(list = [], targetName = '', quantity = 1) {
+  const normalized = normalizeText(targetName, 120);
+  const need = Math.max(1, Math.floor(Number(quantity || 1)));
+  const taken = [];
+  if (!normalized || !Array.isArray(list)) return { ok: false, taken };
+
+  for (let i = list.length - 1; i >= 0 && taken.length < need; i -= 1) {
+    const item = list[i];
+    const name = normalizeText(typeof item === 'string' ? item : item?.name || '', 120);
+    if (!name || name !== normalized) continue;
+    taken.push(list[i]);
+    list.splice(i, 1);
+  }
+  return { ok: taken.length >= need, taken };
+}
+
+function reservePetMoveForListing(player, itemRef = {}, itemName = '') {
+  ensurePlayerEconomy(player);
+  const ownerId = normalizeText(player?.id || '', 36);
+  const petId = normalizeText(itemRef.petId || '', 64);
+  const moveId = normalizeText(itemRef.moveId || '', 64);
+  const moveNameHint = normalizeText(itemRef.moveName || itemName || '', 80);
+  if (!ownerId) return { success: false, reason: '找不到玩家資訊。' };
+  if (!petId || !moveId) return { success: false, reason: '技能掛賣資料不完整。' };
+
+  const pet = typeof PET.getPetById === 'function' ? PET.getPetById(petId) : null;
+  if (!pet || String(pet.ownerId || '') !== ownerId) {
+    return { success: false, reason: '找不到可掛賣的寵物技能。' };
+  }
+  if (!Array.isArray(pet.moves)) pet.moves = [];
+
+  const idx = pet.moves.findIndex((m) => String(m?.id || '').trim() === moveId);
+  if (idx < 0) {
+    return { success: false, reason: `技能「${moveNameHint || moveId}」不存在或已被移除。` };
+  }
+  const move = pet.moves[idx];
+  if (move?.effect?.flee) {
+    return { success: false, reason: '逃跑技能不可掛賣。' };
+  }
+
+  const activeIds = Array.isArray(pet.activeMoveIds) ? pet.activeMoveIds.map((id) => String(id || '').trim()) : [];
+  if (activeIds.includes(moveId)) {
+    return { success: false, reason: `請先把「${move.name || moveId}」從上陣招式卸下，再掛賣。` };
+  }
+
+  const [removed] = pet.moves.splice(idx, 1);
+  if (Array.isArray(pet.activeMoveIds) && pet.activeMoveIds.length > 0) {
+    pet.activeMoveIds = pet.activeMoveIds
+      .map((id) => String(id || '').trim())
+      .filter((id) => id && id !== moveId);
+  }
+  if (typeof PET.savePet === 'function') PET.savePet(pet);
+
+  const displayName = normalizeText(itemName || `技能晶片：${removed?.name || moveId}`, 120);
+  return {
+    success: true,
+    targetName: displayName,
+    quantity: 1,
+    itemKind: 'pet_move',
+    reserved: [{
+      source: 'pet_move',
+      item: {
+        petId,
+        petName: normalizeText(pet.name || '寵物', 48),
+        moveId,
+        moveName: normalizeText(removed?.name || moveNameHint || moveId, 80),
+        moveSnapshot: removed && typeof removed === 'object'
+          ? JSON.parse(JSON.stringify(removed))
+          : null
+      }
+    }]
+  };
+}
+
+function reserveItemsForListing(player, itemName, quantity, itemRef = null) {
+  ensurePlayerEconomy(player);
+  const refKind = String(itemRef?.kind || '').trim();
+  if (refKind === 'pet_move') {
+    return reservePetMoveForListing(player, itemRef, itemName);
+  }
+  const target = normalizeText(itemName, 120);
+  const qty = Math.max(1, Math.floor(Number(quantity || 1)));
+  if (!target) return { success: false, reason: '請輸入物品名稱。' };
+
+  const backup = {
+    tradeGoods: [...(player.tradeGoods || [])],
+    herbs: [...(player.herbs || [])],
+    inventory: [...(player.inventory || [])]
+  };
+
+  let remaining = qty;
+  const reserved = [];
+
+  if (Array.isArray(player.tradeGoods) && remaining > 0) {
+    for (let i = player.tradeGoods.length - 1; i >= 0 && remaining > 0; i -= 1) {
+      const good = player.tradeGoods[i];
+      const name = normalizeText(good?.name || '', 120);
+      if (!name || name !== target) continue;
+      const [picked] = player.tradeGoods.splice(i, 1);
+      reserved.push({ source: 'tradeGoods', item: picked });
+      remaining -= 1;
+    }
+  }
+
+  if (remaining > 0) {
+    const herbResult = findAndRemoveNamedItems(player.herbs, target, remaining);
+    for (const herb of herbResult.taken) reserved.push({ source: 'herbs', item: herb });
+    remaining -= herbResult.taken.length;
+  }
+
+  if (remaining > 0) {
+    const invResult = findAndRemoveNamedItems(player.inventory, target, remaining);
+    for (const inv of invResult.taken) reserved.push({ source: 'inventory', item: inv });
+    remaining -= invResult.taken.length;
+  }
+
+  if (remaining > 0) {
+    player.tradeGoods = backup.tradeGoods;
+    player.herbs = backup.herbs;
+    player.inventory = backup.inventory;
+    return { success: false, reason: `你沒有足夠的「${target}」，目前數量不足 ${qty} 件。` };
+  }
+
+  return { success: true, targetName: target, quantity: qty, reserved };
+}
+
+function restoreReservedItemsToOwner(player, reservedItems = []) {
+  ensurePlayerEconomy(player);
+  const items = Array.isArray(reservedItems) ? reservedItems : [];
+  for (const payload of items) {
+    if (!payload || typeof payload !== 'object') continue;
+    const source = String(payload.source || '');
+    if (source === 'tradeGoods') {
+      if (!Array.isArray(player.tradeGoods)) player.tradeGoods = [];
+      if (payload.item) player.tradeGoods.unshift(payload.item);
+      continue;
+    }
+    if (source === 'herbs') {
+      if (!Array.isArray(player.herbs)) player.herbs = [];
+      if (payload.item) player.herbs.unshift(String(payload.item));
+      continue;
+    }
+    if (source === 'pet_move') {
+      const info = payload.item && typeof payload.item === 'object' ? payload.item : {};
+      const petId = normalizeText(info.petId || '', 64);
+      const moveId = normalizeText(info.moveId || '', 64);
+      const moveName = normalizeText(info.moveName || '技能', 80);
+      const targetPet = petId && typeof PET.getPetById === 'function' ? PET.getPetById(petId) : null;
+      let restored = false;
+      if (targetPet && String(targetPet.ownerId || '') === String(player.id || '')) {
+        if (!Array.isArray(targetPet.moves)) targetPet.moves = [];
+        const exists = targetPet.moves.some((m) => String(m?.id || '').trim() === moveId || String(m?.name || '').trim() === moveName);
+        if (!exists) {
+          const learn = moveId && typeof PET.learnMove === 'function' ? PET.learnMove(targetPet, moveId) : null;
+          if (learn?.success) {
+            restored = true;
+          } else if (info.moveSnapshot && typeof info.moveSnapshot === 'object') {
+            if (targetPet.moves.length < Math.max(1, Number(targetPet.maxMoves || 10))) {
+              targetPet.moves.push(JSON.parse(JSON.stringify(info.moveSnapshot)));
+              restored = true;
+            }
+          }
+        } else {
+          restored = true;
+        }
+        if (typeof PET.savePet === 'function') PET.savePet(targetPet);
+      }
+      if (!restored) {
+        if (!Array.isArray(player.inventory)) player.inventory = [];
+        player.inventory.unshift(`技能晶片：${moveName}`);
+      }
+      continue;
+    }
+    if (!Array.isArray(player.inventory)) player.inventory = [];
+    if (payload.item) player.inventory.unshift(typeof payload.item === 'string' ? payload.item : String(payload.item?.name || '未知物品'));
+  }
+}
+
+function transferReservedItemsToBuyer(player, reservedItems = []) {
+  ensurePlayerEconomy(player);
+  const items = Array.isArray(reservedItems) ? reservedItems : [];
+  const transferNotes = [];
+  for (const payload of items) {
+    if (!payload || typeof payload !== 'object') continue;
+    const source = String(payload.source || '');
+    if (source === 'tradeGoods') {
+      if (!Array.isArray(player.tradeGoods)) player.tradeGoods = [];
+      if (payload.item) {
+        const cloned = { ...(payload.item || {}) };
+        if (!cloned.id) cloned.id = `good_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        player.tradeGoods.unshift(cloned);
+      }
+      continue;
+    }
+    if (source === 'herbs') {
+      if (!Array.isArray(player.herbs)) player.herbs = [];
+      if (payload.item) player.herbs.unshift(String(payload.item));
+      continue;
+    }
+    if (source === 'pet_move') {
+      const info = payload.item && typeof payload.item === 'object' ? payload.item : {};
+      const moveId = normalizeText(info.moveId || '', 64);
+      const moveName = normalizeText(info.moveName || '技能', 80);
+      const buyerPet = typeof PET.loadPet === 'function' ? PET.loadPet(player.id) : null;
+      if (buyerPet && moveId) {
+        if (!Array.isArray(buyerPet.moves)) buyerPet.moves = [];
+        const alreadyHas = buyerPet.moves.some((m) => String(m?.id || '').trim() === moveId);
+        if (!alreadyHas && buyerPet.moves.length < Math.max(1, Number(buyerPet.maxMoves || 10))) {
+          const learned = typeof PET.learnMove === 'function' ? PET.learnMove(buyerPet, moveId) : null;
+          if (learned?.success) {
+            if (typeof PET.savePet === 'function') PET.savePet(buyerPet);
+            transferNotes.push(`已學會技能：${moveName}`);
+            continue;
+          }
+        }
+      }
+      if (!Array.isArray(player.inventory)) player.inventory = [];
+      player.inventory.unshift(`技能晶片：${moveName}`);
+      transferNotes.push(`獲得技能晶片：${moveName}`);
+      continue;
+    }
+    if (!Array.isArray(player.inventory)) player.inventory = [];
+    if (payload.item) player.inventory.unshift(typeof payload.item === 'string' ? payload.item : String(payload.item?.name || '未知物品'));
+  }
+  return transferNotes;
+}
+
+function getMarketListingsView(options = {}) {
+  const board = loadMarketBoard();
+  const marketType = options.marketType === 'all' ? 'all' : normalizeMarketType(options.marketType || 'renaiss');
+  const listingType = String(options.type || 'sell').trim().toLowerCase() === 'buy' ? 'buy' : 'sell';
+  const ownerId = normalizeText(options.ownerId || '', 36);
+  const excludeOwnerId = normalizeText(options.excludeOwnerId || '', 36);
+  const limit = Math.max(1, Math.min(20, Number(options.limit || 8)));
+  const now = Date.now();
+
+  return (board.listings || [])
+    .filter((listing) => listing && listing.status === 'open')
+    .filter((listing) => listing.type === listingType)
+    .filter((listing) => marketType === 'all' ? true : String(listing.marketType || 'renaiss') === marketType)
+    .filter((listing) => ownerId ? String(listing.ownerId || '') === ownerId : true)
+    .filter((listing) => excludeOwnerId ? String(listing.ownerId || '') !== excludeOwnerId : true)
+    .sort((a, b) => Number(b.createdAt || now) - Number(a.createdAt || now))
+    .slice(0, limit);
+}
+
+function createSellListing(player, marketType = 'renaiss', payload = {}) {
+  ensurePlayerEconomy(player);
+  const board = loadMarketBoard();
+  const ownerId = normalizeText(player?.id || '', 36);
+  if (!ownerId) return { success: false, reason: '找不到玩家 ID。' };
+  const openCount = countOpenListingsByOwner(board, ownerId);
+  if (openCount >= MAX_MARKET_OPEN_LISTINGS_PER_PLAYER) {
+    return { success: false, reason: `你的掛單已達上限 ${MAX_MARKET_OPEN_LISTINGS_PER_PLAYER}。` };
+  }
+
+  const itemRef = payload?.itemRef && typeof payload.itemRef === 'object' ? payload.itemRef : null;
+  const isPetMoveListing = String(itemRef?.kind || '').trim() === 'pet_move';
+  const qty = isPetMoveListing
+    ? 1
+    : Math.max(1, Math.floor(Number(payload.quantity || payload.qty || 1)));
+  const unitPrice = Math.max(1, Math.floor(Number(payload.unitPrice || payload.price || 0)));
+  if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+    return { success: false, reason: '單價必須大於 0。' };
+  }
+
+  const reserve = reserveItemsForListing(player, payload.itemName, qty, itemRef);
+  if (!reserve.success) return reserve;
+  const normalizedMarket = normalizeMarketType(marketType);
+  const finalQty = Math.max(1, Math.floor(Number(reserve.quantity || qty || 1)));
+  const finalItemName = normalizeText(reserve.targetName || payload.itemName || '', 120);
+
+  const listing = {
+    id: createListingId(),
+    type: 'sell',
+    marketType: normalizedMarket,
+    ownerId,
+    ownerName: normalizeText(player.name || `玩家${ownerId.slice(-4)}`, 36),
+    itemName: finalItemName,
+    itemKind: String(reserve.itemKind || (isPetMoveListing ? 'pet_move' : 'item')),
+    quantity: finalQty,
+    unitPrice,
+    totalPrice: finalQty * unitPrice,
+    note: normalizeText(payload.note || '', MAX_MARKET_NOTE_LEN),
+    status: 'open',
+    reservedItems: reserve.reserved,
+    reservedGold: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  board.listings.unshift(listing);
+  saveMarketBoard(board);
+  return { success: true, listing };
+}
+
+function createBuyListing(player, marketType = 'renaiss', payload = {}) {
+  ensurePlayerEconomy(player);
+  const board = loadMarketBoard();
+  const ownerId = normalizeText(player?.id || '', 36);
+  if (!ownerId) return { success: false, reason: '找不到玩家 ID。' };
+  const openCount = countOpenListingsByOwner(board, ownerId);
+  if (openCount >= MAX_MARKET_OPEN_LISTINGS_PER_PLAYER) {
+    return { success: false, reason: `你的掛單已達上限 ${MAX_MARKET_OPEN_LISTINGS_PER_PLAYER}。` };
+  }
+
+  const itemName = normalizeText(payload.itemName || '', 120);
+  const qty = Math.max(1, Math.floor(Number(payload.quantity || payload.qty || 1)));
+  const unitPrice = Math.max(1, Math.floor(Number(payload.unitPrice || payload.price || 0)));
+  const totalPrice = qty * unitPrice;
+  if (!itemName) return { success: false, reason: '請輸入想收購的物品名稱。' };
+  if (!Number.isFinite(totalPrice) || totalPrice <= 0) return { success: false, reason: '價格設定無效。' };
+
+  const currentGold = Math.floor(Number(player?.stats?.財富 || 0));
+  if (currentGold < totalPrice) {
+    return { success: false, reason: `Rns 不足。你需要 ${totalPrice}，目前只有 ${currentGold}。` };
+  }
+  player.stats.財富 = currentGold - totalPrice;
+  appendFinanceLedger(player, {
+    amount: -totalPrice,
+    category: 'market_buy_order_lock',
+    source: `掛買單保證金：${itemName} x${qty}`,
+    marketType: normalizeMarketType(marketType)
+  });
+
+  const listing = {
+    id: createListingId(),
+    type: 'buy',
+    marketType: normalizeMarketType(marketType),
+    ownerId,
+    ownerName: normalizeText(player.name || `玩家${ownerId.slice(-4)}`, 36),
+    itemName,
+    quantity: qty,
+    unitPrice,
+    totalPrice,
+    note: normalizeText(payload.note || '', MAX_MARKET_NOTE_LEN),
+    status: 'open',
+    reservedItems: [],
+    reservedGold: totalPrice,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  board.listings.unshift(listing);
+  saveMarketBoard(board);
+  return { success: true, listing };
+}
+
+function buyFromSellListing(buyer, listingId, options = {}) {
+  ensurePlayerEconomy(buyer);
+  const loadPlayerById = options.loadPlayerById;
+  const savePlayerById = options.savePlayerById;
+  if (typeof loadPlayerById !== 'function' || typeof savePlayerById !== 'function') {
+    return { success: false, reason: '缺少玩家讀寫函式。' };
+  }
+
+  const board = loadMarketBoard();
+  const listing = getOpenListingById(board, listingId);
+  if (!listing || listing.type !== 'sell') return { success: false, reason: '賣單不存在或已下架。' };
+  const buyerId = normalizeText(buyer?.id || '', 36);
+  if (!buyerId) return { success: false, reason: '找不到購買者。' };
+  if (String(listing.ownerId || '') === buyerId) return { success: false, reason: '不能購買自己的賣單。' };
+
+  const total = Math.max(1, Number(listing.totalPrice || 0));
+  const buyerGold = Math.floor(Number(buyer?.stats?.財富 || 0));
+  if (buyerGold < total) return { success: false, reason: `Rns 不足，需 ${total}。` };
+
+  const seller = loadPlayerById(listing.ownerId);
+  if (!seller) return { success: false, reason: '賣家目前不存在，請稍後重試。' };
+  ensurePlayerEconomy(seller);
+
+  buyer.stats.財富 = buyerGold - total;
+  seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + total;
+  const transferNotes = transferReservedItemsToBuyer(buyer, listing.reservedItems || []);
+  listing.reservedItems = [];
+  listing.status = 'filled';
+  listing.updatedAt = Date.now();
+  listing.filledAt = Date.now();
+  listing.buyerId = buyerId;
+  listing.buyerName = normalizeText(buyer.name || `玩家${buyerId.slice(-4)}`, 36);
+
+  appendFinanceLedger(buyer, {
+    amount: -total,
+    category: 'market_buy',
+    source: `購買 ${listing.itemName} x${listing.quantity}`,
+    marketType: listing.marketType,
+    counterpartyId: listing.ownerId,
+    counterpartyName: listing.ownerName,
+    refId: listing.id
+  });
+  appendFinanceLedger(seller, {
+    amount: total,
+    category: 'market_sell',
+    source: `售出 ${listing.itemName} x${listing.quantity}`,
+    marketType: listing.marketType,
+    counterpartyId: buyerId,
+    counterpartyName: normalizeText(buyer.name || '', 36),
+    refId: listing.id
+  });
+  pushFinanceNotice(
+    seller,
+    `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，入帳 +${total} Rns（買家：${normalizeText(buyer.name || '匿名玩家', 24)}）`
+  );
+
+  savePlayerById(seller);
+  saveMarketBoard(board);
+
+  return {
+    success: true,
+    listingId: listing.id,
+    marketType: listing.marketType,
+    itemName: listing.itemName,
+    quantity: Number(listing.quantity || 1),
+    totalPrice: total,
+    sellerName: listing.ownerName,
+    deliveryNotes: Array.isArray(transferNotes) ? transferNotes : []
+  };
+}
+
+function fulfillBuyListing(seller, listingId, options = {}) {
+  ensurePlayerEconomy(seller);
+  const loadPlayerById = options.loadPlayerById;
+  const savePlayerById = options.savePlayerById;
+  if (typeof loadPlayerById !== 'function' || typeof savePlayerById !== 'function') {
+    return { success: false, reason: '缺少玩家讀寫函式。' };
+  }
+
+  const board = loadMarketBoard();
+  const listing = getOpenListingById(board, listingId);
+  if (!listing || listing.type !== 'buy') return { success: false, reason: '買單不存在或已下架。' };
+  const sellerId = normalizeText(seller?.id || '', 36);
+  if (!sellerId) return { success: false, reason: '找不到出售者。' };
+  if (String(listing.ownerId || '') === sellerId) return { success: false, reason: '不能成交自己的買單。' };
+
+  const buyer = loadPlayerById(listing.ownerId);
+  if (!buyer) return { success: false, reason: '買家目前不存在，請稍後重試。' };
+  ensurePlayerEconomy(buyer);
+
+  const reserve = reserveItemsForListing(seller, listing.itemName, Number(listing.quantity || 1));
+  if (!reserve.success) return reserve;
+
+  transferReservedItemsToBuyer(buyer, reserve.reserved);
+  const payout = Math.max(0, Number(listing.reservedGold || listing.totalPrice || 0));
+  seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + payout;
+  listing.reservedGold = 0;
+  listing.reservedItems = reserve.reserved;
+  listing.status = 'filled';
+  listing.updatedAt = Date.now();
+  listing.filledAt = Date.now();
+  listing.sellerId = sellerId;
+  listing.sellerName = normalizeText(seller.name || `玩家${sellerId.slice(-4)}`, 36);
+
+  appendFinanceLedger(seller, {
+    amount: payout,
+    category: 'market_sell_to_buy_order',
+    source: `完成買單：${listing.itemName} x${listing.quantity}`,
+    marketType: listing.marketType,
+    counterpartyId: listing.ownerId,
+    counterpartyName: listing.ownerName,
+    refId: listing.id
+  });
+  pushFinanceNotice(
+    buyer,
+    `📬 你的買單已完成：${listing.itemName} x${listing.quantity}（成交價 ${payout} Rns，賣家：${normalizeText(seller.name || '匿名玩家', 24)}）`
+  );
+
+  savePlayerById(buyer);
+  saveMarketBoard(board);
+  return {
+    success: true,
+    listingId: listing.id,
+    marketType: listing.marketType,
+    itemName: listing.itemName,
+    quantity: Number(listing.quantity || 1),
+    totalPrice: payout,
+    buyerName: listing.ownerName
+  };
+}
+
+function cancelMyListing(player, listingId) {
+  ensurePlayerEconomy(player);
+  const board = loadMarketBoard();
+  const listing = getOpenListingById(board, listingId);
+  if (!listing) return { success: false, reason: '掛單不存在或已結束。' };
+  const ownerId = normalizeText(player?.id || '', 36);
+  if (!ownerId || String(listing.ownerId || '') !== ownerId) {
+    return { success: false, reason: '只能取消自己的掛單。' };
+  }
+
+  if (listing.type === 'sell') {
+    restoreReservedItemsToOwner(player, listing.reservedItems || []);
+    listing.reservedItems = [];
+  } else if (listing.type === 'buy') {
+    const refund = Math.max(0, Number(listing.reservedGold || 0));
+    if (refund > 0) {
+      player.stats.財富 = Math.floor(Number(player?.stats?.財富 || 0)) + refund;
+      appendFinanceLedger(player, {
+        amount: refund,
+        category: 'market_buy_order_refund',
+        source: `取消買單退款：${listing.itemName} x${listing.quantity}`,
+        marketType: listing.marketType,
+        refId: listing.id
+      });
+    }
+    listing.reservedGold = 0;
+  }
+
+  listing.status = 'cancelled';
+  listing.updatedAt = Date.now();
+  saveMarketBoard(board);
+  return {
+    success: true,
+    listingId: listing.id,
+    marketType: listing.marketType,
+    type: listing.type,
+    itemName: listing.itemName,
+    quantity: Number(listing.quantity || 1)
+  };
 }
 
 function isDigitalMaskPhase(player) {
@@ -637,6 +1271,15 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
 
 module.exports = {
   ensurePlayerEconomy,
+  ensurePlayerFinanceLedger,
+  appendFinanceLedger,
+  consumeFinanceNotices,
+  getMarketListingsView,
+  createSellListing,
+  createBuyListing,
+  buyFromSellListing,
+  fulfillBuyListing,
+  cancelMyListing,
   addTradeGood,
   createCombatLoot,
   createForageLoot,

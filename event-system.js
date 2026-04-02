@@ -1080,6 +1080,12 @@ function getLocationChanges(location) {
   return data.modifiedLocations[location] || [];
 }
 
+function clearWorldEvents() {
+  const empty = { events: [], modifiedLocations: {} };
+  fs.writeFileSync(WORLD_EVENTS_FILE, JSON.stringify(empty, null, 2));
+  return { cleared: true, events: 0, modifiedLocations: 0 };
+}
+
 module.exports = {
   BASE_EVENTS,
   MASTERS,
@@ -1090,5 +1096,6 @@ module.exports = {
   addWorldEvent,
   modifyLocation,
   getWorldEvents,
-  getLocationChanges
+  getLocationChanges,
+  clearWorldEvents
 };

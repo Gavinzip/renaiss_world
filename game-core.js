@@ -24,6 +24,11 @@ const PLAYERS_DIR = path.join(DATA_DIR, 'players');
 const AGENTS_FILE = path.join(DATA_DIR, 'agents.json');
 const WORLD_FILE = path.join(DATA_DIR, 'world.json');
 const CRAFTING_FILE = path.join(DATA_DIR, 'crafting.json');
+const NPC_QUOTES_FILE = path.join(DATA_DIR, 'npc_quote_memory.json');
+
+const NPC_QUOTE_PLAYER_LIMIT = Math.max(120, Math.min(5000, Number(process.env.NPC_QUOTE_PLAYER_LIMIT || 1200)));
+const NPC_QUOTE_DEFAULT_LIMIT = Math.max(5, Math.min(80, Number(process.env.NPC_QUOTE_DEFAULT_LIMIT || 16)));
+const NPC_QUOTE_INDEX_NAMESPACE_ALL = 'npc_quote:all';
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(PLAYERS_DIR)) fs.mkdirSync(PLAYERS_DIR, { recursive: true });
@@ -87,20 +92,529 @@ const WORLD_MAP = {
 };
 
 // ============== 世界狀態 ==============
-let world = {
-  day: 1,
-  season: "春天",
-  weather: "晴",
-  weatherEffects: {
-    "雨": { 火系傷害: -30, 移動速度: -20, 視距: -30 },
-    "雪": { 能量消耗: +20, 移動速度: -30, 視距: -50 },
-    "霧": { 視距: -60, 偷襲成功率: +20 },
-    "晴": { 無影響: 0 }
-  },
-  events: [],      // 世界事件（如 NPC 死亡）
-  rumors: [],       // 謠言
-  npcStatus: {}    // NPC 生死狀態 { npcId: { alive: true, killedBy: null, killedAt: null } }
-};
+function buildDefaultWorldState() {
+  return {
+    day: 1,
+    season: "春天",
+    weather: "晴",
+    weatherEffects: {
+      "雨": { 火系傷害: -30, 移動速度: -20, 視距: -30 },
+      "雪": { 能量消耗: +20, 移動速度: -30, 視距: -50 },
+      "霧": { 視距: -60, 偷襲成功率: +20 },
+      "晴": { 無影響: 0 }
+    },
+    events: [],      // 世界事件（如 NPC 死亡）
+    rumors: [],       // 謠言
+    npcStatus: {}    // NPC 生死狀態 { npcId: { alive: true, killedBy: null, killedAt: null } }
+  };
+}
+
+let world = buildDefaultWorldState();
+
+const DIGITAL_ROAMER_TOTAL = 20;
+const DIGITAL_ROAMER_GROUPS = Object.freeze(['Nemo', 'Wolf', 'Adaloc', 'Hom']);
+const DIGITAL_ROAMER_GROUP_MOVES = Object.freeze({
+  Nemo: ['silver_snake', 'seven_step_poison', 'soul_drain', 'ice_toxin'],
+  Wolf: ['hell_fire', 'bone_dissolver', 'explosive_pill', 'iron_thorn'],
+  Adaloc: ['mud_fire_lotus', 'hot_sand_hell', 'plague_cloud', 'soul_scatter'],
+  Hom: ['ultimate_dark', 'silver_snake', 'hell_fire', 'arhat_kick']
+});
+const DIGITAL_ROAMER_GROUP_BASE = Object.freeze({
+  Nemo: { battle: 34, hp: 160, attack: 28, defense: 16, petAttack: 22, petHp: 84 },
+  Wolf: { battle: 36, hp: 168, attack: 30, defense: 16, petAttack: 24, petHp: 88 },
+  Adaloc: { battle: 38, hp: 176, attack: 31, defense: 18, petAttack: 25, petHp: 92 },
+  Hom: { battle: 40, hp: 184, attack: 33, defense: 18, petAttack: 26, petHp: 96 }
+});
+
+function deepClone(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+let npcQuoteStore = { version: 1, quotesByPlayer: {} };
+let npcQuoteStoreLoaded = false;
+
+function normalizeQuoteComparableText(text = '') {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[「」『』"'`“”‘’\s，。！？!?；;：:、（）()\[\]【】<>《》\-_.]/g, '')
+    .trim();
+}
+
+function sanitizeQuoteId(input = '') {
+  return String(input || '')
+    .trim()
+    .replace(/[^\w\u4e00-\u9fff:-]/g, '_')
+    .slice(0, 72);
+}
+
+function ensureNpcQuoteStoreLoaded() {
+  if (npcQuoteStoreLoaded) return;
+  npcQuoteStoreLoaded = true;
+  try {
+    if (!fs.existsSync(NPC_QUOTES_FILE)) {
+      npcQuoteStore = { version: 1, quotesByPlayer: {} };
+      return;
+    }
+    const parsed = JSON.parse(fs.readFileSync(NPC_QUOTES_FILE, 'utf8'));
+    const byPlayer = parsed && typeof parsed === 'object' && parsed.quotesByPlayer && typeof parsed.quotesByPlayer === 'object'
+      ? parsed.quotesByPlayer
+      : {};
+    npcQuoteStore = {
+      version: Number(parsed?.version || 1),
+      quotesByPlayer: byPlayer
+    };
+  } catch (e) {
+    console.error('[NPC Quote] load failed:', e?.message || e);
+    npcQuoteStore = { version: 1, quotesByPlayer: {} };
+  }
+}
+
+function saveNpcQuoteStore() {
+  ensureNpcQuoteStoreLoaded();
+  try {
+    fs.mkdirSync(path.dirname(NPC_QUOTES_FILE), { recursive: true });
+    fs.writeFileSync(NPC_QUOTES_FILE, JSON.stringify(npcQuoteStore, null, 2));
+  } catch (e) {
+    console.error('[NPC Quote] save failed:', e?.message || e);
+  }
+}
+
+function normalizeNpcQuoteEntry(raw = {}, forcedPlayerId = '') {
+  const playerId = String(forcedPlayerId || raw.playerId || '').trim();
+  const speaker = String(raw.speaker || raw.npcName || '').trim().slice(0, 48);
+  const text = String(raw.text || '').replace(/\s+/g, ' ').trim().slice(0, 280);
+  if (!playerId || !speaker || !text) return null;
+  const npcId = sanitizeQuoteId(raw.npcId || speaker || 'npc');
+  const location = String(raw.location || '').trim().slice(0, 32);
+  const source = String(raw.source || 'npc_dialogue').trim().slice(0, 40);
+  const at = Number.isFinite(Number(raw.at)) ? Number(raw.at) : Date.now();
+  return {
+    playerId,
+    npcId,
+    speaker,
+    text,
+    location,
+    source,
+    at
+  };
+}
+
+function buildNpcQuoteOwnerId(playerId = '') {
+  const pid = sanitizeQuoteId(playerId);
+  return pid ? `npc_quote_player:${pid}` : '';
+}
+
+function buildNpcQuoteNamespace(npcId = '') {
+  const safe = sanitizeQuoteId(npcId);
+  return safe ? `npc_quote:${safe}` : NPC_QUOTE_INDEX_NAMESPACE_ALL;
+}
+
+function tokenizeQuoteSearchText(text = '') {
+  const source = String(text || '').toLowerCase();
+  if (!source) return [];
+  const zh = source.match(/[\u4e00-\u9fff]{1,2}/g) || [];
+  const alpha = source.match(/[a-z0-9]{2,}/g) || [];
+  const tokens = [...zh, ...alpha].map((item) => item.trim()).filter(Boolean);
+  return [...new Set(tokens)].slice(0, 60);
+}
+
+function scoreNpcQuoteEntry(entry, context = {}) {
+  const now = Date.now();
+  const location = String(context.location || '').trim();
+  const nearbyNpcSet = context.nearbyNpcSet instanceof Set ? context.nearbyNpcSet : new Set();
+  const queryTokens = Array.isArray(context.queryTokens) ? context.queryTokens : [];
+  const textTokens = tokenizeQuoteSearchText(entry.text);
+  let overlap = 0;
+  if (queryTokens.length > 0 && textTokens.length > 0) {
+    const tokenSet = new Set(textTokens);
+    for (const token of queryTokens) {
+      if (tokenSet.has(token)) overlap += 1;
+    }
+  }
+  const overlapScore = queryTokens.length > 0 ? Math.min(0.68, (overlap / queryTokens.length) * 0.9) : 0;
+  const sameLocation = location && entry.location && entry.location === location ? 0.35 : 0;
+  const nearbyNpcBoost = nearbyNpcSet.has(entry.npcId) ? 0.5 : 0;
+  const ageHours = Math.max(0, (now - Number(entry.at || now)) / (3600 * 1000));
+  const recency = Math.exp(-ageHours / (24 * 5)); // 5 天半衰
+  const recencyScore = 0.32 * recency;
+  return Number((overlapScore + sameLocation + nearbyNpcBoost + recencyScore).toFixed(4));
+}
+
+function appendNpcQuoteMemory(playerId, payload = {}) {
+  const entry = normalizeNpcQuoteEntry(payload, playerId);
+  if (!entry) return null;
+  ensureNpcQuoteStoreLoaded();
+  const byPlayer = npcQuoteStore.quotesByPlayer || {};
+  const list = Array.isArray(byPlayer[entry.playerId]) ? byPlayer[entry.playerId] : [];
+
+  // 去重：同玩家同 NPC 同內容，15 分鐘內視為同一句
+  const normText = normalizeQuoteComparableText(entry.text);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const item = list[i];
+    if (!item || typeof item !== 'object') continue;
+    if (String(item.npcId || '') !== String(entry.npcId || '')) continue;
+    const cmp = normalizeQuoteComparableText(item.text || '');
+    if (!cmp || cmp !== normText) continue;
+    const delta = Math.abs(Number(entry.at || 0) - Number(item.at || 0));
+    if (delta <= 15 * 60 * 1000) {
+      return item;
+    }
+  }
+
+  list.push(entry);
+  if (list.length > NPC_QUOTE_PLAYER_LIMIT) {
+    list.splice(0, list.length - NPC_QUOTE_PLAYER_LIMIT);
+  }
+  byPlayer[entry.playerId] = list;
+  npcQuoteStore.quotesByPlayer = byPlayer;
+  saveNpcQuoteStore();
+
+  const ownerId = buildNpcQuoteOwnerId(entry.playerId);
+  if (ownerId) {
+    const memoryPayload = {
+      type: 'npc_quote',
+      content: `${entry.speaker}：「${entry.text}」`,
+      outcome: `source=${entry.source}${entry.location ? `|loc=${entry.location}` : ''}`,
+      location: entry.location,
+      timestamp: entry.at,
+      tags: ['npc_quote', entry.npcId, entry.source],
+      importance: 2
+    };
+    MEMORY_INDEX.rememberEntityMemory(ownerId, memoryPayload, {
+      namespace: buildNpcQuoteNamespace(entry.npcId)
+    }).catch((e) => {
+      console.log('[NPC Quote][Index] remember failed:', e?.message || e);
+    });
+    MEMORY_INDEX.rememberEntityMemory(ownerId, memoryPayload, {
+      namespace: NPC_QUOTE_INDEX_NAMESPACE_ALL
+    }).catch((e) => {
+      console.log('[NPC Quote][Index all] remember failed:', e?.message || e);
+    });
+  }
+
+  return entry;
+}
+
+function getPlayerNpcQuoteEvidence(playerId, options = {}) {
+  const pid = String(playerId || '').trim();
+  if (!pid) return [];
+  ensureNpcQuoteStoreLoaded();
+  const list = Array.isArray(npcQuoteStore?.quotesByPlayer?.[pid]) ? npcQuoteStore.quotesByPlayer[pid] : [];
+  if (list.length <= 0) return [];
+  const location = String(options.location || '').trim();
+  const queryText = clipText(options.queryText || '', 760);
+  const limit = Math.max(1, Number(options.limit || NPC_QUOTE_DEFAULT_LIMIT));
+  const nearbyNpcIds = Array.isArray(options.nearbyNpcIds) && options.nearbyNpcIds.length > 0
+    ? options.nearbyNpcIds
+    : (location ? getNearbyNpcIds(location, Math.max(1, Number(options.nearbyLimit || 2))) : []);
+  const nearbyNpcSet = new Set(nearbyNpcIds.map((id) => sanitizeQuoteId(id)));
+  const queryTokens = tokenizeQuoteSearchText(queryText);
+
+  const ranked = list
+    .map((item) => normalizeNpcQuoteEntry(item, pid))
+    .filter(Boolean)
+    .map((item) => ({
+      ...item,
+      score: scoreNpcQuoteEntry(item, { location, nearbyNpcSet, queryTokens })
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return Number(b.at || 0) - Number(a.at || 0);
+    });
+
+  const out = [];
+  const seen = new Set();
+  for (const item of ranked) {
+    const key = `${item.speaker}|${normalizeQuoteComparableText(item.text)}|${item.location}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      speaker: item.speaker,
+      text: item.text,
+      location: item.location,
+      source: item.source,
+      npcId: item.npcId,
+      at: Number(item.at || 0),
+      score: Number(item.score || 0)
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function clearPlayerNpcQuoteMemory(playerId = '') {
+  const pid = String(playerId || '').trim();
+  if (!pid) return 0;
+  ensureNpcQuoteStoreLoaded();
+  const current = Array.isArray(npcQuoteStore?.quotesByPlayer?.[pid]) ? npcQuoteStore.quotesByPlayer[pid].length : 0;
+  if (npcQuoteStore?.quotesByPlayer && Object.prototype.hasOwnProperty.call(npcQuoteStore.quotesByPlayer, pid)) {
+    delete npcQuoteStore.quotesByPlayer[pid];
+    saveNpcQuoteStore();
+  }
+  return current;
+}
+
+function clearAllNpcQuoteMemory() {
+  ensureNpcQuoteStoreLoaded();
+  let total = 0;
+  for (const key of Object.keys(npcQuoteStore?.quotesByPlayer || {})) {
+    const len = Array.isArray(npcQuoteStore.quotesByPlayer[key]) ? npcQuoteStore.quotesByPlayer[key].length : 0;
+    total += len;
+  }
+  npcQuoteStore = { version: 1, quotesByPlayer: {} };
+  saveNpcQuoteStore();
+  return total;
+}
+
+function getLocationDifficultyValue(location = '') {
+  const profile = LOCATION_PROFILES[String(location || '').trim()] || {};
+  return Math.max(1, Number(profile.difficulty || 3));
+}
+
+function pickDigitalRoamerSpawnLocation() {
+  if (!Array.isArray(MAP_LOCATIONS) || MAP_LOCATIONS.length === 0) return '襄陽城';
+  const pool = MAP_LOCATIONS.map((loc) => {
+    const diff = getLocationDifficultyValue(loc);
+    const weight = diff <= 2 ? 0.95 : diff === 3 ? 1.1 : diff === 4 ? 1.35 : 1.55;
+    return { loc, weight };
+  });
+  const total = pool.reduce((sum, item) => sum + item.weight, 0);
+  let roll = Math.random() * Math.max(0.0001, total);
+  for (const item of pool) {
+    roll -= item.weight;
+    if (roll <= 0) return item.loc;
+  }
+  return pool[pool.length - 1]?.loc || '襄陽城';
+}
+
+function createDigitalRoamerBlueprint(index = 0, group = 'Nemo') {
+  const safeGroup = DIGITAL_ROAMER_GROUPS.includes(group) ? group : DIGITAL_ROAMER_GROUPS[0];
+  const base = DIGITAL_ROAMER_GROUP_BASE[safeGroup] || DIGITAL_ROAMER_GROUP_BASE.Nemo;
+  const moveIds = DIGITAL_ROAMER_GROUP_MOVES[safeGroup] || DIGITAL_ROAMER_GROUP_MOVES.Nemo;
+  const serial = String(index + 1).padStart(2, '0');
+  const loc = pickDigitalRoamerSpawnLocation();
+
+  return {
+    id: `digital_roamer_${serial}`,
+    name: '匿名滲透者',
+    title: `Digital 滲透者第${serial}號`,
+    sect: 'Digital',
+    loc,
+    align: 'evil',
+    roaming: true,
+    hiddenName: true,
+    digitalGroup: safeGroup,
+    personality: '擅長偽裝與試探，不主動暴露真實目的',
+    stats: {
+      戰力: base.battle + (index % 3) * 2,
+      生命: base.hp + (index % 4) * 6,
+      內力: 45 + (index % 5) * 4,
+      智商: 72 + (index % 6),
+      魅力: 58 + (index % 7),
+      運氣: 55 + (index % 4) * 3,
+      財富: 70 + (index % 5) * 6
+    },
+    skills: {
+      '偽裝滲透': { realm: '精通', proficiency: 260 + (index % 5) * 15 },
+      '交易話術': { realm: '精通', proficiency: 240 + (index % 5) * 12 }
+    },
+    inventory: ['偽裝徽章', '干擾發射器'],
+    relationships: {},
+    memory: [],
+    petTemplate: {
+      name: '無名伴寵',
+      attack: base.petAttack + (index % 3),
+      hp: base.petHp + (index % 4) * 4,
+      maxHp: base.petHp + (index % 4) * 4,
+      defense: Math.max(8, Math.floor((base.petAttack + (index % 3)) * 0.62)),
+      speed: 16 + (index % 4),
+      moveIds: [...moveIds]
+    }
+  };
+}
+
+function buildDigitalRoamerBlueprints() {
+  const list = [];
+  for (let i = 0; i < DIGITAL_ROAMER_TOTAL; i++) {
+    const group = DIGITAL_ROAMER_GROUPS[Math.floor(i / 5)] || DIGITAL_ROAMER_GROUPS[0];
+    list.push(createDigitalRoamerBlueprint(i, group));
+  }
+  return list;
+}
+
+const DIGITAL_ROAMER_BLUEPRINTS = buildDigitalRoamerBlueprints();
+
+function ensureDigitalRoamers(targetAgents = []) {
+  if (!Array.isArray(targetAgents)) return false;
+  let changed = false;
+  for (const blueprint of DIGITAL_ROAMER_BLUEPRINTS) {
+    const idx = targetAgents.findIndex((agent) => String(agent?.id || '') === String(blueprint.id || ''));
+    if (idx < 0) {
+      targetAgents.push({
+        ...deepClone(blueprint),
+        alive: true,
+        exp: 0,
+        party: null,
+        status: '游走'
+      });
+      changed = true;
+      continue;
+    }
+    const current = targetAgents[idx];
+    const merged = {
+      ...current,
+      name: '匿名滲透者',
+      title: blueprint.title,
+      sect: 'Digital',
+      align: 'evil',
+      roaming: true,
+      hiddenName: true,
+      digitalGroup: blueprint.digitalGroup,
+      personality: blueprint.personality,
+      petTemplate: deepClone(blueprint.petTemplate),
+      alive: current?.alive !== false,
+      status: current?.status || '游走'
+    };
+    if (JSON.stringify(current) !== JSON.stringify(merged)) {
+      targetAgents[idx] = merged;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function pickDigitalRoamerDestination(currentLoc = '') {
+  if (!Array.isArray(MAP_LOCATIONS) || MAP_LOCATIONS.length === 0) return currentLoc || '襄陽城';
+  const current = String(currentLoc || '').trim();
+  const pool = MAP_LOCATIONS
+    .filter((loc) => String(loc || '').trim() && String(loc || '').trim() !== current)
+    .map((loc) => {
+      const diff = getLocationDifficultyValue(loc);
+      const weight = diff <= 2 ? 0.95 : diff === 3 ? 1.1 : diff === 4 ? 1.35 : 1.55;
+      return { loc, weight };
+    });
+  if (pool.length <= 0) return current || MAP_LOCATIONS[0];
+  const total = pool.reduce((sum, item) => sum + item.weight, 0);
+  let roll = Math.random() * Math.max(0.0001, total);
+  for (const item of pool) {
+    roll -= item.weight;
+    if (roll <= 0) return item.loc;
+  }
+  return pool[pool.length - 1]?.loc || current || MAP_LOCATIONS[0];
+}
+
+function stepDigitalRoamerMovement(stepCount = 1) {
+  const steps = Math.max(1, Math.floor(Number(stepCount || 1)));
+  let moved = 0;
+  for (let step = 0; step < steps; step++) {
+    for (const agent of agents) {
+      if (!agent?.roaming || !String(agent?.id || '').startsWith('digital_roamer_')) continue;
+      if (agent.alive === false) continue;
+      if (Math.random() > 0.42) continue;
+      const nextLoc = pickDigitalRoamerDestination(agent.loc);
+      if (!nextLoc || nextLoc === agent.loc) continue;
+      agent.loc = nextLoc;
+      agent.status = '游走';
+      moved += 1;
+    }
+  }
+  return moved;
+}
+
+function getRoamingDigitalVillainsAtLocation(location, limit = 2) {
+  const loc = String(location || '').trim();
+  if (!loc) return [];
+  ensureDigitalRoamers(agents);
+  const maxItems = Math.max(1, Math.min(8, Number(limit || 2)));
+  const candidates = agents
+    .filter((agent) => agent?.roaming && agent?.alive !== false && String(agent.loc || '').trim() === loc)
+    .map((agent) => ({
+      id: String(agent.id || ''),
+      group: String(agent.digitalGroup || 'Nemo'),
+      location: String(agent.loc || loc),
+      title: String(agent.title || 'Digital 滲透者'),
+      petTemplate: deepClone(agent.petTemplate || {})
+    }));
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
+  return candidates.slice(0, maxItems);
+}
+
+function buildRoamingDigitalEncounterEnemy(location, options = {}) {
+  let list = getRoamingDigitalVillainsAtLocation(location, Math.max(1, Number(options.limit || 3)));
+  if (!Array.isArray(list) || list.length === 0) {
+    const fallbackPool = agents.filter((agent) => agent?.roaming && agent?.alive !== false);
+    if (fallbackPool.length > 0 && (options.forceRelocate === true || Math.random() < 0.62)) {
+      const fallback = fallbackPool[Math.floor(Math.random() * fallbackPool.length)];
+      fallback.loc = String(location || fallback.loc || '襄陽城');
+      fallback.status = '滲透中';
+      list = [{
+        id: String(fallback.id || ''),
+        group: String(fallback.digitalGroup || 'Nemo'),
+        location: String(fallback.loc || location || '襄陽城'),
+        title: String(fallback.title || 'Digital 滲透者'),
+        petTemplate: deepClone(fallback.petTemplate || {})
+      }];
+      if (options.persist !== false) saveWorld();
+    }
+  }
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const picked = list[Math.floor(Math.random() * list.length)];
+  const difficulty = getLocationDifficultyValue(location || picked.location);
+  const source = agents.find((agent) => String(agent?.id || '') === String(picked.id || '')) || {};
+  const petTemplate = source.petTemplate || picked.petTemplate || {};
+
+  const hpBase = Math.max(90, Math.floor(Number(source?.stats?.生命 || 150) * (0.72 + difficulty * 0.08)));
+  const atkBase = Math.max(16, Math.floor(Number(source?.stats?.戰力 || 32) * (0.64 + difficulty * 0.05)));
+  const defBase = Math.max(8, Math.floor(atkBase * 0.52));
+  const petAttack = Math.max(10, Number(petTemplate.attack || 18));
+  const petHp = Math.max(36, Number(petTemplate.hp || 72));
+  const moveIds = Array.isArray(petTemplate.moveIds) ? petTemplate.moveIds.filter(Boolean).slice(0, 5) : [];
+  const rewardMin = 45 + difficulty * 22;
+  const rewardMax = rewardMin + 80;
+
+  return {
+    npcId: String(source.id || picked.id || ''),
+    group: String(source.digitalGroup || picked.group || 'Nemo'),
+    enemy: {
+      id: String(source.id || picked.id || ''),
+      name: '匿名滲透者',
+      hp: hpBase,
+      maxHp: hpBase,
+      attack: atkBase,
+      defense: defBase,
+      moves: moveIds.map((id) => ({ id: String(id) })),
+      reward: { gold: [rewardMin, rewardMax] },
+      faction: 'digital',
+      villain: true,
+      isMonster: false,
+      companionPet: {
+        name: String(petTemplate.name || '無名伴寵'),
+        attack: petAttack,
+        hp: petHp,
+        maxHp: petHp
+      }
+    },
+    hint: `你在${location || picked.location}察覺到一名無名滲透者正在試探路線，對方的伴寵先一步撲了上來。`
+  };
+}
+
+function advanceRoamingDigitalVillains(options = {}) {
+  const steps = Math.max(1, Math.floor(Number(options.steps || 1)));
+  const changedByEnsure = ensureDigitalRoamers(agents);
+  const moved = stepDigitalRoamerMovement(steps);
+  const changed = changedByEnsure || moved > 0;
+  if (changed && options.persist !== false) {
+    saveWorld();
+  }
+  return { changed, moved };
+}
 
 const FACTION_WAR_CONFIG = {
   minIntervalDays: 2,
@@ -915,7 +1429,7 @@ function getNearbyNpcIds(location, limit = 2) {
   if (!loc) return [];
   const maxItems = Math.max(1, Number(limit) || 2);
   const sourceAgents = Array.isArray(agents) ? agents : [];
-  const picked = [];
+  const candidates = [];
   const seen = new Set();
   for (const agent of sourceAgents) {
     if (!agent || !agent.id) continue;
@@ -923,10 +1437,22 @@ function getNearbyNpcIds(location, limit = 2) {
     if (typeof isNPCAlive === 'function' && !isNPCAlive(agent.id)) continue;
     if (seen.has(agent.id)) continue;
     seen.add(agent.id);
-    picked.push(agent.id);
-    if (picked.length >= maxItems) break;
+    candidates.push(agent);
   }
-  return picked;
+  if (candidates.length <= 0) return [];
+
+  const digital = candidates.filter((agent) => agent?.roaming && String(agent?.id || '').startsWith('digital_roamer_'));
+  const others = candidates.filter((agent) => !(agent?.roaming && String(agent?.id || '').startsWith('digital_roamer_')));
+  const shuffle = (list = []) => {
+    const copy = [...list];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+  const merged = [...shuffle(digital), ...shuffle(others)];
+  return merged.slice(0, maxItems).map((agent) => agent.id);
 }
 
 function appendNpcMemory(npcId, playerId, memory, options = {}) {
@@ -1431,6 +1957,7 @@ const NPC_AGENTS = [
     memory: [] }
 ];
 let agents = NPC_AGENTS.map(a => ({ ...a, alive: true, exp: 0, party: null, status: "自由" }));
+ensureDigitalRoamers(agents);
 
 function getNPCById(npcId) {
   if (!npcId) return null;
@@ -1450,6 +1977,7 @@ async function worldTick(useAI, apiKey) {
   world.day++;
   ensureFactionWarState();
   maybeGenerateFactionPresenceForDay();
+  advanceRoamingDigitalVillains({ steps: 1, persist: false });
   
   // 季節變化
   if (world.day % 30 === 0) {
@@ -1825,6 +2353,7 @@ function saveWorld() {
 }
 
 function loadWorld() {
+  let changed = false;
   if (fs.existsSync(WORLD_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8'));
@@ -1834,7 +2363,57 @@ function loadWorld() {
       agentInventories = data.agentInventories || {};
     } catch (e) {}
   }
+  if (ensureDigitalRoamers(agents)) changed = true;
   ensureFactionWarState();
+  if (changed) saveWorld();
+}
+
+function resetWorldState(options = {}) {
+  const modeRaw = String(options?.mode || 'events').trim().toLowerCase();
+  const mode = (modeRaw === 'all' || modeRaw === 'full') ? 'all' : 'events';
+  let changed = false;
+
+  if (mode === 'all') {
+    world = buildDefaultWorldState();
+    ensureFactionWarState();
+    ensureFactionPresenceState();
+    if (ensureDigitalRoamers(agents)) changed = true;
+    changed = true;
+  } else {
+    if (!Array.isArray(world.events) || world.events.length > 0) {
+      world.events = [];
+      changed = true;
+    }
+    if (!Array.isArray(world.rumors) || world.rumors.length > 0) {
+      world.rumors = [];
+      changed = true;
+    }
+    if (!world.npcStatus || Object.keys(world.npcStatus).length > 0) {
+      world.npcStatus = {};
+      changed = true;
+    }
+    if (world.wantedList && Object.keys(world.wantedList).length > 0) {
+      world.wantedList = {};
+      changed = true;
+    }
+    if (world.factionWar && Array.isArray(world.factionWar.history) && world.factionWar.history.length > 0) {
+      world.factionWar.history = [];
+      changed = true;
+    }
+    if (world.factionPresence && Array.isArray(world.factionPresence.history) && world.factionPresence.history.length > 0) {
+      world.factionPresence.history = [];
+      changed = true;
+    }
+  }
+
+  if (changed) saveWorld();
+  return {
+    mode,
+    changed,
+    day: Number(world.day || 1),
+    events: Array.isArray(world.events) ? world.events.length : 0,
+    rumors: Array.isArray(world.rumors) ? world.rumors.length : 0
+  };
 }
 
 
@@ -2085,6 +2664,16 @@ async function negotiationPrompt(npc, player, situation, apiKey) {
   }
 
   if (npcId && playerId && safeSituation) {
+    appendNpcQuoteMemory(playerId, {
+      npcId,
+      npcName,
+      speaker: npcName,
+      text: reply,
+      location: player?.location || npc?.loc || '',
+      source: 'social_npc_reply',
+      at: Date.now()
+    });
+
     appendNpcMemory(npcId, playerId, {
       type: '對話',
       content: `玩家說：${safeSituation}`,
@@ -2229,6 +2818,7 @@ module.exports = {
   worldTick,
   saveWorld,
   loadWorld,
+  resetWorldState,
   
   // 玩家
   createPlayer,
@@ -2262,7 +2852,14 @@ module.exports = {
   getAgentMemory,
   addAgentMemory,
   getNearbyNpcIds,
+  getRoamingDigitalVillainsAtLocation,
+  buildRoamingDigitalEncounterEnemy,
+  advanceRoamingDigitalVillains,
   appendNpcMemory,
+  appendNpcQuoteMemory,
+  getPlayerNpcQuoteEvidence,
+  clearPlayerNpcQuoteMemory,
+  clearAllNpcQuoteMemory,
   getNpcMemoryContextAsync,
   getNearbyNpcMemoryContextAsync,
   getAgentInventory,

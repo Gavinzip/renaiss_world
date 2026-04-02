@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const CORE = require('./game-core');
+const PET = require('./pet-system');
 
 // ============== 逃跑系統 ==============
 const FLEE_CONFIG = {
@@ -65,6 +66,247 @@ function attemptFlee(player, pet, enemy, attemptNumber = 1, combatant = null) {
 }
 
 // ============== 敵方怪物（學習玩家的招式）==============
+const DIGITAL_KINGS = ['Nemo', 'Wolf', 'Adaloc', 'Hom'];
+const KING_MOVE_IDS = Object.freeze({
+  Nemo: ['silver_snake', 'ice_toxin', 'seven_step_poison', 'soul_drain', 'ultimate_dark'],
+  Wolf: ['hell_fire', 'explosive_pill', 'ghost_fire', 'bone_dissolver', 'thunder_crash'],
+  Adaloc: ['mud_fire_lotus', 'soul_scatter', 'hot_sand_hell', 'plague_cloud', 'wind_fire_blade'],
+  Hom: ['ultimate_dark', 'silver_snake', 'hell_fire', 'iron_thorn', 'arhat_kick']
+});
+const KING_STATS = Object.freeze({
+  Nemo: { hp: 320, attack: 68, defense: 30, speed: 24, reward: { gold: [260, 420] } },
+  Wolf: { hp: 340, attack: 74, defense: 28, speed: 30, reward: { gold: [300, 460] } },
+  Adaloc: { hp: 360, attack: 72, defense: 34, speed: 22, reward: { gold: [340, 500] } },
+  Hom: { hp: 400, attack: 78, defense: 36, speed: 20, reward: { gold: [380, 560] } }
+});
+const ENEMY_MOVE_MAX = 6;
+
+const ALL_SKILL_POOL = [
+  ...(Array.isArray(PET.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : []),
+  ...(Array.isArray(PET.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : [])
+];
+const SKILL_BY_ID = new Map(ALL_SKILL_POOL.map((move) => [String(move?.id || '').trim(), move]).filter(([id]) => id));
+const SKILL_BY_NAME = new Map(ALL_SKILL_POOL.map((move) => [String(move?.name || '').trim(), move]).filter(([name]) => name));
+
+function clampInt(value, min, max, fallback = min) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  const rounded = Math.floor(num);
+  return Math.max(min, Math.min(max, rounded));
+}
+
+function isDigitalKingName(name = '') {
+  return DIGITAL_KINGS.includes(String(name || '').trim());
+}
+
+function isVillainEnemyName(name = '') {
+  const text = String(name || '').trim();
+  if (!text) return false;
+  if (isDigitalKingName(text)) return true;
+  return /(覆面獵手|蒙面殺手|低價刺客|伏擊者|可疑人物|暗潮|Digital|刺客|獵手|掠奪者|頭目|君主)/iu.test(text);
+}
+
+function cloneMoveForEnemy(move = {}, powerScale = 1) {
+  const base = Number(move?.baseDamage ?? move?.damage ?? 10);
+  const scaled = Math.max(1, Math.round(base * Math.max(0.8, Number(powerScale) || 1)));
+  return {
+    id: String(move?.id || ''),
+    name: String(move?.name || '攻擊'),
+    damage: scaled,
+    baseDamage: scaled,
+    tier: clampInt(move?.tier || 1, 1, 3, 1),
+    effect: { ...(move?.effect || {}) }
+  };
+}
+
+function normalizePresetMove(move, fallbackAttack = 10) {
+  if (typeof move === 'string') {
+    const byName = SKILL_BY_NAME.get(String(move || '').trim());
+    if (byName) return cloneMoveForEnemy(byName, 1);
+    return {
+      id: '',
+      name: String(move || '攻擊'),
+      damage: Math.max(1, Number(fallbackAttack) || 10),
+      baseDamage: Math.max(1, Number(fallbackAttack) || 10),
+      tier: 1,
+      effect: {}
+    };
+  }
+
+  if (!move || typeof move !== 'object') {
+    return {
+      id: '',
+      name: '攻擊',
+      damage: Math.max(1, Number(fallbackAttack) || 10),
+      baseDamage: Math.max(1, Number(fallbackAttack) || 10),
+      tier: 1,
+      effect: {}
+    };
+  }
+
+  const id = String(move.id || '').trim();
+  const name = String(move.name || '').trim();
+  const template = (id && SKILL_BY_ID.get(id)) || (name && SKILL_BY_NAME.get(name)) || null;
+  if (!template) {
+    return {
+      id,
+      name: name || '攻擊',
+      damage: Math.max(1, Number(move.damage ?? move.baseDamage ?? fallbackAttack) || 10),
+      baseDamage: Math.max(1, Number(move.baseDamage ?? move.damage ?? fallbackAttack) || 10),
+      tier: clampInt(move.tier || 1, 1, 3, 1),
+      effect: { ...(move.effect || {}) }
+    };
+  }
+
+  return cloneMoveForEnemy({
+    ...template,
+    ...move,
+    effect: { ...(template.effect || {}), ...(move.effect || {}) }
+  }, 1);
+}
+
+function pickUniqueSkillTemplates(pool = [], count = 0) {
+  const copy = Array.isArray(pool) ? [...pool] : [];
+  const out = [];
+  const used = new Set();
+  while (copy.length > 0 && out.length < count) {
+    const idx = Math.floor(Math.random() * copy.length);
+    const candidate = copy.splice(idx, 1)[0];
+    const id = String(candidate?.id || '').trim();
+    if (!id || used.has(id)) continue;
+    used.add(id);
+    out.push(candidate);
+  }
+  return out;
+}
+
+function buildKingMoveLoadout(kingName = '') {
+  const ids = KING_MOVE_IDS[String(kingName || '').trim()] || [];
+  const picked = ids
+    .map((id) => SKILL_BY_ID.get(id))
+    .filter(Boolean);
+  if (picked.length >= 4) return picked.slice(0, ENEMY_MOVE_MAX);
+
+  const tier3Negative = ALL_SKILL_POOL.filter((move) => move?.type === 'negative' && Number(move?.tier || 1) >= 3);
+  const extra = pickUniqueSkillTemplates(tier3Negative, Math.max(0, 5 - picked.length));
+  return [...picked, ...extra].slice(0, ENEMY_MOVE_MAX);
+}
+
+function getEnemyMovePlan(enemyName = '', level = 1, options = {}) {
+  const safeLevel = Math.max(1, Number(level) || 1);
+  const king = isDigitalKingName(enemyName);
+  const villain = options.villain === true || isVillainEnemyName(enemyName);
+
+  if (king) {
+    return { king: true, villain: true, minTier: 3, targetCount: 5, powerScale: 1.28 };
+  }
+  if (villain) {
+    let minTier = 2;
+    let targetCount = 4;
+    let powerScale = 1.1;
+    if (safeLevel <= 6) {
+      minTier = 1;
+      targetCount = 3;
+      powerScale = 1.03;
+    } else if (safeLevel >= 22) {
+      minTier = 3;
+      targetCount = 5;
+      powerScale = 1.18;
+    } else if (safeLevel >= 14) {
+      minTier = 2;
+      targetCount = 5;
+      powerScale = 1.14;
+    }
+    return { king: false, villain: true, minTier, targetCount, powerScale };
+  }
+  if (safeLevel >= 16) {
+    return { king: false, villain: false, minTier: 2, targetCount: 4, powerScale: 1.06 };
+  }
+  if (safeLevel >= 8) {
+    return { king: false, villain: false, minTier: 1, targetCount: 3, powerScale: 1.02 };
+  }
+  return { king: false, villain: false, minTier: 1, targetCount: 2, powerScale: 1.0 };
+}
+
+function buildEnemyMoveLoadout(enemyName = '', level = 1, rawMoves = [], options = {}) {
+  const plan = getEnemyMovePlan(enemyName, level, options);
+  const fallbackAttack = Math.max(8, Number(options.attack) || 12);
+
+  if (plan.king) {
+    const kingMoves = buildKingMoveLoadout(enemyName)
+      .map((move) => cloneMoveForEnemy(move, plan.powerScale));
+    return kingMoves.slice(0, ENEMY_MOVE_MAX);
+  }
+
+  const normalized = (Array.isArray(rawMoves) ? rawMoves : [])
+    .map((move) => normalizePresetMove(move, fallbackAttack))
+    .filter(Boolean);
+
+  const selected = [];
+  const used = new Set();
+  for (const move of normalized) {
+    const id = String(move?.id || move?.name || '').trim();
+    if (!id || used.has(id)) continue;
+    const tier = clampInt(move?.tier || 1, 1, 3, 1);
+    if (plan.villain && tier < plan.minTier) continue;
+    used.add(id);
+    selected.push(move);
+    if (selected.length >= plan.targetCount) break;
+  }
+
+  const pool = ALL_SKILL_POOL.filter((move) => {
+    const tier = clampInt(move?.tier || 1, 1, 3, 1);
+    if (tier < plan.minTier) return false;
+    if (plan.villain && move?.type !== 'negative') return false;
+    return true;
+  });
+
+  const need = Math.max(0, plan.targetCount - selected.length);
+  if (need > 0) {
+    const extras = pickUniqueSkillTemplates(pool, need + 2);
+    for (const tpl of extras) {
+      const id = String(tpl?.id || '').trim();
+      if (!id || used.has(id)) continue;
+      used.add(id);
+      selected.push(cloneMoveForEnemy(tpl, 1));
+      if (selected.length >= plan.targetCount) break;
+    }
+  }
+
+  if (selected.length === 0) {
+    selected.push({
+      id: '',
+      name: '重擊',
+      damage: fallbackAttack,
+      baseDamage: fallbackAttack,
+      tier: plan.minTier,
+      effect: {}
+    });
+  }
+
+  return selected
+    .slice(0, ENEMY_MOVE_MAX)
+    .map((move) => cloneMoveForEnemy(move, plan.powerScale));
+}
+
+function createDigitalKingEnemy(king = '') {
+  const name = isDigitalKingName(king) ? String(king) : DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
+  const stats = KING_STATS[name] || KING_STATS.Nemo;
+  return {
+    id: name,
+    name,
+    hp: Number(stats.hp || 320),
+    maxHp: Number(stats.hp || 320),
+    attack: Number(stats.attack || 68),
+    defense: Number(stats.defense || 30),
+    speed: Number(stats.speed || 24),
+    moves: buildEnemyMoveLoadout(name, 30, [], { villain: true, attack: Number(stats.attack || 68) }),
+    reward: { ...(stats.reward || { gold: [260, 420] }) },
+    isMonster: true,
+    ignoreBeginnerBalance: true
+  };
+}
+
 function createEnemy(type, level = 1) {
   const enemies = {
     '哥布林': {
@@ -118,8 +360,22 @@ function createEnemy(type, level = 1) {
       reward: { gold: [200 + level * 50, 400 + level * 100] }
     }
   };
-  
-  return enemies[type] || enemies['哥布林'];
+
+  const base = enemies[type] || enemies['哥布林'];
+  const enemy = {
+    ...base,
+    reward: { ...(base.reward || {}) }
+  };
+  enemy.moves = buildEnemyMoveLoadout(
+    enemy.name || type || '哥布林',
+    level,
+    base.moves || [],
+    {
+      attack: enemy.attack,
+      isMonster: true
+    }
+  );
+  return enemy;
 }
 
 // ============== 史詩魔王（有自己的招式）==============
@@ -248,12 +504,14 @@ function ensureStatusState(entity) {
 
 function normalizeMove(move = {}, fallbackAttack = 10) {
   if (typeof move === 'string') {
-    return { name: move, damage: fallbackAttack, effect: {} };
+    return { name: move, damage: fallbackAttack, baseDamage: fallbackAttack, tier: 1, effect: {} };
   }
   return {
     ...move,
     name: String(move?.name || '普通攻擊'),
-    damage: Number(move?.damage || fallbackAttack),
+    damage: Number(move?.damage ?? move?.baseDamage ?? fallbackAttack),
+    baseDamage: Number(move?.baseDamage ?? move?.damage ?? fallbackAttack),
+    tier: clampInt(move?.tier || 1, 1, 3, 1),
     effect: move?.effect || {}
   };
 }
@@ -691,9 +949,9 @@ function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null
       const normalizedEnemyMove = normalizeMove(enemyMove, enemy.attack || 10);
       const enemyMoveDmg = calculatePlayerMoveDamage(
         {
-          baseDamage: normalizedEnemyMove.damage,
+          baseDamage: normalizedEnemyMove.baseDamage ?? normalizedEnemyMove.damage,
           effect: normalizedEnemyMove.effect || {},
-          tier: 1
+          tier: normalizedEnemyMove.tier || 1
         },
         player,
         enemy
@@ -756,22 +1014,39 @@ function enemyChooseMove(enemy) {
   if (!enemy.moves || enemy.moves.length === 0) {
     return { name: '攻擊', damage: enemy.attack || 10, effect: {} };
   }
-  
-  // 隨機選擇
-  const moveIndex = Math.floor(Math.random() * enemy.moves.length);
-  const move = enemy.moves[moveIndex];
-  
-  if (typeof move === 'string') {
-    return { name: move, damage: enemy.attack || 10, effect: {} };
+
+  const weighted = enemy.moves.map((rawMove) => {
+    const move = normalizeMove(rawMove, enemy.attack || 10);
+    const tier = clampInt(move?.tier || 1, 1, 3, 1);
+    const effect = move?.effect || {};
+    const hasControl = Boolean(effect.stun || effect.freeze || effect.bind || effect.slow || effect.fear || effect.confuse || effect.blind || effect.missNext);
+    const hasDot = Boolean(effect.burn || effect.poison || effect.trap || effect.bleed || effect.dot || effect.spreadPoison);
+    const highDamage = Number(move?.damage || 0) >= Number(enemy?.attack || 10) * 1.1;
+    let weight = 1 + (tier - 1) * 0.7;
+    if (hasControl) weight += 0.45;
+    if (hasDot) weight += 0.3;
+    if (highDamage) weight += 0.25;
+    if (Number(enemy?.hp || 0) <= Number(enemy?.maxHp || enemy?.hp || 1) * 0.4 && effect.heal) {
+      weight += 1.2;
+    }
+    return { move, weight: Math.max(0.2, weight) };
+  });
+
+  const total = weighted.reduce((sum, item) => sum + item.weight, 0);
+  let roll = Math.random() * Math.max(0.0001, total);
+  for (const item of weighted) {
+    roll -= item.weight;
+    if (roll <= 0) return item.move;
   }
-  
-  return move;
+  return weighted[weighted.length - 1].move;
 }
 
 module.exports = {
   FLEE_CONFIG,
   attemptFlee,
   createEnemy,
+  createDigitalKingEnemy,
+  buildEnemyMoveLoadout,
   EPIC_BOSSES,
   getMoveEnergyCost,
   getMoveEffectSuccessRate,

@@ -13,6 +13,7 @@ const {
 } = require('./world-map');
 const MAIN_STORY = require('./main-story');
 const WORLD_LORE = require('./world-lore');
+const CORE = require('./game-core');
 
 const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
@@ -146,6 +147,24 @@ function getLocationArcMeta(player) {
     phase,
     targetTurns: LOCATION_ARC_COMPLETE_TURNS
   };
+}
+
+function getRoamingDigitalPresence(location = '', limit = 2) {
+  try {
+    if (!location || typeof CORE.getRoamingDigitalVillainsAtLocation !== 'function') return [];
+    const list = CORE.getRoamingDigitalVillainsAtLocation(location, limit);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatRoamingDigitalPresence(location = '', limit = 2) {
+  const list = getRoamingDigitalPresence(location, limit);
+  if (!Array.isArray(list) || list.length <= 0) return '暫無明顯無名滲透者活動';
+  return list
+    .map((entry, idx) => `無名滲透者${idx + 1}(第${String(entry.group || 'Nemo')}組)`)
+    .join('、');
 }
 
 function sanitizeNarrativeText(text = '') {
@@ -324,7 +343,7 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', 
   }[playerLang] || '請用繁體中文';
   const digitalTag = newbieMask ? '[🧩友善報價]' : '[🕳️精明殺價]';
   const digitalTask = newbieMask
-    ? '第二個選項要對應 market_digital（外在要友善、強調新手照顧與快速成交，不可直接露出惡意）'
+    ? '第二個選項要對應 market_digital（外在要友善、強調新手照顧與檢測協助，不可直接露出惡意）'
     : '第二個選項要對應 market_digital（話術壓價、對玩家不利但說得漂亮）';
   const digitalRule = newbieMask
     ? 'Digital 選項要像熱心店員，語氣友善；只能放微弱違和感，不能明說詐騙。'
@@ -430,8 +449,9 @@ async function injectPortalChoice(choices, location, playerLang = 'zh-TW', optio
   const destinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
   if (!destinations || destinations.length === 0) return base.slice(0, 7);
   const forcePortal = Boolean(options?.forcePortal);
+  const storyPortalCue = Boolean(options?.storySignals?.portal);
   const { nearPortal } = getNearbySystemAvailability(location);
-  if (!forcePortal && !nearPortal) return base.slice(0, 7);
+  if (!forcePortal && !nearPortal && !storyPortalCue) return base.slice(0, 7);
   if (!forcePortal && Math.random() > SYSTEM_OPTION_CHANCE.portal) return base.slice(0, 7);
 
   const withoutPortal = base.filter(c => c.action !== 'teleport' && c.action !== 'portal_intent');
@@ -462,8 +482,9 @@ async function injectWishPoolChoice(
   if (base.some(c => c.action === 'wish_pool')) return base.slice(0, 7);
   const { nearWishPool } = getNearbySystemAvailability(location);
   const forceWishPool = Boolean(options?.forceWishPool);
+  const storyWishCue = Boolean(options?.storySignals?.wishPool);
   const looseChance = Math.max(0, Math.min(1, Number(options?.looseChance || 0.38)));
-  if (!forceWishPool && !nearWishPool && Math.random() > looseChance) return base.slice(0, 7);
+  if (!forceWishPool && !nearWishPool && !storyWishCue && Math.random() > looseChance) return base.slice(0, 7);
   if (!forceWishPool && Math.random() > chance) return base.slice(0, 7);
 
   const wishChoice = await generateSystemChoiceWithAI({
@@ -488,8 +509,10 @@ async function injectMarketChoices(
 ) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
   const forceMarket = Boolean(options?.forceMarket);
+  const storyMarketCue = Boolean(options?.storySignals?.market);
   const { nearMarket } = getNearbySystemAvailability(location);
-  if (!forceMarket && !nearMarket && Math.random() > 0.45) return base.slice(0, 7);
+  if (!forceMarket && !nearMarket && !storyMarketCue) return base.slice(0, 7);
+  if (!forceMarket && !storyMarketCue && nearMarket && Math.random() > 0.25) return base.slice(0, 7);
   if (!forceMarket && Math.random() > chance) return base.slice(0, 7);
   const removeActions = new Set(['market_renaiss', 'market_digital']);
   let work = base.filter(c => !removeActions.has(c.action));
@@ -520,11 +543,12 @@ async function injectMarketChoices(
   return work.slice(0, 7);
 }
 
-async function injectScratchLotteryChoice(choices, playerLang = 'zh-TW', location = '', chance = SYSTEM_OPTION_CHANCE.scratchLottery) {
+async function injectScratchLotteryChoice(choices, playerLang = 'zh-TW', location = '', chance = SYSTEM_OPTION_CHANCE.scratchLottery, options = {}) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
   if (base.some(c => c.action === 'scratch_lottery')) return base.slice(0, 7);
   const { nearMarket } = getNearbySystemAvailability(location);
-  if (!nearMarket) return base.slice(0, 7);
+  const storyMarketCue = Boolean(options?.storySignals?.market);
+  if (!nearMarket && !storyMarketCue) return base.slice(0, 7);
   if (Math.random() > chance) return base.slice(0, 7);
 
   const scratchChoice = await generateSystemChoiceWithAI({
@@ -557,11 +581,12 @@ async function injectScratchLotteryChoice(choices, playerLang = 'zh-TW', locatio
   return base.slice(0, 7);
 }
 
-async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = '', chance = SYSTEM_OPTION_CHANCE.mentorSpar) {
+async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = '', chance = SYSTEM_OPTION_CHANCE.mentorSpar, options = {}) {
   const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
   if (base.some(c => c.action === 'mentor_spar')) return base.slice(0, 7);
   const { nearMentor } = getNearbySystemAvailability(location);
-  if (!nearMentor && Math.random() > 0.5) return base.slice(0, 7);
+  const storyMentorCue = Boolean(options?.storySignals?.mentor);
+  if (!nearMentor && !storyMentorCue && Math.random() > 0.5) return base.slice(0, 7);
   if (Math.random() > chance) return base.slice(0, 7);
 
   let mentorChoice = null;
@@ -690,6 +715,129 @@ function summarizeContext(rawText, maxChars = 240, maxLines = 3) {
   return merged.length > maxChars ? merged.slice(0, maxChars) + '...' : merged;
 }
 
+function normalizeComparableText(text = '') {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[「」『』"'`“”‘’\s，。！？!?；;：:、（）()\[\]【】-]/g, '')
+    .trim();
+}
+
+function dedupeNpcDialogueEvidence(items = []) {
+  const list = Array.isArray(items) ? items : [];
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const speaker = String(item.speaker || '').trim().slice(0, 24);
+    const text = String(item.text || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    if (!speaker || !text) continue;
+    const location = String(item.location || '').trim().slice(0, 24);
+    const at = Number.isFinite(Number(item.at)) ? Number(item.at) : Date.now();
+    const key = `${speaker}|${normalizeComparableText(text)}|${location}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      speaker,
+      text,
+      location,
+      at,
+      source: String(item.source || 'npc').trim().slice(0, 24)
+    });
+  }
+  return out;
+}
+
+function getRecentNpcDialogueEvidence(player, limit = 10, options = {}) {
+  const logs = Array.isArray(player?.npcDialogueLog) ? player.npcDialogueLog : [];
+  let items = [];
+  for (const item of logs) {
+    if (!item || typeof item !== 'object') continue;
+    const speaker = String(item.speaker || '').trim().slice(0, 24);
+    const text = String(item.text || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    if (!speaker || !text) continue;
+    items.push({
+      speaker,
+      text,
+      location: String(item.location || '').trim().slice(0, 24),
+      at: Number(item.at || 0)
+    });
+  }
+  if (player?.id && typeof CORE.getPlayerNpcQuoteEvidence === 'function') {
+    const dedicated = CORE.getPlayerNpcQuoteEvidence(player.id, {
+      limit: Math.max(Number(limit || 10) * 2, 12),
+      location: String(options.location || player?.location || '').trim(),
+      queryText: String(options.queryText || '').trim(),
+      nearbyLimit: 2
+    });
+    if (Array.isArray(dedicated) && dedicated.length > 0) {
+      items = items.concat(dedicated);
+    }
+  }
+  const deduped = dedupeNpcDialogueEvidence(items)
+    .sort((a, b) => Number(a.at || 0) - Number(b.at || 0));
+  return deduped.slice(-Math.max(1, Number(limit || 10)));
+}
+
+function buildNpcDialogueEvidenceText(evidence = [], playerLang = 'zh-TW') {
+  if (!Array.isArray(evidence) || evidence.length <= 0) {
+    if (playerLang === 'en') return '(No verified prior NPC lines.)';
+    if (playerLang === 'zh-CN') return '（目前没有可验证的 NPC 旧对话原句）';
+    return '（目前沒有可驗證的 NPC 舊對話原句）';
+  }
+  return evidence
+    .slice(-10)
+    .map((entry, idx) => {
+      const loc = entry.location ? `＠${entry.location}` : '';
+      return `${idx + 1}. ${entry.speaker}${loc}：「${entry.text}」`;
+    })
+    .join('\n');
+}
+
+function extractCarryItemNames(player = {}) {
+  const names = [];
+  const pushName = (value) => {
+    const name = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!name) return;
+    names.push(name.slice(0, 32));
+  };
+
+  for (const item of Array.isArray(player?.inventory) ? player.inventory : []) {
+    if (typeof item === 'string') pushName(item);
+    else if (item && typeof item === 'object') pushName(item.name || item.itemName || item.id);
+  }
+  for (const herb of Array.isArray(player?.herbs) ? player.herbs : []) {
+    pushName(herb);
+  }
+  for (const crafted of Array.isArray(player?.craftedItems) ? player.craftedItems : []) {
+    if (typeof crafted === 'string') pushName(crafted);
+    else if (crafted && typeof crafted === 'object') pushName(crafted.name || crafted.itemName || crafted.id);
+  }
+  for (const good of Array.isArray(player?.tradeGoods) ? player.tradeGoods : []) {
+    if (typeof good === 'string') pushName(good);
+    else if (good && typeof good === 'object') pushName(good.name || good.itemName || good.id);
+  }
+
+  const uniq = [];
+  const seen = new Set();
+  for (const item of names) {
+    const key = normalizeComparableText(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(item);
+  }
+  return uniq;
+}
+
+function buildInventoryContextText(player = {}, playerLang = 'zh-TW') {
+  const items = extractCarryItemNames(player);
+  if (items.length <= 0) {
+    if (playerLang === 'en') return '(Backpack is currently empty.)';
+    if (playerLang === 'zh-CN') return '（背包当前为空）';
+    return '（背包目前為空）';
+  }
+  return items.slice(0, 24).join('、');
+}
+
 function buildStoryFocusForChoices(rawStory = '') {
   const story = String(rawStory || '').replace(/\s+/g, ' ').trim();
   if (!story) return { lead: '', tail: '', closing: '' };
@@ -701,6 +849,155 @@ function buildStoryFocusForChoices(rawStory = '') {
     .filter(Boolean);
   const closing = sentences.length > 0 ? sentences[sentences.length - 1] : tail.slice(-60);
   return { lead, tail, closing };
+}
+
+const CHOICE_BANNED_PHRASES = [
+  /一鍵成交|立即變現|秒賺|躺賺|暴富|無風險套利/gu
+];
+
+const CHOICE_VAGUE_PHRASES = [
+  /追尋神秘交易/gu,
+  /追問她留下的線索|追查她留下的線索|查她的線索/gu,
+  /某個線索|不明線索|神秘線索(?!來源)/gu
+];
+
+const CHOICE_ENTITY_TOKENS = [
+  '神祕人',
+  '神秘人',
+  '可疑人物',
+  '可疑隊伍',
+  '神祕隊伍',
+  '神秘隊伍',
+  '黑衣人',
+  '斗篷人',
+  '陌生隊伍'
+];
+
+function collectQuotedPhrases(text = '', limit = 8) {
+  const source = String(text || '');
+  if (!source) return [];
+  const list = [];
+  const regex = /「([^」]{2,20})」/gu;
+  let match = regex.exec(source);
+  while (match && list.length < limit) {
+    const token = String(match[1] || '').trim();
+    if (token) list.push(token);
+    match = regex.exec(source);
+  }
+  return list;
+}
+
+function extractStoryAnchors(story = '', npcs = [], location = '', sourceChoice = '') {
+  const source = String(story || '');
+  const anchors = [];
+  const seen = new Set();
+  const add = (value) => {
+    const token = String(value || '').trim();
+    if (!token || seen.has(token)) return;
+    seen.add(token);
+    anchors.push(token);
+  };
+
+  if (location) add(location);
+  if (sourceChoice) add(String(sourceChoice).replace(/\s+/g, ' ').trim().slice(0, 22));
+
+  for (const npc of Array.isArray(npcs) ? npcs : []) {
+    const npcName = String(npc?.name || '').trim();
+    if (npcName && source.includes(npcName)) add(npcName);
+  }
+  for (const phrase of collectQuotedPhrases(source, 8)) add(phrase);
+
+  const cueKeywords = [
+    '感溫貼片', '封存艙', '修復臺', '修復台', '來源代碼', '臨時艙', '舊倉街', '黑影商人',
+    '茶師', '傳送門', '橋面', '目光', '徽章', '檢測儀', '座標', '編碼', '攤位', '市集'
+  ];
+  for (const keyword of cueKeywords) {
+    if (source.includes(keyword)) add(keyword);
+  }
+  return anchors.slice(0, 12);
+}
+
+function hasAnyRegex(text = '', regexList = []) {
+  const source = String(text || '');
+  return regexList.some((pattern) => pattern.test(source));
+}
+
+function hasUnanchoredEntityToken(text = '', anchors = []) {
+  const source = String(text || '');
+  if (!source) return false;
+  const anchorList = Array.isArray(anchors) ? anchors.map((item) => String(item || '').trim()).filter(Boolean) : [];
+  return CHOICE_ENTITY_TOKENS.some((token) => {
+    if (!source.includes(token)) return false;
+    return !anchorList.some((anchor) => anchor.includes(token) || token.includes(anchor));
+  });
+}
+
+function buildStorySystemSignals(story = '') {
+  const text = String(story || '');
+  return {
+    portal: /(傳送門|門紋|節點|躍遷|空間折疊|坐標轉移)/u.test(text),
+    wishPool: /(許願|願望|祈願|祈福|祭壇|願池)/u.test(text),
+    market: /(市集|攤位|交易|收購|鑑價|鑑定|封存艙|修復臺|修復台|商人|倉管|貨艙)/u.test(text),
+    mentor: /(導師|名師|友誼賽|切磋|指導|拜師)/u.test(text)
+  };
+}
+
+function buildGroundedReplacementChoice(index = 0, anchors = [], playerLang = 'zh-TW') {
+  const anchor = String(
+    anchors.find((item) => item && String(item).trim().length <= 18) ||
+    anchors[0] ||
+    '現場線索'
+  ).trim();
+
+  if (playerLang === 'en') {
+    const templates = [
+      { name: 'Trace the Source', choice: `Follow the trail behind "${anchor}" and verify origin records`, desc: 'Confirm who touched the item before making the next move', tag: '[🔍需探索]', action: 'explore' },
+      { name: 'Question Witness', choice: `Ask nearby witnesses specifically about "${anchor}"`, desc: 'Build a clean timeline and reduce false leads', tag: '[🤝需社交]', action: 'social' },
+      { name: 'Run Authenticity Scan', choice: `Use onsite tools to test whether "${anchor}" is genuine`, desc: 'Get evidence first, then decide buy/sell or chase', tag: '[🔍需探索]', action: 'explore' }
+    ];
+    return templates[index % templates.length];
+  }
+  if (playerLang === 'zh-CN') {
+    const templates = [
+      { name: '追查来源', choice: `沿着「${anchor}」继续追查来源与流向`, desc: '先确认谁接触过这条线索，再决定下一步', tag: '[🔍需探索]', action: 'explore' },
+      { name: '询问目击者', choice: `向现场目击者逐一确认「${anchor}」出现时间`, desc: '补齐时间线，避免被假情报带偏', tag: '[🤝需社交]', action: 'social' },
+      { name: '做真伪检测', choice: `把「${anchor}」送去就近检测点做真伪鉴定`, desc: '拿到检测结果后再考虑交易或追击', tag: '[🔍需探索]', action: 'explore' }
+    ];
+    return templates[index % templates.length];
+  }
+  const templates = [
+    { name: '追查來源', choice: `沿著「${anchor}」繼續追查來源與流向`, desc: '先確認誰接觸過這條線索，再決定下一步', tag: '[🔍需探索]', action: 'explore' },
+    { name: '詢問目擊者', choice: `向現場目擊者逐一確認「${anchor}」出現時間`, desc: '補齊時間線，避免被假情報帶偏', tag: '[🤝需社交]', action: 'social' },
+    { name: '做真偽檢測', choice: `把「${anchor}」送去就近檢測點做真偽鑑定`, desc: '拿到檢測結果後再考慮交易或追擊', tag: '[🔍需探索]', action: 'explore' }
+  ];
+  return templates[index % templates.length];
+}
+
+function enforceChoiceGrounding(choices = [], { anchors = [], storyText = '', playerLang = 'zh-TW' } = {}) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).map((item) => ({ ...item })) : [];
+  if (list.length === 0) return list;
+  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'mentor_spar']);
+  const storySignals = buildStorySystemSignals(storyText);
+
+  return list.map((choice, idx) => {
+    if (!choice || typeof choice !== 'object') return choice;
+    if (protectedActions.has(String(choice.action || ''))) return choice;
+
+    const text = [choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+    const hasAnchor = anchors.length === 0 ? true : anchors.some((anchor) => anchor && text.includes(anchor));
+    const hasBannedPhrase = hasAnyRegex(text, CHOICE_BANNED_PHRASES);
+    const hasVaguePhrase = hasAnyRegex(text, CHOICE_VAGUE_PHRASES);
+    const hasUnanchoredEntity = hasUnanchoredEntityToken(text, anchors);
+
+    if (!hasAnchor || hasBannedPhrase || hasVaguePhrase || hasUnanchoredEntity) {
+      const replacement = buildGroundedReplacementChoice(idx, anchors, playerLang);
+      if (!storySignals.market && /交易|成交|收購|鑑價/u.test(String(replacement.choice || ''))) {
+        return buildGroundedReplacementChoice(idx + 1, anchors, playerLang);
+      }
+      return normalizeChoiceByLanguage(replacement, playerLang);
+    }
+    return choice;
+  });
 }
 
 function buildDeterministicFallbackChoices(player, previousStory = '', playerLang = 'zh-TW') {
@@ -797,44 +1094,55 @@ function isImmediateBattleChoice(choice) {
   return /[（(]\s*會進入戰鬥\s*[)）]/u.test(text) || /(即時戰鬥|立刻開打|立即戰鬥)/u.test(text);
 }
 
-function createThreatImmediateChoice(playerLang = 'zh-TW') {
+function pickThreatAnchor(anchors = [], playerLang = 'zh-TW') {
+  const list = Array.isArray(anchors) ? anchors.map((item) => String(item || '').trim()).filter(Boolean) : [];
+  const hit = list.find((item) => hasThreatCue(item));
+  if (hit) return hit;
+  if (playerLang === 'en') return 'incoming threat';
+  if (playerLang === 'zh-CN') return '来袭目标';
+  return '來襲目標';
+}
+
+function createThreatImmediateChoice(playerLang = 'zh-TW', anchors = []) {
+  const anchor = pickThreatAnchor(anchors, playerLang);
   const byLang = {
     'zh-CN': {
-      name: '迎击来袭者',
-      choice: '直冲面具杀手正面交锋，阻止其逼近（會進入戰鬥）',
-      desc: '你主动抢先出手，压住对方节奏（會進入戰鬥）'
+      name: '先手压制',
+      choice: `锁定「${anchor}」并直接压上，抢先夺回节奏（會進入戰鬥）`,
+      desc: '立刻展开压制，避免局势继续恶化（會進入戰鬥）'
     },
     en: {
-      name: 'Intercept Assassin',
-      choice: 'Rush the masked assassin and force a direct clash (會進入戰鬥)',
-      desc: 'Take initiative before the attacker controls the bridge (會進入戰鬥)'
+      name: 'Preemptive Strike',
+      choice: `Lock onto "${anchor}" and force a direct clash before momentum shifts (會進入戰鬥)`,
+      desc: 'Commit to immediate pressure and stop escalation now (會進入戰鬥)'
     }
   };
   const pack = byLang[playerLang] || {
-    name: '迎擊來襲者',
-    choice: '直衝面具殺手正面交鋒，阻止其逼近（會進入戰鬥）',
-    desc: '你主動先手壓制，避免讓對方掌握節奏（會進入戰鬥）'
+    name: '先手壓制',
+    choice: `鎖定「${anchor}」並直接壓上，搶先奪回節奏（會進入戰鬥）`,
+    desc: '立刻展開壓制，避免局勢繼續惡化（會進入戰鬥）'
   };
   return { ...pack, tag: '[⚔️會戰鬥]', action: 'fight' };
 }
 
-function createThreatCounterChoice(playerLang = 'zh-TW') {
+function createThreatCounterChoice(playerLang = 'zh-TW', anchors = []) {
+  const anchor = pickThreatAnchor(anchors, playerLang);
   const byLang = {
     'zh-CN': {
-      name: '联手布防',
-      choice: '请茶师启动护膜并一起封锁桥面，先稳住局势',
-      desc: '不贸然开打，先切断对方的进攻路线'
+      name: '稳住现场',
+      choice: `先围绕「${anchor}」建立警戒线，优先确认误伤与退路`,
+      desc: '不急着硬碰硬，先稳住秩序再反制'
     },
     en: {
-      name: 'Fortify with Tea Master',
-      choice: 'Ask the tea master to raise warding fields and lock the bridge lanes',
-      desc: 'Stabilize the scene first, then look for the attacker\'s weak point'
+      name: 'Stabilize First',
+      choice: `Set a local perimeter around "${anchor}" and secure exits before engaging`,
+      desc: 'Contain first, then counter with better positioning'
     }
   };
   const pack = byLang[playerLang] || {
-    name: '聯手佈防',
-    choice: '請茶師啟動護膜並封鎖橋面節點，先穩住局勢',
-    desc: '不急著硬碰硬，先切斷對方進攻路徑'
+    name: '穩住現場',
+    choice: `先圍繞「${anchor}」建立警戒線，優先確認誤傷與退路`,
+    desc: '不急著硬碰硬，先穩住秩序再反制'
   };
   return { ...pack, tag: '[🤝需社交]', action: 'social' };
 }
@@ -858,8 +1166,9 @@ function upsertCriticalChoice(work, replacement) {
   work[replaceIdx] = replacement;
 }
 
-function enforceThreatChoiceContinuity(choices = [], previousStory = '', playerLang = 'zh-TW') {
+function enforceThreatChoiceContinuity(choices = [], previousStory = '', playerLang = 'zh-TW', options = {}) {
   const work = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
+  const anchors = Array.isArray(options?.anchors) ? options.anchors : [];
   if (work.length === 0) return work;
   if (!hasThreatCue(previousStory)) return work;
 
@@ -867,10 +1176,10 @@ function enforceThreatChoiceContinuity(choices = [], previousStory = '', playerL
   const hasCounter = work.some(choice => choiceMentionsThreat(choice) && !isImmediateBattleChoice(choice));
 
   if (!hasImmediate) {
-    upsertCriticalChoice(work, createThreatImmediateChoice(playerLang));
+    upsertCriticalChoice(work, createThreatImmediateChoice(playerLang, anchors));
   }
   if (!hasCounter) {
-    upsertCriticalChoice(work, createThreatCounterChoice(playerLang));
+    upsertCriticalChoice(work, createThreatCounterChoice(playerLang, anchors));
   }
 
   return work.slice(0, 7);
@@ -882,34 +1191,36 @@ async function injectSystemChoicesSafely(
     playerLang = 'zh-TW',
     location = '',
     newbieMask = false,
+    storyText = '',
     forcePortal = false,
     forceWishPool = false,
     forceMarket = false
   } = {}
 ) {
   let work = Array.isArray(baseChoices) ? baseChoices.slice(0, 7) : [];
+  const storySignals = buildStorySystemSignals(storyText);
   try {
-    work = await injectPortalChoice(work, location, playerLang, { forcePortal });
+    work = await injectPortalChoice(work, location, playerLang, { forcePortal, storySignals });
   } catch (e) {
     console.error('[AI] injectPortalChoice 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectWishPoolChoice(work, playerLang, location, SYSTEM_OPTION_CHANCE.wishPool, { forceWishPool });
+    work = await injectWishPoolChoice(work, playerLang, location, SYSTEM_OPTION_CHANCE.wishPool, { forceWishPool, storySignals });
   } catch (e) {
     console.error('[AI] injectWishPoolChoice 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectMarketChoices(work, playerLang, location, SYSTEM_OPTION_CHANCE.market, newbieMask, { forceMarket });
+    work = await injectMarketChoices(work, playerLang, location, SYSTEM_OPTION_CHANCE.market, newbieMask, { forceMarket, storySignals });
   } catch (e) {
     console.error('[AI] injectMarketChoices 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectScratchLotteryChoice(work, playerLang, location);
+    work = await injectScratchLotteryChoice(work, playerLang, location, SYSTEM_OPTION_CHANCE.scratchLottery, { storySignals });
   } catch (e) {
     console.error('[AI] injectScratchLotteryChoice 失敗，略過:', e?.message || e);
   }
   try {
-    work = await injectMentorSparChoice(work, playerLang, location);
+    work = await injectMentorSparChoice(work, playerLang, location, SYSTEM_OPTION_CHANCE.mentorSpar, { storySignals });
   } catch (e) {
     console.error('[AI] injectMentorSparChoice 失敗，略過:', e?.message || e);
   }
@@ -1001,6 +1312,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const nearbyHint = nearbyPoints.length > 0 ? nearbyPoints.join('、') : '周遭地標資訊不足';
   const portalDestinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
   const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
+  const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
   const npcs = RENAISS_NPCS[location] || [];
   
   // 檢查 NPC 狀態
@@ -1015,7 +1327,16 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   }
   npcStatusText = npcStatusText.slice(0, -1); // 移除最後的頓號
   
-  const previousAction = previousChoice?.choice || previousChoice?.name || '開始探索';
+  const previousAction =
+    previousChoice?.choice ||
+    previousChoice?.name ||
+    player?.generationState?.sourceChoice ||
+    '開始探索';
+  const previousOutcome = summarizeContext(
+    previousChoice?.outcome || previousChoice?.desc || '',
+    360,
+    4
+  );
   
   // 確保玩家名字是中文（如果全是英文就用冒險者）
   let safePlayerName = playerName.trim();
@@ -1040,6 +1361,16 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   // 記憶上下文
   const focusedMemory = summarizeContext(memoryContext, 980, 12);
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
+  const inventorySection =
+    `\n【玩家背包與可用物件（唯一合法來源）】\n` +
+    `${buildInventoryContextText(player, playerLang)}`;
+  const npcDialogueEvidence = getRecentNpcDialogueEvidence(player, 12, {
+    location,
+    queryText: [previousAction, previousStorySummary, focusedMemory].filter(Boolean).join('\n')
+  });
+  const npcDialogueSection =
+    `\n【可驗證 NPC 對話原句（僅以下內容可被回憶為「曾說過」）】\n` +
+    `${buildNpcDialogueEvidenceText(npcDialogueEvidence, playerLang)}`;
   
   const prompt = `你是 Renaiss 世界的原創敘事引擎，風格是「科技收藏 + 夥伴協作 + 區域事件」。
 禁止武俠腔、禁止借用任何既有作品專有名詞或角色名。
@@ -1051,6 +1382,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 已完成跨區篇章：${arcMeta.completedLocations}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
+附近可疑勢力：${digitalPresenceText}
 玩家：${safePlayerName}
 寵物：${petName}(${petType})
 陣營：${alignment}
@@ -1062,9 +1394,12 @@ ${loreSnippet}
 ${npcStatusText}
 ${previousStorySection}
 ${memorySection}
+${inventorySection}
+${npcDialogueSection}
 
 【上一個行動】
 ${previousAction}
+${previousOutcome ? `\n【上一個行動結果（必須銜接）】\n${previousOutcome}` : ''}
 
 【任務】
 ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼。故事目標長度約 400-500 字。要點：
@@ -1082,6 +1417,14 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 12. 若仍在新手期，對手勢力要先以友善包裝出場（如優惠、協助、照顧新手），不能直接反派口吻
 13. 每個地區要有自己的小篇章（起承轉合），不可在同一地區直接完結整個世界故事
 14. 若「地區篇章進度」接近完成，結尾要自然帶出傳送門或跨區線索，引導前往其他島/區域，但不要強制瞬移
+15. 開場第一句必須直接承接「上一個行動」，不能突然切到無關場景
+16. 不可憑空補出前文未出現的關鍵道具/代碼/人物關係（例如突然出現座標卡）；若要引入新線索，必須在當下情境交代它如何被發現
+17. 若使用「線索」「交易」等抽象詞，必須指向具體對象（誰提供、哪個物件、哪個位置）
+18. 若寫「某 NPC 曾說過／提醒過」且使用引號，內容必須逐字對得上【可驗證 NPC 對話原句】；找不到就禁止寫引號引用
+19. 回憶 NPC 提醒時，盡量補上當時場景（例如在哪個地點發生）
+20. 若【上一個行動結果】包含移動（例如從 A 到 B／抵達 B），開場 1-2 句必須寫出過場與抵達，不可直接瞬間換景
+21. 角色「手中持有／使用／遞出／展示」的物件，必須來自【玩家背包與可用物件】；若清單沒有，最多只能寫成「想取得/去購買/去詢問」
+22. 禁止憑空產生關鍵道具（通行卡、座標碼、專用藥劑、啟動器等）；若劇情需要，必須先在當下場景明確寫出取得動作
 
 直接開始講：`;
 
@@ -1122,15 +1465,18 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const startedAt = Date.now();
   const newbieMask = isInNewbiePhase(player);
   const arcMeta = getLocationArcMeta(player);
+  const storySignals = buildStorySystemSignals(previousStory || '');
   const forcePortal = Boolean(
     arcMeta.nearCompletion ||
+    (storySignals.portal && arcMeta.turnsInLocation >= Math.max(2, Math.floor(arcMeta.targetTurns * 0.5))) ||
     (!arcMeta.seenPortalChoice && arcMeta.turnsInLocation >= Math.max(2, Math.floor(arcMeta.targetTurns * 0.6)))
   );
   const forceWishPool = Boolean(
+    (storySignals.wishPool && !arcMeta.seenWishPoolChoice && arcMeta.turnsInLocation >= 2) ||
     !arcMeta.seenWishPoolChoice && arcMeta.turnsInLocation >= Math.max(2, Math.floor(arcMeta.targetTurns * 0.5))
   );
   const forceMarket = Boolean(
-    !arcMeta.seenMarketChoice && arcMeta.turnsInLocation >= 1
+    storySignals.market && !arcMeta.seenMarketChoice && arcMeta.turnsInLocation >= 1
   );
   const location = player.location || '河港鎮';
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
@@ -1140,6 +1486,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const nearbyHint = nearbyPoints.length > 0 ? nearbyPoints.join('、') : '周遭地標資訊不足';
   const portalDestinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
   const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
+  const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
   const petName = pet?.name || '寵物';
   const playerName = player.name || '冒險者';
   const npcs = RENAISS_NPCS[location] || [];
@@ -1164,6 +1511,9 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
   const storyFocus = buildStoryFocusForChoices(previousStory || '');
   const fullStoryText = String(previousStory || '').trim();
+  const sourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
+  const storyAnchors = extractStoryAnchors(fullStoryText, npcs, location, sourceChoiceText);
+  const anchorText = storyAnchors.length > 0 ? storyAnchors.join('、') : '（無）';
   
   const prompt = `你是 Renaiss 世界的冒險策劃師，設計的選項要有創意、刺激。
 風格限制：原創「科技收藏×真偽鑑識」敘事，禁止武俠語氣，禁止既有 IP 名詞（寶可夢、數碼寶貝、斗羅大陸等）。
@@ -1173,10 +1523,12 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
+附近可疑勢力：${digitalPresenceText}
 玩家：${playerName}
 寵物：${petName}
 當地NPC：${npcStatusText || '沒有人'}
 語言設定：${playerLang}
+上一個選擇：${sourceChoiceText || '（無）'}
 ${memorySection}
 
 【完整故事全文（必讀）】
@@ -1191,12 +1543,18 @@ ${storyFocus.tail || '（無）'}
 【最後一句（最高優先）】
 ${storyFocus.closing || '（無）'}
 
+【已出現元素清單（選項必須引用）】
+${anchorText}
+
 【任務】
 根據上面的故事，生成7個獨特的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意！拒絕無聊！
 2. 要符合故事的劇情發展
 3. 每個選項格式：「[風險標籤] 具體動作：20字內描述」
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前威脅或人物
+5. 每個選項至少包含 1 個「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
+6. 不可憑空新增前文不存在的關鍵道具/暗號/座標，除非先交代如何取得
+7. 若寫「線索」，必須明說來源（例如哪個人、哪個艙、哪個檢測結果）
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
@@ -1216,6 +1574,7 @@ ${storyFocus.closing || '（無）'}
 
 禁止出現：打坐修煉、隨便逛逛、原地休息這類選項！
 也禁止出現武俠詞彙：江湖、俠客、門派、武功、內力。
+禁止使用跳 tone 行銷詞：一鍵成交、立即變現、秒賺、躺賺。
 並避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴（可用：真偽鑑定、來源線索、藏品修復、封存編號）。
 
 ${langInstruction}輸出7個選項，每行一個。例如：
@@ -1281,15 +1640,23 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       throw new Error(`choices too few: ${choices.length}`);
     }
     const normalized = choices.slice(0, 7).map(c => normalizeChoiceByLanguage(c, playerLang));
-    const withMarket = await injectSystemChoicesSafely(normalized, {
+    const groundedChoices = enforceChoiceGrounding(normalized, {
+      anchors: storyAnchors,
+      storyText: fullStoryText,
+      playerLang
+    });
+    const withMarket = await injectSystemChoicesSafely(groundedChoices, {
       playerLang,
       location,
       newbieMask,
+      storyText: fullStoryText,
       forcePortal,
       forceWishPool,
       forceMarket
     });
-    const finalChoices = enforceThreatChoiceContinuity(withMarket, previousStory || '', playerLang);
+    const finalChoices = enforceThreatChoiceContinuity(withMarket, previousStory || '', playerLang, {
+      anchors: storyAnchors
+    });
     console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms`);
     return finalChoices;
   } catch (e) {
@@ -1299,11 +1666,14 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       playerLang,
       location,
       newbieMask,
+      storyText: fullStoryText,
       forcePortal,
       forceWishPool,
       forceMarket
     });
-    const finalChoices = enforceThreatChoiceContinuity(withSystem, previousStory || '', playerLang);
+    const finalChoices = enforceThreatChoiceContinuity(withSystem, previousStory || '', playerLang, {
+      anchors: storyAnchors
+    });
     return finalChoices.slice(0, 7);
   }
 }
@@ -1320,6 +1690,7 @@ async function generateInitialChoices(player, pet) {
   const nearbyHint = nearbyPoints.length > 0 ? nearbyPoints.join('、') : '周遭地標資訊不足';
   const portalDestinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
   const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
+  const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
   const petName = pet?.name || '寵物';
   const playerName = player.name || '冒險者';
   const npcs = RENAISS_NPCS[location] || [];
@@ -1344,6 +1715,7 @@ async function generateInitialChoices(player, pet) {
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
+附近可疑勢力：${digitalPresenceText}
 玩家：${playerName}
 寵物：${petName}
 當地NPC：${npcStatusText || '沒有重要NPC'}
@@ -1414,13 +1786,23 @@ ${langInstruction}輸出7個選項，每行一個。例如：
       throw new Error(`initial choices too few: ${choices.length}`);
     }
     const normalized = choices.slice(0, 7).map(c => normalizeChoiceByLanguage(c, playerLang));
-    const finalChoices = await injectSystemChoicesSafely(normalized, { playerLang, location, newbieMask });
+    const finalChoices = await injectSystemChoicesSafely(normalized, {
+      playerLang,
+      location,
+      newbieMask,
+      storyText: ''
+    });
     console.log(`[AI][generateInitialChoices] total ${Date.now() - startedAt}ms`);
     return finalChoices;
   } catch (e) {
     console.error('[AI] 生成開場選項失敗，改用本地保底選項:', e.message);
     const fallbackChoices = buildDeterministicFallbackChoices(player, '', playerLang);
-    const withSystem = await injectSystemChoicesSafely(fallbackChoices, { playerLang, location, newbieMask });
+    const withSystem = await injectSystemChoicesSafely(fallbackChoices, {
+      playerLang,
+      location,
+      newbieMask,
+      storyText: ''
+    });
     return withSystem.slice(0, 7);
   }
 }
