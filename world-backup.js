@@ -45,6 +45,37 @@ function _resolveBackupRepoUrl() {
   return repo;
 }
 
+function getBackupDebugStatus() {
+  const repoRaw = String(BACKUP_REPO || '').trim();
+  const repoResolved = _resolveBackupRepoUrl();
+  let repoHost = '';
+  let repoPath = '';
+  try {
+    if (/^https?:\/\//i.test(repoResolved)) {
+      const u = new URL(repoResolved);
+      repoHost = u.hostname || '';
+      repoPath = String(u.pathname || '').replace(/^\/+/, '');
+    }
+  } catch {
+    // ignore parse failure
+  }
+
+  return {
+    enabled: _isBackupEnabled(),
+    hasRepo: Boolean(repoRaw),
+    hasPat: Boolean(BACKUP_PAT),
+    hasResolvedRepo: Boolean(repoResolved),
+    branch: BACKUP_BRANCH,
+    subdir: BACKUP_SUBDIR,
+    timezone: BACKUP_TZ,
+    hour: BACKUP_HOUR,
+    minute: BACKUP_MINUTE,
+    runOnStartup: BACKUP_RUN_ON_STARTUP,
+    repoHost,
+    repoPath
+  };
+}
+
 function _isGithubHttpsWithoutAuth(repoUrl) {
   const url = String(repoUrl || '').trim();
   if (!/^https:\/\/github\.com\//i.test(url)) return false;
@@ -249,6 +280,7 @@ function startWorldBackupScheduler(onResult) {
 }
 
 module.exports = {
+  getBackupDebugStatus,
   runWorldBackup,
   startWorldBackupScheduler
 };

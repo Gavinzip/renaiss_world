@@ -69,7 +69,7 @@ const WISH = require('./wish-pool-ai');
 const MAIN_STORY = require('./main-story');
 const ECON = require('./economy-system');
 const MEMORY_INDEX = require('./memory-index');
-const { startWorldBackupScheduler, runWorldBackup } = require('./world-backup');
+const { startWorldBackupScheduler, runWorldBackup, getBackupDebugStatus } = require('./world-backup');
 const {
   ISLAND_MAP_TEXT,
   buildIslandMapAnsi,
@@ -3965,6 +3965,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     if (commandName === 'resetdata') await handleResetData(interaction, user);
     if (commandName === 'resetworld') await handleResetWorld(interaction);
     if (commandName === 'backupworld') await handleBackupWorld(interaction, user);
+    if (commandName === 'backupcheck') await handleBackupCheck(interaction);
   } catch (err) {
     console.error(`[Slash] 指令處理失敗 ${commandName}:`, err?.message || err);
     const msg = `❌ 指令執行失敗：${err?.message || err}`;
@@ -4096,6 +4097,37 @@ async function handleBackupWorld(interaction, user) {
         : '');
   await interaction.followUp({
     content: `❌ 手動備份失敗：${failReason}${hint}`,
+    ephemeral: true
+  });
+}
+
+async function handleBackupCheck(interaction) {
+  const password = String(interaction.options.getString('password') || '').trim();
+  if (password !== RESETDATA_PASSWORD) {
+    await interaction.reply({ content: '❌ 密碼錯誤，無法查看備份狀態。', ephemeral: true });
+    return;
+  }
+
+  const status = typeof getBackupDebugStatus === 'function'
+    ? getBackupDebugStatus()
+    : {};
+  const worldRoot = STORAGE?.worldDataRoot || '(unknown)';
+  const schedule = `${String(Number(status.hour || 0)).padStart(2, '0')}:${String(Number(status.minute || 0)).padStart(2, '0')}`;
+
+  await interaction.reply({
+    content:
+      `🧪 備份設定檢查\n` +
+      `- WORLD_BACKUP_ENABLED：${status.enabled ? '1' : '0'}\n` +
+      `- WORLD_BACKUP_REPO：${status.hasRepo ? '已設定' : '未設定'}\n` +
+      `- WORLD_BACKUP_PAT：${status.hasPat ? '已設定' : '未設定'}\n` +
+      `- repo 解析：${status.hasResolvedRepo ? '成功' : '失敗'}\n` +
+      `- repo host：${status.repoHost || '(unknown)'}\n` +
+      `- repo path：${status.repoPath || '(unknown)'}\n` +
+      `- branch：${status.branch || '(unknown)'}\n` +
+      `- subdir：${status.subdir || '(unknown)'}\n` +
+      `- 排程：${schedule} (${status.timezone || 'Asia/Taipei'})\n` +
+      `- 開機即跑：${status.runOnStartup ? '是' : '否'}\n` +
+      `- WORLD_DATA_ROOT(實際)：${worldRoot}`,
     ephemeral: true
   });
 }
@@ -9838,6 +9870,18 @@ CLIENT.on('ready', async () => {
           name: 'note',
           description: '備份備註（可選）',
           required: false
+        }
+      ]
+    },
+    {
+      name: 'backupcheck',
+      description: '檢查備份環境變數是否被程式讀到（需密碼）',
+      options: [
+        {
+          type: 3,
+          name: 'password',
+          description: '安全密碼',
+          required: true
         }
       ]
     }
