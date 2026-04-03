@@ -114,11 +114,54 @@ const TEXT = {
     atk: '攻擊',
     def: '防禦',
     gold: 'Rns 代幣'
+  },
+  'zh-CN': {
+    welcome: '欢迎来到 Renaiss 星球！',
+    choosePath: '选择你的道路',
+    journey: 'Renaiss 星球探险之旅',
+    continue: '➡️ 继续',
+    settings: '⚙️ 设置',
+    character: '👤 角色',
+    back: '🔙 返回',
+    petCreated: '宠物诞生！',
+    drawMove: '🎰 抽取天赋招式！',
+    enterName: '📝 为宠物取名',
+    adventure: '🌟 探险选项',
+    combat: '⚔️ 战斗',
+    flee: '🏃 逃跑',
+    victory: '🏆 胜利！',
+    defeat: '💀 失败...',
+    hp: '生命',
+    atk: '攻击',
+    def: '防御',
+    gold: 'Rns 代币'
+  },
+  en: {
+    welcome: 'Welcome to Renaiss Planet!',
+    choosePath: 'Choose Your Path',
+    journey: 'Renaiss Adventure Journey',
+    continue: '➡️ Continue',
+    settings: '⚙️ Settings',
+    character: '👤 Character',
+    back: '🔙 Back',
+    petCreated: 'Pet Born!',
+    drawMove: '🎰 Draw Talent Move!',
+    enterName: '📝 Name Your Pet',
+    adventure: '🌟 Adventure Options',
+    combat: '⚔️ Combat',
+    flee: '🏃 Flee',
+    victory: '🏆 Victory!',
+    defeat: '💀 Defeat...',
+    hp: 'HP',
+    atk: 'ATK',
+    def: 'DEF',
+    gold: 'Rns Token'
   }
 };
 
-function t(key) {
-  return TEXT[CONFIG.LANGUAGE]?.[key] || TEXT['zh-TW'][key] || key;
+function t(key, lang = 'zh-TW') {
+  const code = normalizeLangCode(lang || CONFIG.LANGUAGE || 'zh-TW');
+  return TEXT[code]?.[key] || TEXT['zh-TW']?.[key] || key;
 }
 
 function getMarketTypeLabel(marketType = 'renaiss') {
@@ -370,6 +413,12 @@ function clearPlayerTempData(userId) {
   delete playerTempData[userId];
 }
 
+function normalizeLangCode(lang = 'zh-TW') {
+  const raw = String(lang || '').trim();
+  if (raw === 'en' || raw === 'zh-CN') return raw;
+  return 'zh-TW';
+}
+
 async function notifyWorldBackupSuccess(result) {
   if (!result || !result.ok) return;
   if (!WORLD_BACKUP_NOTIFY_CHANNEL_ID || WORLD_BACKUP_NOTIFY_CHANNEL_ID <= 0) return;
@@ -595,7 +644,11 @@ function isBuyChoice(choice) {
 
 function isImmediateBattleChoice(choice) {
   if (!choice || typeof choice !== 'object') return false;
-  if (String(choice.action || '') === 'fight' || String(choice.action || '') === 'mentor_spar') return true;
+  if (
+    String(choice.action || '') === 'fight' ||
+    String(choice.action || '') === 'mentor_spar' ||
+    String(choice.action || '') === 'location_story_battle'
+  ) return true;
   const text = [
     choice.tag || '',
     choice.name || '',
@@ -608,7 +661,7 @@ function isImmediateBattleChoice(choice) {
 function isHostileImmediateBattleChoice(choice) {
   if (!choice || typeof choice !== 'object') return false;
   if (String(choice.action || '') === 'mentor_spar') return false;
-  if (String(choice.action || '') === 'fight') return true;
+  if (String(choice.action || '') === 'fight' || String(choice.action || '') === 'location_story_battle') return true;
   const text = [
     choice.tag || '',
     choice.name || '',
@@ -2010,7 +2063,13 @@ function scoreStoryBattleNpcCandidate(npc = null) {
   return score;
 }
 
-function resolveLocationStoryBattleTarget(player) {
+function hasRoamingInfiltrationSignals(story = '') {
+  const text = extractStoryEndingFocus(story);
+  if (!text) return false;
+  return /(digital|滲透|匿名|可疑|追蹤|鎖定|機械鎖定|異常|逼近|接近|敲擊聲|毒霧|威脅)/iu.test(text);
+}
+
+function resolveLocationStoryBattleTarget(player, storyText = '') {
   const candidates = getNearbyStoryBattleNpcCandidates(player)
     .sort((a, b) => {
       const scoreGap = scoreStoryBattleNpcCandidate(b) - scoreStoryBattleNpcCandidate(a);
@@ -2026,6 +2085,10 @@ function resolveLocationStoryBattleTarget(player) {
       enemy: buildStoryBattleEnemyFromNpc(picked, player)
     };
   }
+
+  const threatScore = computeStoryThreatScore(storyText);
+  const allowRoamingFallback = hasRoamingInfiltrationSignals(storyText) && threatScore >= Math.max(18, STORY_THREAT_SCORE_THRESHOLD - 8);
+  if (!allowRoamingFallback) return null;
 
   const location = String(player?.location || '').trim();
   const roaming = typeof CORE.buildRoamingDigitalEncounterEnemy === 'function'
@@ -2045,8 +2108,8 @@ function resolveLocationStoryBattleTarget(player) {
   return null;
 }
 
-function createGuaranteedLocationStoryBattleChoice(player) {
-  const target = resolveLocationStoryBattleTarget(player);
+function createGuaranteedLocationStoryBattleChoice(player, storyText = '') {
+  const target = resolveLocationStoryBattleTarget(player, storyText);
   if (!target?.enemy) return null;
   const location = String(player?.location || '附近據點').trim();
   const titleSuffix = target.npcTitle ? `（${target.npcTitle}）` : '';
@@ -2054,7 +2117,7 @@ function createGuaranteedLocationStoryBattleChoice(player) {
     action: 'location_story_battle',
     tag: '[⚔️會戰鬥]',
     name: `攔截 ${target.npcName}`,
-    choice: `在${location}鎖定${target.npcName}${titleSuffix}並正面交鋒（會進入戰鬥）`,
+    choice: `察覺${location}氣氛不對勁，鎖定${target.npcName}${titleSuffix}先發制人（會進入戰鬥）`,
     desc: `地區篇章關鍵戰：對手來自${location}在地勢力`,
     npcId: target.npcId,
     npcName: target.npcName,
@@ -2073,7 +2136,8 @@ function ensureLocationStoryBattleChoiceAvailability(player, choices = []) {
   if (turnsInLocation < LOCATION_STORY_BATTLE_MIN_TURNS) return list;
   if (list.some((choice) => String(choice?.action || '').trim() === 'location_story_battle')) return list;
 
-  const injected = createGuaranteedLocationStoryBattleChoice(player);
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const injected = createGuaranteedLocationStoryBattleChoice(player, storyText);
   if (!injected) return list;
 
   const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'custom_input']);
@@ -3732,6 +3796,163 @@ function getPetAttackMoves(pet) {
   return (pet?.moves || []).filter((m) => !(m?.effect && m.effect.flee));
 }
 
+const SKILL_CHIP_PREFIX = '技能晶片：';
+const PROTECTED_MOVE_IDS = new Set(
+  (Array.isArray(PET?.INITIAL_MOVES) ? PET.INITIAL_MOVES : [])
+    .map((m) => String(m?.id || '').trim())
+    .filter(Boolean)
+);
+
+function getPetMovePool(petType = '') {
+  return petType === '正派'
+    ? (Array.isArray(PET?.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : [])
+    : (Array.isArray(PET?.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : []);
+}
+
+function extractSkillChipMoveName(rawItem = null) {
+  const name = getDraftItemName(rawItem);
+  if (!name.startsWith(SKILL_CHIP_PREFIX)) return '';
+  return name.slice(SKILL_CHIP_PREFIX.length).trim();
+}
+
+function addSkillChipToInventory(player, moveName = '') {
+  const normalized = String(moveName || '').trim();
+  if (!normalized) return false;
+  if (!Array.isArray(player.inventory)) player.inventory = [];
+  player.inventory.unshift(`${SKILL_CHIP_PREFIX}${normalized}`);
+  return true;
+}
+
+function consumeSkillChipFromInventory(player, moveName = '') {
+  const normalized = String(moveName || '').trim();
+  if (!normalized || !Array.isArray(player?.inventory)) return false;
+  const target = `${SKILL_CHIP_PREFIX}${normalized}`;
+  for (let i = 0; i < player.inventory.length; i++) {
+    if (getDraftItemName(player.inventory[i]) !== target) continue;
+    player.inventory.splice(i, 1);
+    return true;
+  }
+  return false;
+}
+
+function getLearnableSkillChipEntries(player, pet) {
+  const allPool = [
+    ...(Array.isArray(PET?.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : []),
+    ...(Array.isArray(PET?.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : [])
+  ];
+  const byName = new Map(allPool.map((m) => [String(m?.name || '').trim(), m]));
+  const petPoolIds = new Set(getPetMovePool(pet?.type).map((m) => String(m?.id || '').trim()).filter(Boolean));
+  const learnedIds = new Set((Array.isArray(pet?.moves) ? pet.moves : []).map((m) => String(m?.id || '').trim()));
+  const stats = new Map();
+  for (const raw of Array.isArray(player?.inventory) ? player.inventory : []) {
+    const moveName = extractSkillChipMoveName(raw);
+    if (!moveName) continue;
+    const move = byName.get(moveName);
+    const key = move?.id ? String(move.id || '').trim() : `name::${moveName}`;
+    const prev = stats.get(key) || {
+      move: move || { id: '', name: moveName, element: '未知', tier: 0 },
+      count: 0,
+      canLearn: false,
+      reason: '未知技能',
+      learned: false
+    };
+    prev.count += 1;
+    if (move?.id) {
+      const moveId = String(move.id || '').trim();
+      const learned = learnedIds.has(moveId);
+      const sameFaction = petPoolIds.has(moveId);
+      if (learned) {
+        prev.canLearn = false;
+        prev.reason = '已學會';
+        prev.learned = true;
+      } else if (!sameFaction) {
+        prev.canLearn = false;
+        prev.reason = '門派不符';
+        prev.learned = false;
+      } else {
+        prev.canLearn = true;
+        prev.reason = '可學習';
+        prev.learned = false;
+      }
+    }
+    stats.set(key, prev);
+  }
+  return Array.from(stats.values()).sort((a, b) => {
+    const canLearnDiff = Number(Boolean(b?.canLearn)) - Number(Boolean(a?.canLearn));
+    if (canLearnDiff !== 0) return canLearnDiff;
+    const tierDiff = Number(b?.move?.tier || 0) - Number(a?.move?.tier || 0);
+    if (tierDiff !== 0) return tierDiff;
+    return String(a?.move?.name || '').localeCompare(String(b?.move?.name || ''), 'zh-Hant');
+  });
+}
+
+function getForgettablePetMoves(pet) {
+  return (Array.isArray(pet?.moves) ? pet.moves : []).filter((m) => {
+    const moveId = String(m?.id || '').trim();
+    if (!moveId) return false;
+    return !PROTECTED_MOVE_IDS.has(moveId);
+  });
+}
+
+function learnMoveFromChipForPet(pet, moveTemplate) {
+  if (!pet) return { success: false, reason: '找不到寵物資料。' };
+  if (!moveTemplate || typeof moveTemplate !== 'object') {
+    return { success: false, reason: '技能資料錯誤。' };
+  }
+  const moveId = String(moveTemplate.id || '').trim();
+  if (!moveId) return { success: false, reason: '技能缺少 ID。' };
+  if (!Array.isArray(pet.moves)) pet.moves = [];
+  if (pet.moves.some((m) => String(m?.id || '').trim() === moveId)) {
+    return { success: false, reason: '這招已經學過了，請直接到上陣欄勾選。' };
+  }
+
+  const learned = typeof PET.learnMove === 'function' ? PET.learnMove(pet, moveId) : null;
+  if (!learned?.success) {
+    return { success: false, reason: learned?.reason || '學習失敗' };
+  }
+
+  const attackMoves = getPetAttackMoves(pet);
+  const attackIds = new Set(attackMoves.map((m) => String(m?.id || '').trim()).filter(Boolean));
+  if (!attackIds.has(moveId)) {
+    return {
+      success: true,
+      move: learned.move || moveTemplate,
+      equipped: false,
+      newlyLearned: true,
+      replacedMoveName: ''
+    };
+  }
+
+  const selected = [];
+  for (const rawId of Array.isArray(pet.activeMoveIds) ? pet.activeMoveIds : []) {
+    const id = String(rawId || '').trim();
+    if (!id || selected.includes(id) || !attackIds.has(id)) continue;
+    selected.push(id);
+    if (selected.length >= PET_MOVE_LOADOUT_LIMIT) break;
+  }
+
+  let replacedMoveName = '';
+  if (!selected.includes(moveId)) {
+    if (selected.length < PET_MOVE_LOADOUT_LIMIT) {
+      selected.push(moveId);
+    } else {
+      const replacedId = String(selected[0] || '').trim();
+      selected[0] = moveId;
+      const replacedMove = attackMoves.find((m) => String(m?.id || '').trim() === replacedId);
+      replacedMoveName = String(replacedMove?.name || '').trim();
+    }
+  }
+
+  pet.activeMoveIds = selected.slice(0, PET_MOVE_LOADOUT_LIMIT);
+  return {
+    success: true,
+    move: learned.move || moveTemplate,
+    equipped: true,
+    newlyLearned: true,
+    replacedMoveName
+  };
+}
+
 function normalizePetMoveLoadout(pet, persist = false) {
   if (!pet || !Array.isArray(pet.moves)) {
     return { activeMoveIds: [], activeMoves: [], changed: false };
@@ -4306,7 +4527,8 @@ function renderRegionMapImageBuffer(snapshot, statusText = '') {
   }
 }
 
-function buildRegionMoveSelectRow(player, snapshot, islandCompleted) {
+function buildRegionMoveSelectRow(player, snapshot, islandCompleted, lang = 'zh-TW') {
+  const tx = getMapText(lang);
   const locations = Array.isArray(snapshot?.locations) ? snapshot.locations : [];
   const current = String(player?.location || '').trim();
   const options = locations
@@ -4314,13 +4536,13 @@ function buildRegionMoveSelectRow(player, snapshot, islandCompleted) {
     .slice(0, 25)
     .map((row) => ({
       label: String(row.location).slice(0, 100),
-      description: row.isPortalHub ? '主傳送門地點' : '區內可探索地點',
+      description: row.isPortalHub ? tx.regionMovePortalHub : tx.regionMoveInRegion,
       value: String(row.location)
     }));
 
   const placeholder = islandCompleted
-    ? (options.length > 0 ? '選擇區內移動目標（會導向下一段劇情）' : '本區暫無其他可移動座標')
-    : '本地劇情未完成，尚未開放自由探索';
+    ? (options.length > 0 ? tx.regionMovePlaceholderOpen : tx.regionMovePlaceholderEmpty)
+    : tx.regionMovePlaceholderLocked;
 
   const select = new StringSelectMenuBuilder()
     .setCustomId('map_region_move_select')
@@ -4329,8 +4551,8 @@ function buildRegionMoveSelectRow(player, snapshot, islandCompleted) {
     .setMaxValues(1)
     .setDisabled(!islandCompleted || options.length === 0)
     .addOptions(options.length > 0 ? options : [{
-      label: '尚未開放',
-      description: '先完成本地劇情',
+      label: tx.regionMoveLockedLabel,
+      description: tx.regionMoveLockedDesc,
       value: '__locked__'
     }]);
 
@@ -4382,13 +4604,338 @@ function snapshotHasUsableComponents(snapshot) {
   return false;
 }
 
-function buildPortalUsageGuide(player) {
+function joinByLang(items = [], lang = 'zh-TW') {
+  const list = Array.isArray(items) ? items.filter(Boolean).map((item) => String(item).trim()).filter(Boolean) : [];
+  if (list.length === 0) return '';
+  return list.join(lang === 'en' ? ', ' : '、');
+}
+
+function getMapText(lang = 'zh-TW') {
+  const code = normalizeLangCode(lang);
+  const map = {
+    'zh-TW': {
+      regionMovePortalHub: '主傳送門地點',
+      regionMoveInRegion: '區內可探索地點',
+      regionMovePlaceholderOpen: '選擇區內移動目標（會導向下一段劇情）',
+      regionMovePlaceholderEmpty: '本區暫無其他可移動座標',
+      regionMovePlaceholderLocked: '本地劇情未完成，尚未開放自由探索',
+      regionMoveLockedLabel: '尚未開放',
+      regionMoveLockedDesc: '先完成本地劇情',
+      mapBtnPrev: '⬅️ 上一頁',
+      mapBtnNext: '下一頁 ➡️',
+      mapBtnBackStory: '📖 返回故事',
+      mapBtnPortal: '🌀 傳送門',
+      mapBtnText: '📄 文字版',
+      mapBtnAscii: '🧩 ASCII版',
+      mapTitle: '🗺️ Renaiss 群島海圖',
+      mapDisplayImage: 'Pillow 圖像版',
+      mapDisplayAsciiFallback: 'ASCII 版（圖像渲染失敗，回退）',
+      mapDisplayTextFallback: '文字版（圖像渲染失敗，回退）',
+      mapLegendImage: '圖例：@你、◎主傳送門、●城市、▲森林（城市名前有◎代表該城可直接傳送）',
+      mapLegendText: '@黃色=你｜◎橘色=主傳送門｜●紫色=城市｜▲綠色=森林',
+      mapNoProfile: '未知',
+      mapNoRegion: '未知區域',
+      mapNoNearby: '未知',
+      mapNoPortal: '附近無可用傳送門',
+      mapNoNavTarget: '（未設定）',
+      mapNoPortalHub: '未知',
+      mapNoCities: '（本頁無地點）',
+      mapSectionPageMap: '本頁地圖（手機友善）',
+      mapSectionRegionCities: '分區城市',
+      mapSectionRegionInfo: '本頁地區情報',
+      mapSectionAreaIntel: '當前地區情報',
+      mapFieldMapDisplay: '地圖顯示',
+      mapFieldCurrentLocation: '目前位置',
+      mapFieldCurrentRegion: '當前分區',
+      mapFieldDifficulty: '區域難度',
+      mapFieldNavTarget: '導航目標',
+      mapFieldCurrentPortalHub: '當前主傳送門',
+      mapFieldMainPortalHubs: '六大區主傳送門',
+      mapFieldFreeExplore: '自由探索',
+      mapFieldLegend: '圖例',
+      mapFieldNearbyInteractive: '附近可互動內容',
+      mapFieldNearbyScenes: '周邊場景',
+      mapFieldLandmarks: '地標',
+      mapFieldResources: '資源/商機',
+      mapFieldPortalTo: '傳送門可往',
+      mapFieldMapPages: '地圖頁數',
+      mapFreeExploreOpen: '已開放（可用下拉選單設定區內目的地）',
+      mapFreeExploreLocked: '未開放（先完成本地劇情）',
+      mapHintMoveRule: '_區內移動請用下拉選單，跨區移動請用傳送門。_',
+      mapCurrentLocationSuffix: '（地圖中已高亮）',
+      mapInfoNearbyPrefix: '附近',
+      mapPortalGuide: (preview) => `🌀 **傳送門操作：** 先按「🗺️ 地圖」→ 再按「🌀 傳送門」→ 選目的地（如：${preview}）。`,
+      mapNotFoundPlayer: '❌ 找不到角色資料，請先 /start',
+      mapUseInThread: '⚠️ 請回到遊戲討論串使用。',
+      portalTitle: '🌀 傳送門目的地',
+      portalDesc1: '你已啟動',
+      portalDesc2: '附近的傳送門網路。',
+      portalDesc3: '（六大區主傳送門互通）',
+      portalDesc4: '請點選要傳送到的目的地：',
+      portalBackMap: '🗺️ 返回地圖',
+      portalBackStory: '📖 返回故事',
+      portalNotReady: '⚠️ 你目前尚未啟用傳送門。請先在故事選項中選擇「前往附近傳送門」。',
+      mapModeSwitchText: '✅ 已切換為文字地圖',
+      mapModeSwitchAscii: '✅ 已切換為 ASCII 地圖',
+      mapExploreLockedNotice: '🧭 本地劇情尚未完成，還不能自由探索。先推進本島故事。',
+      mapInvalidDestination: '⚠️ 請選擇有效目的地。',
+      mapCrossRegionBlocked: '⚠️ 區內移動只能選同一大區地點；跨區請使用主傳送門。',
+      mapAlreadyHereNotice: (target) => `✅ 你已在 ${target}`,
+      mapDestinationSetNotice: (target) => `✅ 已設定目的地：${target}。下一段故事會朝這裡推進。`,
+      mapAutoTravelLocked: (target) => `🧭 你想前往 **${target}**，但本地劇情尚未完成，只能先沿主線推進。`,
+      mapAutoTravelCrossRegion: '🧭 區內移動僅限同一大區；跨區請使用主傳送門。',
+      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推進時感到壓力失衡（預估勝率 ${winRate}%），只好先在 **${from}** 整備。`,
+      mapAutoTravelMoved: (from, target) => `🧭 你依照地圖座標離開 **${from}**，一路推進到 **${target}**。`,
+      portalInvalidDestination: '⚠️ 無效的傳送目的地。',
+      portalGateDenied: (target, winRate) => `🛑 無法前往 **${target}**：目前勝率 ${winRate}%（需要 > ${LOCATION_ENTRY_MIN_WINRATE}%）。`,
+      portalTeleportStory: (from, to) => `🌀 傳送門正在開啟，空間折疊完成。\n你已由 **${from}** 抵達 **${to}**。`,
+      portalDoneTitle: '✅ 傳送完成',
+      portalDoneDesc: (from, to) => `你已由 **${from}** 傳送至 **${to}**。\n\n接下來按「📖 返回故事」，系統會以新地點生成新的故事與選項。`,
+      mapGotoHint: '🗺️ 地圖按鈕僅供查看，移動請透過劇情中的「前往傳送門」選項。'
+    },
+    'zh-CN': {
+      regionMovePortalHub: '主传送门地点',
+      regionMoveInRegion: '区内可探索地点',
+      regionMovePlaceholderOpen: '选择区内移动目标（会导向下一段剧情）',
+      regionMovePlaceholderEmpty: '本区暂无其他可移动坐标',
+      regionMovePlaceholderLocked: '本地剧情未完成，尚未开放自由探索',
+      regionMoveLockedLabel: '尚未开放',
+      regionMoveLockedDesc: '先完成本地剧情',
+      mapBtnPrev: '⬅️ 上一页',
+      mapBtnNext: '下一页 ➡️',
+      mapBtnBackStory: '📖 返回故事',
+      mapBtnPortal: '🌀 传送门',
+      mapBtnText: '📄 文字版',
+      mapBtnAscii: '🧩 ASCII版',
+      mapTitle: '🗺️ Renaiss 群岛海图',
+      mapDisplayImage: 'Pillow 图像版',
+      mapDisplayAsciiFallback: 'ASCII 版（图像渲染失败，回退）',
+      mapDisplayTextFallback: '文字版（图像渲染失败，回退）',
+      mapLegendImage: '图例：@你、◎主传送门、●城市、▲森林（城市名前有◎代表该城可直接传送）',
+      mapLegendText: '@黄色=你｜◎橘色=主传送门｜●紫色=城市｜▲绿色=森林',
+      mapNoProfile: '未知',
+      mapNoRegion: '未知区域',
+      mapNoNearby: '未知',
+      mapNoPortal: '附近无可用传送门',
+      mapNoNavTarget: '（未设置）',
+      mapNoPortalHub: '未知',
+      mapNoCities: '（本页无地点）',
+      mapSectionPageMap: '本页地图（手机友善）',
+      mapSectionRegionCities: '分区城市',
+      mapSectionRegionInfo: '本页地区情报',
+      mapSectionAreaIntel: '当前地区情报',
+      mapFieldMapDisplay: '地图显示',
+      mapFieldCurrentLocation: '目前位置',
+      mapFieldCurrentRegion: '当前分区',
+      mapFieldDifficulty: '区域难度',
+      mapFieldNavTarget: '导航目标',
+      mapFieldCurrentPortalHub: '当前主传送门',
+      mapFieldMainPortalHubs: '六大区主传送门',
+      mapFieldFreeExplore: '自由探索',
+      mapFieldLegend: '图例',
+      mapFieldNearbyInteractive: '附近可互动内容',
+      mapFieldNearbyScenes: '周边场景',
+      mapFieldLandmarks: '地标',
+      mapFieldResources: '资源/商机',
+      mapFieldPortalTo: '传送门可往',
+      mapFieldMapPages: '地图页数',
+      mapFreeExploreOpen: '已开放（可用下拉选单设置区内目的地）',
+      mapFreeExploreLocked: '未开放（先完成本地剧情）',
+      mapHintMoveRule: '_区内移动请用下拉选单，跨区移动请用传送门。_',
+      mapCurrentLocationSuffix: '（地图中已高亮）',
+      mapInfoNearbyPrefix: '附近',
+      mapPortalGuide: (preview) => `🌀 **传送门操作：** 先按「🗺️ 地图」→ 再按「🌀 传送门」→ 选目的地（如：${preview}）。`,
+      mapNotFoundPlayer: '❌ 找不到角色资料，请先 /start',
+      mapUseInThread: '⚠️ 请回到游戏讨论串使用。',
+      portalTitle: '🌀 传送门目的地',
+      portalDesc1: '你已启动',
+      portalDesc2: '附近的传送门网络。',
+      portalDesc3: '（六大区主传送门互通）',
+      portalDesc4: '请点选要传送到的目的地：',
+      portalBackMap: '🗺️ 返回地图',
+      portalBackStory: '📖 返回故事',
+      portalNotReady: '⚠️ 你目前尚未启用传送门。请先在故事选项中选择「前往附近传送门」。',
+      mapModeSwitchText: '✅ 已切换为文字地图',
+      mapModeSwitchAscii: '✅ 已切换为 ASCII 地图',
+      mapExploreLockedNotice: '🧭 本地剧情尚未完成，还不能自由探索。先推进本岛故事。',
+      mapInvalidDestination: '⚠️ 请选择有效目的地。',
+      mapCrossRegionBlocked: '⚠️ 区内移动只能选同一大区地点；跨区请使用主传送门。',
+      mapAlreadyHereNotice: (target) => `✅ 你已在 ${target}`,
+      mapDestinationSetNotice: (target) => `✅ 已设置目的地：${target}。下一段故事会朝这里推进。`,
+      mapAutoTravelLocked: (target) => `🧭 你想前往 **${target}**，但本地剧情尚未完成，只能先沿主线推进。`,
+      mapAutoTravelCrossRegion: '🧭 区内移动仅限同一大区；跨区请使用主传送门。',
+      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推进时感到压力失衡（预估胜率 ${winRate}%），只好先在 **${from}** 整备。`,
+      mapAutoTravelMoved: (from, target) => `🧭 你依照地图坐标离开 **${from}**，一路推进到 **${target}**。`,
+      portalInvalidDestination: '⚠️ 无效的传送目的地。',
+      portalGateDenied: (target, winRate) => `🛑 无法前往 **${target}**：当前胜率 ${winRate}%（需要 > ${LOCATION_ENTRY_MIN_WINRATE}%）。`,
+      portalTeleportStory: (from, to) => `🌀 传送门正在开启，空间折叠完成。\n你已由 **${from}** 抵达 **${to}**。`,
+      portalDoneTitle: '✅ 传送完成',
+      portalDoneDesc: (from, to) => `你已由 **${from}** 传送至 **${to}**。\n\n接下来按「📖 返回故事」，系统会以新地点生成新的故事与选项。`,
+      mapGotoHint: '🗺️ 地图按钮仅供查看，移动请通过剧情中的「前往传送门」选项。'
+    },
+    en: {
+      regionMovePortalHub: 'Portal hub location',
+      regionMoveInRegion: 'Explorable location in this region',
+      regionMovePlaceholderOpen: 'Pick an in-region destination (used for next story step)',
+      regionMovePlaceholderEmpty: 'No other movable nodes in this region',
+      regionMovePlaceholderLocked: 'Local arc not completed yet. Free exploration is locked.',
+      regionMoveLockedLabel: 'Locked',
+      regionMoveLockedDesc: 'Finish local story first',
+      mapBtnPrev: '⬅️ Prev',
+      mapBtnNext: 'Next ➡️',
+      mapBtnBackStory: '📖 Back to Story',
+      mapBtnPortal: '🌀 Portal',
+      mapBtnText: '📄 Text',
+      mapBtnAscii: '🧩 ASCII',
+      mapTitle: '🗺️ Renaiss Archipelago Map',
+      mapDisplayImage: 'Pillow image mode',
+      mapDisplayAsciiFallback: 'ASCII mode (image render failed, fallback)',
+      mapDisplayTextFallback: 'Text mode (image render failed, fallback)',
+      mapLegendImage: 'Legend: @You, ◎Portal hub, ●City, ▲Forest (city with ◎ supports direct portal travel)',
+      mapLegendText: '@yellow=you | ◎orange=portal hub | ●purple=city | ▲green=forest',
+      mapNoProfile: 'Unknown',
+      mapNoRegion: 'Unknown Region',
+      mapNoNearby: 'Unknown',
+      mapNoPortal: 'No available nearby portals',
+      mapNoNavTarget: '(Not set)',
+      mapNoPortalHub: 'Unknown',
+      mapNoCities: '(No locations on this page)',
+      mapSectionPageMap: 'Page Map (mobile-friendly)',
+      mapSectionRegionCities: 'Region Cities',
+      mapSectionRegionInfo: 'Page Region Intel',
+      mapSectionAreaIntel: 'Current Region Intel',
+      mapFieldMapDisplay: 'Map Display',
+      mapFieldCurrentLocation: 'Current Location',
+      mapFieldCurrentRegion: 'Current Region',
+      mapFieldDifficulty: 'Region Difficulty',
+      mapFieldNavTarget: 'Navigation Target',
+      mapFieldCurrentPortalHub: 'Current Portal Hub',
+      mapFieldMainPortalHubs: 'Six Main Portal Hubs',
+      mapFieldFreeExplore: 'Free Exploration',
+      mapFieldLegend: 'Legend',
+      mapFieldNearbyInteractive: 'Nearby Interactions',
+      mapFieldNearbyScenes: 'Nearby Scenes',
+      mapFieldLandmarks: 'Landmarks',
+      mapFieldResources: 'Resources / Opportunities',
+      mapFieldPortalTo: 'Portal Destinations',
+      mapFieldMapPages: 'Map Pages',
+      mapFreeExploreOpen: 'Unlocked (set in-region destination via dropdown)',
+      mapFreeExploreLocked: 'Locked (finish local story first)',
+      mapHintMoveRule: '_Use dropdown for in-region movement. Use portal for cross-region movement._',
+      mapCurrentLocationSuffix: '(highlighted on map)',
+      mapInfoNearbyPrefix: 'Nearby',
+      mapPortalGuide: (preview) => `🌀 **Portal Guide:** Press "🗺️ Map" -> "🌀 Portal" -> choose destination (e.g. ${preview}).`,
+      mapNotFoundPlayer: '❌ Character not found. Please run /start first.',
+      mapUseInThread: '⚠️ Please use this in your game thread.',
+      portalTitle: '🌀 Portal Destinations',
+      portalDesc1: 'You have activated the portal network near',
+      portalDesc2: '.',
+      portalDesc3: '(The six main regional portal hubs are interconnected)',
+      portalDesc4: 'Choose a destination:',
+      portalBackMap: '🗺️ Back to Map',
+      portalBackStory: '📖 Back to Story',
+      portalNotReady: '⚠️ Portal is not enabled yet. In story choices, pick "Go to nearby portal" first.',
+      mapModeSwitchText: '✅ Switched to Text Map',
+      mapModeSwitchAscii: '✅ Switched to ASCII Map',
+      mapExploreLockedNotice: '🧭 Local story arc not finished. Free exploration is still locked.',
+      mapInvalidDestination: '⚠️ Please choose a valid destination.',
+      mapCrossRegionBlocked: '⚠️ In-region movement only allows locations in the same region. Use portal for cross-region travel.',
+      mapAlreadyHereNotice: (target) => `✅ You are already at ${target}`,
+      mapDestinationSetNotice: (target) => `✅ Destination set: ${target}. The next story step will move toward it.`,
+      mapAutoTravelLocked: (target) => `🧭 You want to go to **${target}**, but local story is not completed yet. Continue the main arc first.`,
+      mapAutoTravelCrossRegion: '🧭 In-region movement only supports same-region nodes; use portal for cross-region travel.',
+      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 You felt unstable pressure while advancing to **${target}** (estimated win rate ${winRate}%), so you regrouped at **${from}**.`,
+      mapAutoTravelMoved: (from, target) => `🧭 Following map coordinates, you moved from **${from}** to **${target}**.`,
+      portalInvalidDestination: '⚠️ Invalid portal destination.',
+      portalGateDenied: (target, winRate) => `🛑 Cannot travel to **${target}**: current win rate ${winRate}% (required > ${LOCATION_ENTRY_MIN_WINRATE}%).`,
+      portalTeleportStory: (from, to) => `🌀 Portal activated. Spatial fold complete.\nYou moved from **${from}** to **${to}**.`,
+      portalDoneTitle: '✅ Teleport Complete',
+      portalDoneDesc: (from, to) => `You teleported from **${from}** to **${to}**.\n\nNow press "📖 Back to Story" to generate new story and choices at the new location.`,
+      mapGotoHint: '🗺️ Map buttons are for viewing only. For movement, use the story option "Go to nearby portal".'
+    }
+  };
+  return map[code] || map['zh-TW'];
+}
+
+function getSettingsText(lang = 'zh-TW') {
+  const code = normalizeLangCode(lang);
+  const map = {
+    'zh-TW': {
+      title: '⚙️ 設定',
+      desc: '遊戲設置（可在此查看世界導讀）',
+      fieldLanguage: '🌐 語言 / Language',
+      fieldWallet: '💳 錢包',
+      fieldWorldIntro: '📖 世界導讀',
+      currentPrefix: '目前：',
+      langNameZhTw: '中文（繁體）',
+      langNameZhCn: '中文（簡體）',
+      langNameEn: 'English',
+      walletBound: (addr) => `已綁定：\`${addr || 'unknown'}\``,
+      walletUnbound: '未綁定（可中途綁定，立即入帳）',
+      btnSyncWallet: '🔄 同步資產',
+      btnBindWallet: '💳 綁定錢包',
+      btnBack: '🔙 返回',
+      btnWorld: '🌍 Renaiss世界',
+      worldTitle: '🌍 Renaiss 世界',
+      worldDescSuffix: '主線會由你的行動被動觸發。',
+      btnBackSettings: '⚙️ 返回設定',
+      btnBackAdventure: '🔙 返回冒險'
+    },
+    'zh-CN': {
+      title: '⚙️ 设置',
+      desc: '游戏设置（可在此查看世界导读）',
+      fieldLanguage: '🌐 语言 / Language',
+      fieldWallet: '💳 钱包',
+      fieldWorldIntro: '📖 世界导读',
+      currentPrefix: '当前：',
+      langNameZhTw: '中文（繁体）',
+      langNameZhCn: '中文（简体）',
+      langNameEn: 'English',
+      walletBound: (addr) => `已绑定：\`${addr || 'unknown'}\``,
+      walletUnbound: '未绑定（可中途绑定，立即入账）',
+      btnSyncWallet: '🔄 同步资产',
+      btnBindWallet: '💳 绑定钱包',
+      btnBack: '🔙 返回',
+      btnWorld: '🌍 Renaiss世界',
+      worldTitle: '🌍 Renaiss 世界',
+      worldDescSuffix: '主线会由你的行动被动触发。',
+      btnBackSettings: '⚙️ 返回设置',
+      btnBackAdventure: '🔙 返回冒险'
+    },
+    en: {
+      title: '⚙️ Settings',
+      desc: 'Game settings (world primer available here)',
+      fieldLanguage: '🌐 Language',
+      fieldWallet: '💳 Wallet',
+      fieldWorldIntro: '📖 World Primer',
+      currentPrefix: 'Current:',
+      langNameZhTw: 'Traditional Chinese',
+      langNameZhCn: 'Simplified Chinese',
+      langNameEn: 'English',
+      walletBound: (addr) => `Bound: \`${addr || 'unknown'}\``,
+      walletUnbound: 'Not bound (you can bind anytime and sync instantly)',
+      btnSyncWallet: '🔄 Sync Assets',
+      btnBindWallet: '💳 Bind Wallet',
+      btnBack: '🔙 Back',
+      btnWorld: '🌍 Renaiss World',
+      worldTitle: '🌍 Renaiss World',
+      worldDescSuffix: 'Main story is passively triggered by your actions.',
+      btnBackSettings: '⚙️ Back to Settings',
+      btnBackAdventure: '🔙 Back to Adventure'
+    }
+  };
+  return map[code] || map['zh-TW'];
+}
+
+function buildPortalUsageGuide(player, lang = '') {
+  const uiLang = normalizeLangCode(lang || player?.language || 'zh-TW');
+  const tx = getMapText(uiLang);
   const allDestinations = typeof getPortalDestinations === 'function'
     ? getPortalDestinations(player?.location || '')
     : [];
   const destinations = Array.isArray(allDestinations) ? allDestinations : [];
-  const preview = destinations.length > 0 ? destinations.slice(0, 3).join('、') : '暫無可用節點';
-  return `🌀 **傳送門操作：** 先按「🗺️ 地圖」→ 再按「🌀 傳送門」→ 選目的地（如：${preview}）。`;
+  const preview = destinations.length > 0 ? joinByLang(destinations.slice(0, 3), uiLang) : tx.mapNoPortal;
+  return tx.mapPortalGuide(preview);
 }
 
 function hasRoamTravelIntentText(text = '') {
@@ -4470,6 +5017,8 @@ function pickRoamDestination(player) {
 
 function maybeApplyRoamMovement(player, event, result, queueMemory) {
   if (!player || !event || !result) return null;
+  const uiLang = getPlayerUILang(player);
+  const tx = getMapText(uiLang);
   const fromLocation = String(player.location || '');
   const manualTarget = String(player.navigationTarget || '').trim();
   if (!manualTarget) return null;
@@ -4481,7 +5030,7 @@ function maybeApplyRoamMovement(player, event, result, queueMemory) {
   const islandCompleted = Boolean(islandState?.completed);
   if (!islandCompleted) {
     player.navigationTarget = '';
-    const lockedLine = `🧭 你想前往 **${manualTarget}**，但本地劇情尚未完成，只能先沿主線推進。`;
+    const lockedLine = tx.mapAutoTravelLocked(manualTarget);
     result.message = `${String(result.message || '').trim()}\n\n${lockedLine}`.trim();
     return null;
   }
@@ -4495,7 +5044,7 @@ function maybeApplyRoamMovement(player, event, result, queueMemory) {
   const targetProfile = typeof getLocationProfile === 'function' ? getLocationProfile(targetLocation) : null;
   if (!fromProfile || !targetProfile || String(fromProfile.region || '') !== String(targetProfile.region || '')) {
     player.navigationTarget = '';
-    const blockedLine = `🧭 區內移動僅限同一大區；跨區請使用主傳送門。`;
+    const blockedLine = tx.mapAutoTravelCrossRegion;
     result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
     return null;
   }
@@ -4503,7 +5052,7 @@ function maybeApplyRoamMovement(player, event, result, queueMemory) {
   const entryGate = canEnterLocation(player, targetLocation);
   if (!entryGate.allowed) {
     player.navigationTarget = '';
-    const blockedLine = `🛑 你朝 **${targetLocation}** 推進時感到壓力失衡（預估勝率 ${entryGate.winRate}%），只好先在 **${fromLocation}** 整備。`;
+    const blockedLine = tx.mapAutoTravelGateBlocked(targetLocation, fromLocation, entryGate.winRate);
     result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
     result.autoTravel = {
       fromLocation,
@@ -4530,7 +5079,7 @@ function maybeApplyRoamMovement(player, event, result, queueMemory) {
   player.portalMenuOpen = false;
   player.navigationTarget = '';
 
-  const moveLine = `🧭 你依照地圖座標離開 **${fromLocation}**，一路推進到 **${targetLocation}**。`;
+  const moveLine = tx.mapAutoTravelMoved(fromLocation, targetLocation);
   result.message = `${String(result.message || '').trim()}\n\n${moveLine}`.trim();
   result.autoTravel = { fromLocation, targetLocation, reason: 'manual_navigation' };
 
@@ -4594,7 +5143,8 @@ function maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice)
   return null;
 }
 
-function buildMapComponents(page, currentLocation, canOpenPortal = false, mapViewMode = 'text', regionLocations = []) {
+function buildMapComponents(page, currentLocation, canOpenPortal = false, mapViewMode = 'text', regionLocations = [], lang = 'zh-TW') {
+  const tx = getMapText(lang);
   const sourceLocations = Array.isArray(regionLocations) && regionLocations.length > 0
     ? regionLocations
     : MAP_LOCATIONS;
@@ -4621,32 +5171,32 @@ function buildMapComponents(page, currentLocation, canOpenPortal = false, mapVie
   const navButtons = [
       new ButtonBuilder()
         .setCustomId(`map_page_${safePage - 1}`)
-        .setLabel('⬅️ 上一頁')
+        .setLabel(tx.mapBtnPrev)
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(safePage <= 0),
       new ButtonBuilder()
         .setCustomId(`map_page_${safePage + 1}`)
-        .setLabel('下一頁 ➡️')
+        .setLabel(tx.mapBtnNext)
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(safePage >= maxPage),
-      new ButtonBuilder().setCustomId('map_back_main').setLabel('📖 返回故事').setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('map_back_main').setLabel(tx.mapBtnBackStory).setStyle(ButtonStyle.Success)
   ];
   if (canOpenPortal) {
     navButtons.splice(2, 0, new ButtonBuilder()
       .setCustomId('map_open_portal')
-      .setLabel('🌀 傳送門')
+      .setLabel(tx.mapBtnPortal)
       .setStyle(ButtonStyle.Primary));
   }
   rows.push(new ActionRowBuilder().addComponents(navButtons));
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`map_view_text_${safePage}`)
-      .setLabel('📄 文字版')
+      .setLabel(tx.mapBtnText)
       .setStyle(safeMapViewMode === 'text' ? ButtonStyle.Primary : ButtonStyle.Secondary)
       .setDisabled(safeMapViewMode === 'text'),
     new ButtonBuilder()
       .setCustomId(`map_view_ascii_${safePage}`)
-      .setLabel('🧩 ASCII版')
+      .setLabel(tx.mapBtnAscii)
       .setStyle(safeMapViewMode === 'ascii' ? ButtonStyle.Primary : ButtonStyle.Secondary)
       .setDisabled(safeMapViewMode === 'ascii')
   ));
@@ -4656,11 +5206,13 @@ function buildMapComponents(page, currentLocation, canOpenPortal = false, mapVie
 
 async function showIslandMap(interaction, user, page = 0, notice = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const tx = getMapText(uiLang);
   if (!player) {
     if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+      await interaction.followUp({ content: tx.mapNotFoundPlayer, ephemeral: true }).catch(() => {});
     } else {
-      await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.mapNotFoundPlayer, ephemeral: true }).catch(() => {});
     }
     return;
   }
@@ -4687,9 +5239,10 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     player.location,
     canOpenPortal,
     mapViewMode,
-    regionLocations
+    regionLocations,
+    uiLang
   );
-  rows.push(buildRegionMoveSelectRow(player, regionSnapshot, islandCompleted));
+  rows.push(buildRegionMoveSelectRow(player, regionSnapshot, islandCompleted, uiLang));
   const useWideAnsiMap = mapViewMode === 'ascii';
   const renderedMap = useWideAnsiMap && !regionSnapshot
     ? (typeof buildIslandMapAnsi === 'function'
@@ -4704,91 +5257,101 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     : '';
   const pageSummary = pageLocations.map((loc) => {
     const profile = typeof getLocationProfile === 'function' ? getLocationProfile(loc) : null;
-    const region = profile?.region || '未知區域';
+    const region = profile?.region || tx.mapNoRegion;
     const difficulty = Number(profile?.difficulty || 3);
     const marker = loc === player.location ? '◉' : '•';
     if (!useWideAnsiMap) {
       return `${marker} ${loc}（${region}｜D${difficulty}）`;
     }
     const nearby = Array.isArray(profile?.nearby) && profile.nearby.length > 0
-      ? profile.nearby.slice(0, 2).join('、')
-      : '未知';
-    return `${marker} ${loc}（${region}｜D${difficulty}）附近：${nearby}`;
+      ? joinByLang(profile.nearby.slice(0, 2), uiLang)
+      : tx.mapNoNearby;
+    return `${marker} ${loc}（${region}｜D${difficulty}）${tx.mapInfoNearbyPrefix}：${nearby}`;
   }).join('\n');
   const compactMap = useWideAnsiMap
     ? ''
-    : `**本頁地圖（手機友善）**\n${pageSummary || '（本頁無地點）'}`;
+    : `**${tx.mapSectionPageMap}**\n${pageSummary || tx.mapNoCities}`;
   const locationSummary = Array.isArray(regionSnapshot?.locations)
     ? regionSnapshot.locations
       .map((row) => `${row.isCurrent ? '◉' : (row.isPortalHub ? '◎' : '●')} ${row.location}`)
-      .join('、')
+      .join(uiLang === 'en' ? ', ' : '、')
     : '';
   const mapBlock = useWideAnsiMap
     ? (regionSnapshot
       ? '```' + regionSnapshot.mapRows.join('\n') + '\n```'
       : ('```ansi\n' + renderedMap + '\n```'))
     : compactMap;
-  const mapImageStatus = `圖例：@你、◎主傳送門、●城市、▲森林（城市名前有◎代表該城可直接傳送）`;
+  const mapImageStatus = tx.mapLegendImage;
   const renderedMapImage = regionSnapshot ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus) : null;
   const hasRenderedMapImage = Boolean(renderedMapImage);
   const visibleMapBlock = hasRenderedMapImage ? '' : mapBlock;
   const mapDisplayLabel = hasRenderedMapImage
-    ? 'Pillow 圖像版'
-    : (useWideAnsiMap ? 'ASCII 版（圖像渲染失敗，回退）' : '文字版（圖像渲染失敗，回退）');
+    ? tx.mapDisplayImage
+    : (useWideAnsiMap ? tx.mapDisplayAsciiFallback : tx.mapDisplayTextFallback);
   const nearbyPlaces = Array.isArray(currentProfile?.nearby) && currentProfile.nearby.length > 0
-    ? currentProfile.nearby.slice(0, 4).join('、')
-    : '未知';
+    ? joinByLang(currentProfile.nearby.slice(0, 4), uiLang)
+    : tx.mapNoNearby;
   const nearbyLandmarks = Array.isArray(currentProfile?.landmarks) && currentProfile.landmarks.length > 0
-    ? currentProfile.landmarks.slice(0, 3).join('、')
-    : '未知';
+    ? joinByLang(currentProfile.landmarks.slice(0, 3), uiLang)
+    : tx.mapNoNearby;
   const nearbyResources = Array.isArray(currentProfile?.resources) && currentProfile.resources.length > 0
-    ? currentProfile.resources.slice(0, 4).join('、')
-    : '未知';
+    ? joinByLang(currentProfile.resources.slice(0, 4), uiLang)
+    : tx.mapNoNearby;
   const nearbyPortalsText = Array.isArray(nearbyPortals) && nearbyPortals.length > 0
-    ? nearbyPortals.slice(0, 6).join('、')
-    : '附近無可用傳送門';
+    ? joinByLang(nearbyPortals.slice(0, 6), uiLang)
+    : tx.mapNoPortal;
+  const navTargetText = String(player.navigationTarget || '').trim() || tx.mapNoNavTarget;
+  const currentLocationText = player.location || tx.mapNoProfile;
+  const regionNameText = regionSnapshot?.regionName || currentProfile?.region || tx.mapNoRegion;
+  const difficultyText = currentProfile ? `D${currentProfile.difficulty}` : tx.mapNoProfile;
+  const portalHubText = typeof getLocationPortalHub === 'function'
+    ? (getLocationPortalHub(player.location || '') || tx.mapNoPortalHub)
+    : tx.mapNoPortalHub;
+  const mainPortalHubList = typeof getRegionPortalHubs === 'function' ? getRegionPortalHubs() : [];
+  const mainPortalHubText = joinByLang(mainPortalHubList, uiLang) || tx.mapNoPortalHub;
+  const freeExploreText = islandCompleted ? tx.mapFreeExploreOpen : tx.mapFreeExploreLocked;
   const mapDesc = hasRenderedMapImage
     ? (
-      `**地圖顯示：** ${mapDisplayLabel}` +
-      `\n**導航目標：** ${String(player.navigationTarget || '').trim() || '（未設定）'}` +
-      `\n**自由探索：** ${islandCompleted ? '已開放（可用下拉選單設定區內目的地）' : '未開放（先完成本地劇情）'}` +
-      `\n**附近可互動內容：**` +
-      `\n- 周邊場景：${nearbyPlaces}` +
-      `\n- 地標：${nearbyLandmarks}` +
-      `\n- 資源/商機：${nearbyResources}` +
-      `\n- 傳送門可往：${nearbyPortalsText}` +
-      `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
-      (canOpenPortal ? `\n\n${buildPortalUsageGuide(player)}` : '') +
-      '\n_區內移動請用下拉選單，跨區移動請用傳送門。_' +
+      `**${tx.mapFieldMapDisplay}：** ${mapDisplayLabel}` +
+      `\n**${tx.mapFieldNavTarget}：** ${navTargetText}` +
+      `\n**${tx.mapFieldFreeExplore}：** ${freeExploreText}` +
+      `\n**${tx.mapFieldNearbyInteractive}：**` +
+      `\n- ${tx.mapFieldNearbyScenes}：${nearbyPlaces}` +
+      `\n- ${tx.mapFieldLandmarks}：${nearbyLandmarks}` +
+      `\n- ${tx.mapFieldResources}：${nearbyResources}` +
+      `\n- ${tx.mapFieldPortalTo}：${nearbyPortalsText}` +
+      `\n**${tx.mapFieldMapPages}：** ${safePage + 1}/${maxPage + 1}` +
+      (canOpenPortal ? `\n\n${buildPortalUsageGuide(player, uiLang)}` : '') +
+      `\n${tx.mapHintMoveRule}` +
       (notice ? `\n${notice}` : '')
     )
     : (
       visibleMapBlock +
-      `\n**目前位置：** ◉${player.location || '未知'}◉（地圖中已高亮）` +
-      `\n**地圖顯示：** ${mapDisplayLabel}` +
-      `\n**當前分區：** ${regionSnapshot?.regionName || currentProfile?.region || '未知'}` +
-      `\n**區域難度：** ${currentProfile ? `D${currentProfile.difficulty}` : '未知'}` +
-      `\n**導航目標：** ${String(player.navigationTarget || '').trim() || '（未設定）'}` +
-      `\n**當前主傳送門：** ${typeof getLocationPortalHub === 'function' ? (getLocationPortalHub(player.location || '') || '未知') : '未知'}` +
-      `\n**六大區主傳送門：** ${(typeof getRegionPortalHubs === 'function' ? getRegionPortalHubs() : []).join('、') || '未知'}` +
-      `\n**自由探索：** ${islandCompleted ? '已開放（可用下拉選單設定區內目的地）' : '未開放（先完成本地劇情）'}` +
-      `\n**圖例：** @黃色=你｜◎橘色=主傳送門｜●紫色=城市｜▲綠色=森林` +
-      `\n**附近可互動內容：**` +
-      `\n- 周邊場景：${nearbyPlaces}` +
-      `\n- 地標：${nearbyLandmarks}` +
-      `\n- 資源/商機：${nearbyResources}` +
-      `\n- 傳送門可往：${nearbyPortalsText}` +
-      (locationContext ? `\n**當前地區情報：** ${locationContext}` : '') +
-      `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
-      (locationSummary ? `\n\n**分區城市**\n${locationSummary}` : '') +
-      (!hasRenderedMapImage && useWideAnsiMap && pageSummary ? `\n\n**本頁地區情報**\n${pageSummary}` : '') +
-      (canOpenPortal ? `\n\n${buildPortalUsageGuide(player)}` : '') +
-      '\n_區內移動請用下拉選單，跨區移動請用傳送門。_' +
+      `\n**${tx.mapFieldCurrentLocation}：** ◉${currentLocationText}◉ ${tx.mapCurrentLocationSuffix}` +
+      `\n**${tx.mapFieldMapDisplay}：** ${mapDisplayLabel}` +
+      `\n**${tx.mapFieldCurrentRegion}：** ${regionNameText}` +
+      `\n**${tx.mapFieldDifficulty}：** ${difficultyText}` +
+      `\n**${tx.mapFieldNavTarget}：** ${navTargetText}` +
+      `\n**${tx.mapFieldCurrentPortalHub}：** ${portalHubText}` +
+      `\n**${tx.mapFieldMainPortalHubs}：** ${mainPortalHubText}` +
+      `\n**${tx.mapFieldFreeExplore}：** ${freeExploreText}` +
+      `\n**${tx.mapFieldLegend}：** ${tx.mapLegendText}` +
+      `\n**${tx.mapFieldNearbyInteractive}：**` +
+      `\n- ${tx.mapFieldNearbyScenes}：${nearbyPlaces}` +
+      `\n- ${tx.mapFieldLandmarks}：${nearbyLandmarks}` +
+      `\n- ${tx.mapFieldResources}：${nearbyResources}` +
+      `\n- ${tx.mapFieldPortalTo}：${nearbyPortalsText}` +
+      (locationContext ? `\n**${tx.mapSectionAreaIntel}：** ${locationContext}` : '') +
+      `\n**${tx.mapFieldMapPages}：** ${safePage + 1}/${maxPage + 1}` +
+      (locationSummary ? `\n\n**${tx.mapSectionRegionCities}**\n${locationSummary}` : '') +
+      (!hasRenderedMapImage && useWideAnsiMap && pageSummary ? `\n\n**${tx.mapSectionRegionInfo}**\n${pageSummary}` : '') +
+      (canOpenPortal ? `\n\n${buildPortalUsageGuide(player, uiLang)}` : '') +
+      `\n${tx.mapHintMoveRule}` +
       (notice ? `\n${notice}` : '')
     );
 
   const embed = new EmbedBuilder()
-    .setTitle('🗺️ Renaiss 群島海圖')
+    .setTitle(tx.mapTitle)
     .setColor(0x4da6ff)
     .setDescription(mapDesc);
   if (renderedMapImage) {
@@ -4797,9 +5360,10 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const files = renderedMapImage
     ? [new AttachmentBuilder(renderedMapImage, { name: 'region-map.png' })]
     : [];
+  const payload = { embeds: [embed], components: rows, files };
 
   if ((interaction.isButton && interaction.isButton()) || (interaction.isStringSelectMenu && interaction.isStringSelectMenu())) {
-    await interaction.update({ embeds: [embed], components: rows, files }).catch(() => {});
+    await interaction.update(payload).catch(() => {});
     if (interaction.message?.id) {
       trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
     }
@@ -4807,18 +5371,20 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   }
 
   if (interaction.deferred || interaction.replied) {
-    const msg = await interaction.followUp({ embeds: [embed], components: rows, files }).catch(() => null);
+    const msg = await interaction.followUp(payload).catch(() => null);
     if (msg) trackActiveGameMessage(player, interaction.channel?.id, msg.id);
   } else {
-    const msg = await interaction.reply({ embeds: [embed], components: rows, files }).catch(() => null);
+    const msg = await interaction.reply(payload).catch(() => null);
     if (msg) trackActiveGameMessage(player, interaction.channel?.id, msg.id);
   }
 }
 
 async function showPortalSelection(interaction, user) {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const tx = getMapText(uiLang);
   if (!player) {
-    await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: tx.mapNotFoundPlayer, ephemeral: true }).catch(() => {});
     return;
   }
   ensurePlayerIslandState(player);
@@ -4829,7 +5395,7 @@ async function showPortalSelection(interaction, user) {
   const destinations = Array.isArray(allDestinations) ? allDestinations : [];
   if (!player.portalMenuOpen || allDestinations.length === 0) {
     await interaction.reply({
-      content: '⚠️ 你目前尚未啟用傳送門。請先在故事選項中選擇「前往附近傳送門」。',
+      content: tx.portalNotReady,
       ephemeral: true
     }).catch(() => {});
     return;
@@ -4847,18 +5413,18 @@ async function showPortalSelection(interaction, user) {
   }
   rows.push(
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('map_page_0').setLabel('🗺️ 返回地圖').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('map_back_main').setLabel('📖 返回故事').setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('map_page_0').setLabel(tx.portalBackMap).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('map_back_main').setLabel(tx.portalBackStory).setStyle(ButtonStyle.Success)
     )
   );
 
   const embed = new EmbedBuilder()
-    .setTitle('🌀 傳送門目的地')
+    .setTitle(tx.portalTitle)
     .setColor(0x7b68ee)
     .setDescription(
-      `你已啟動 ${player.location} 附近的傳送門網路。\n` +
-      `（六大區主傳送門互通）\n` +
-      `請點選要傳送到的目的地：\n\n` +
+      `${tx.portalDesc1} ${player.location} ${tx.portalDesc2}\n` +
+      `${tx.portalDesc3}\n` +
+      `${tx.portalDesc4}\n\n` +
       destinations.map((loc, idx) => `${idx + 1}. ${loc}`).join('\n')
     );
 
@@ -5512,6 +6078,7 @@ async function handlePlay(interaction, user) {
 async function handlePet(interaction, user) {
   const pet = PET.loadPet(user.id);
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
   
   if (!pet) {
     await interaction.reply({ content: '❌ 你還沒有寵物！', ephemeral: true });
@@ -5528,9 +6095,9 @@ async function handlePet(interaction, user) {
     .setColor(pet.type === '正派' ? 0x00ff00 : 0xff0000)
     .setDescription(pet.appearance)
     .addFields(
-      { name: t('hp'), value: `${pet.hp}/${pet.maxHp}`, inline: true },
-      { name: t('atk'), value: String(pet.attack), inline: true },
-      { name: t('def'), value: String(pet.defense), inline: true },
+      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('atk', uiLang), value: String(pet.attack), inline: true },
+      { name: t('def', uiLang), value: String(pet.defense), inline: true },
       { name: '📊 等級', value: String(pet.level), inline: true },
       { name: '🏷️ 類型', value: pet.type, inline: true }
     )
@@ -5538,8 +6105,8 @@ async function handlePet(interaction, user) {
   
   if (player) {
     embed.addFields(
-      { name: t('hp'), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
-      { name: t('gold'), value: String(player.stats.財富), inline: true },
+      { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
+      { name: t('gold', uiLang), value: String(player.stats.財富), inline: true },
       { name: '📍 位置', value: player.location, inline: true }
     );
   }
@@ -5594,8 +6161,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (interaction.isStringSelectMenu()) {
     if (customId === 'map_region_move_select') {
       const player = CORE.loadPlayer(user.id);
+      const uiLang = getPlayerUILang(player);
+      const tx = getMapText(uiLang);
       if (!player) {
-        await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: tx.mapNotFoundPlayer, ephemeral: true }).catch(() => {});
         return;
       }
       ensurePlayerIslandState(player);
@@ -5604,38 +6173,128 @@ CLIENT.on('interactionCreate', async (interaction) => {
         : null;
       if (!islandState?.completed) {
         await interaction.reply({
-          content: '🧭 本地劇情尚未完成，還不能自由探索。先推進本島故事。',
+          content: tx.mapExploreLockedNotice,
           ephemeral: true
         }).catch(() => {});
         return;
       }
       const target = String(interaction.values?.[0] || '').trim();
       if (!target || target === '__locked__') {
-        await interaction.reply({ content: '⚠️ 請選擇有效目的地。', ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: tx.mapInvalidDestination, ephemeral: true }).catch(() => {});
         return;
       }
       const currentProfile = typeof getLocationProfile === 'function' ? getLocationProfile(player.location || '') : null;
       const targetProfile = typeof getLocationProfile === 'function' ? getLocationProfile(target) : null;
       if (!currentProfile || !targetProfile || String(currentProfile.region || '') !== String(targetProfile.region || '')) {
         await interaction.reply({
-          content: '⚠️ 區內移動只能選同一大區地點；跨區請使用主傳送門。',
+          content: tx.mapCrossRegionBlocked,
           ephemeral: true
         }).catch(() => {});
         return;
       }
       if (target === String(player.location || '')) {
-        await showIslandMap(interaction, user, 0, `✅ 你已在 ${target}`);
+        await showIslandMap(interaction, user, 0, tx.mapAlreadyHereNotice(target));
         return;
       }
       player.navigationTarget = target;
       CORE.savePlayer(player);
-      await showIslandMap(interaction, user, 0, `✅ 已設定目的地：${target}。下一段故事會朝這裡推進。`);
+      await showIslandMap(interaction, user, 0, tx.mapDestinationSetNotice(target));
       return;
     }
 
     if (customId === 'moves_pet_select') {
       const petId = String(interaction.values?.[0] || '');
       await showMovesList(interaction, user, petId);
+      return;
+    }
+
+    if (customId === 'moves_learn_chip') {
+      const raw = String(interaction.values?.[0] || '').trim();
+      const idx = raw.indexOf('::');
+      const petId = idx >= 0 ? raw.slice(0, idx) : '';
+      const moveId = idx >= 0 ? raw.slice(idx + 2) : '';
+      if (!petId || !moveId) {
+        await interaction.reply({ content: '⚠️ 技能晶片資料錯誤，請重新選擇。', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const player = CORE.loadPlayer(user.id);
+      const pet = PET.getPetById(petId);
+      if (!player || !pet || pet.ownerId !== user.id) {
+        await interaction.reply({ content: '⚠️ 找不到要操作的寵物或角色。', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const moveTemplate = getPetMovePool(pet.type).find((m) => String(m?.id || '').trim() === moveId) || null;
+      if (!moveTemplate?.name) {
+        await interaction.reply({ content: '⚠️ 找不到該技能模板，可能與寵物類型不符。', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const consumed = consumeSkillChipFromInventory(player, moveTemplate.name);
+      if (!consumed) {
+        await interaction.reply({ content: `⚠️ 背包內找不到「${SKILL_CHIP_PREFIX}${moveTemplate.name}」。`, ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const learned = learnMoveFromChipForPet(pet, moveTemplate);
+      if (!learned?.success) {
+        addSkillChipToInventory(player, moveTemplate.name);
+        CORE.savePlayer(player);
+        await interaction.reply({ content: `❌ ${learned?.reason || '學習失敗'}（已退回晶片）`, ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      PET.savePet(pet);
+      CORE.savePlayer(player);
+      const note = learned.replacedMoveName
+        ? `（上陣名額已滿，已替換「${learned.replacedMoveName}」）`
+        : '';
+      await showMovesList(interaction, user, pet.id, `已學習並上陣：${moveTemplate.name} ${note}`.trim());
+      return;
+    }
+
+    if (customId === 'moves_unlearn_chip') {
+      const raw = String(interaction.values?.[0] || '').trim();
+      const idx = raw.indexOf('::');
+      const petId = idx >= 0 ? raw.slice(0, idx) : '';
+      const moveId = idx >= 0 ? raw.slice(idx + 2) : '';
+      if (!petId || !moveId) {
+        await interaction.reply({ content: '⚠️ 取消學習資料錯誤，請重新選擇。', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const player = CORE.loadPlayer(user.id);
+      const pet = PET.getPetById(petId);
+      if (!player || !pet || pet.ownerId !== user.id) {
+        await interaction.reply({ content: '⚠️ 找不到要操作的寵物或角色。', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const move = (Array.isArray(pet.moves) ? pet.moves : []).find((m) => String(m?.id || '').trim() === moveId) || null;
+      if (!move) {
+        await interaction.reply({ content: '⚠️ 這招不存在或已被移除。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      if (PROTECTED_MOVE_IDS.has(String(move.id || '').trim())) {
+        await interaction.reply({ content: '⚠️ 基礎招式不能取消學習。', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const forgotten = typeof PET.forgetMove === 'function' ? PET.forgetMove(pet, moveId) : null;
+      if (!forgotten?.success) {
+        await interaction.reply({ content: `❌ ${forgotten?.reason || '取消學習失敗'}`, ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      pet.activeMoveIds = (Array.isArray(pet.activeMoveIds) ? pet.activeMoveIds : [])
+        .map((id) => String(id || '').trim())
+        .filter((id) => id && id !== moveId);
+      normalizePetMoveLoadout(pet, false);
+      PET.savePet(pet);
+      addSkillChipToInventory(player, forgotten?.move?.name || move.name);
+      CORE.savePlayer(player);
+      await showMovesList(interaction, user, pet.id, `已取消學習：${forgotten?.move?.name || move.name}（已退回技能晶片）`);
       return;
     }
 
@@ -5988,11 +6647,13 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (customId === 'settings_back') {
     const player = CORE.loadPlayer(user.id);
     const pet = PET.loadPet(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getSettingsText(uiLang);
     if (player && pet && interaction.channel?.isThread()) {
       // Restore the game message by calling sendMainMenuToThread
       await sendMainMenuToThread(interaction.channel, player, pet, interaction);
     } else {
-      await interaction.update({ content: '請在遊戲討論串中使用', components: [] });
+      await interaction.update({ content: tx.btnBackAdventure, components: [] });
     }
     return;
   }
@@ -6014,6 +6675,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const page = Number.parseInt(match?.[2] || '0', 10);
     const safePage = Number.isNaN(page) ? 0 : page;
     const player = CORE.loadPlayer(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getMapText(uiLang);
     if (player) {
       player.mapViewMode = mode;
       CORE.savePlayer(player);
@@ -6022,7 +6685,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       interaction,
       user,
       safePage,
-      `✅ 已切換為 ${mode === 'ascii' ? 'ASCII 地圖' : '文字地圖'}`
+      (mode === 'ascii' ? tx.mapModeSwitchAscii : tx.mapModeSwitchText)
     );
     return;
   }
@@ -6041,8 +6704,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (customId.startsWith('portal_jump_')) {
     const idx = parseInt(customId.replace('portal_jump_', ''), 10);
     const player = CORE.loadPlayer(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getMapText(uiLang);
     if (!player) {
-      await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.mapNotFoundPlayer, ephemeral: true }).catch(() => {});
       return;
     }
     ensurePlayerIslandState(player);
@@ -6053,14 +6718,14 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const destinations = Array.isArray(rawDestinations) ? rawDestinations : [];
     const targetLocation = destinations[Number.isNaN(idx) ? -1 : idx];
     if (!targetLocation) {
-      await interaction.reply({ content: '⚠️ 無效的傳送目的地。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.portalInvalidDestination, ephemeral: true }).catch(() => {});
       return;
     }
 
     const gate = canEnterLocation(player, targetLocation);
     if (!gate.allowed) {
       await interaction.reply({
-        content: `🛑 無法前往 **${targetLocation}**：目前勝率 ${gate.winRate}%（需要 > ${LOCATION_ENTRY_MIN_WINRATE}%）。`,
+        content: tx.portalGateDenied(targetLocation, gate.winRate),
         ephemeral: true
       }).catch(() => {});
       return;
@@ -6072,8 +6737,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     ensurePlayerIslandState(player);
     player.portalMenuOpen = false;
     player.navigationTarget = '';
-    player.currentStory =
-      `🌀 傳送門正在開啟，空間折疊完成。\n你已由 **${fromLocation}** 抵達 **${targetLocation}**。`;
+    player.currentStory = tx.portalTeleportStory(fromLocation, targetLocation);
     player.eventChoices = [];
     if (player.mapReturnSnapshot) delete player.mapReturnSnapshot;
     rememberPlayer(player, {
@@ -6086,22 +6750,22 @@ CLIENT.on('interactionCreate', async (interaction) => {
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
-      .setTitle('✅ 傳送完成')
+      .setTitle(tx.portalDoneTitle)
       .setColor(0x7b68ee)
-      .setDescription(
-        `你已由 **${fromLocation}** 傳送至 **${targetLocation}**。\n\n` +
-        '接下來按「📖 返回故事」，系統會以新地點生成新的故事與選項。'
-      );
+      .setDescription(tx.portalDoneDesc(fromLocation, targetLocation));
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('map_back_main').setLabel('📖 返回故事').setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('map_back_main').setLabel(tx.portalBackStory).setStyle(ButtonStyle.Success)
     );
     await interaction.update({ embeds: [embed], components: [row] }).catch(() => {});
     return;
   }
 
   if (customId.startsWith('map_goto_')) {
+    const player = CORE.loadPlayer(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getMapText(uiLang);
     await interaction.reply({
-      content: '🗺️ 地圖按鈕僅供查看，移動請透過劇情中的「前往傳送門」選項。',
+      content: tx.mapGotoHint,
       ephemeral: true
     }).catch(() => {});
     return;
@@ -6110,8 +6774,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (customId === 'map_back_main') {
     const player = CORE.loadPlayer(user.id);
     const pet = PET.loadPet(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getMapText(uiLang);
     if (!player || !pet || !interaction.channel?.isThread()) {
-      await interaction.reply({ content: '⚠️ 請回到遊戲討論串使用。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.mapUseInThread, ephemeral: true }).catch(() => {});
       return;
     }
 
@@ -6675,13 +7341,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
   
-  // ===== 學習招式 =====
-  if (customId.startsWith('learn_move_')) {
-    const idx = parseInt(customId.split('_')[2]);
-    await handleLearnMove(interaction, user, idx);
-    return;
-  }
-  
   // ===== 分配 HP =====
   if (customId.startsWith('alloc_hp_')) {
     const petId = customId.replace('alloc_hp_', '');
@@ -6947,6 +7606,7 @@ async function createCharacterWithName(interaction, user, alignment, charName) {
   // 取得選擇的語言
   const selectedLang = getPlayerTempData(user.id, 'language') || 'zh-TW';
   player.language = selectedLang;
+  const uiLang = getPlayerUILang(player);
   player.currentStory = '';
   player.eventChoices = [];
   CORE.savePlayer(player);
@@ -6964,8 +7624,8 @@ async function createCharacterWithName(interaction, user, alignment, charName) {
     .addFields(
       { name: '📍 位置', value: player.location, inline: true },
       { name: '🎚️ 出生難度', value: spawnProfile ? `D${spawnProfile.difficulty}` : 'D1', inline: true },
-      { name: t('hp'), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
-      { name: t('gold'), value: String(player.stats.財富), inline: true }
+      { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
+      { name: t('gold', uiLang), value: String(player.stats.財富), inline: true }
     );
   
   const row = new ActionRowBuilder().addComponents(
@@ -7141,6 +7801,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
 // ============== 名字提交（Modal）=============
 async function handleNameSubmit(interaction, user) {
   const pet = PET.loadPet(user.id);
+  const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
   
   if (!pet || !pet.waitingForName) {
     await interaction.reply({ content: '❌ 錯誤！', components: [] });
@@ -7173,9 +7835,9 @@ async function handleNameSubmit(interaction, user) {
     .addFields(
       { name: '🐾 名字', value: pet.name, inline: true },
       { name: '🏷️ 類型', value: pet.type, inline: true },
-      { name: t('hp'), value: `${pet.hp}/${pet.maxHp}`, inline: true },
-      { name: t('atk'), value: String(pet.attack), inline: true },
-      { name: t('def'), value: String(pet.defense), inline: true },
+      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('atk', uiLang), value: String(pet.attack), inline: true },
+      { name: t('def', uiLang), value: String(pet.defense), inline: true },
       { name: '⚡ 速度', value: String(pet.speed), inline: true }
     )
     .addFields({ name: '📜 招式', value: dmgInfo, inline: false });
@@ -7210,6 +7872,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   const userId = interaction.user.id;
   const pet = PET.loadPet(userId);
+  const player = CORE.loadPlayer(userId);
+  const uiLang = getPlayerUILang(player);
   
   if (!pet || !pet.waitingForName) return;
   
@@ -7234,7 +7898,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     .addFields(
       { name: '🐾 名字', value: pet.name, inline: true },
       { name: '🏷️ 類型', value: pet.type, inline: true },
-      { name: t('hp'), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
       { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
       { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
     )
@@ -7708,35 +8372,36 @@ async function showMainMenu(interaction, player, pet) {
 // ============== 設置選單 ==============
 async function showSettings(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const currentLang = player?.language || 'zh-TW';
+  const currentLang = getPlayerUILang(player);
+  const tx = getSettingsText(currentLang);
   const introFull = getWorldIntroTemplate(currentLang);
   const introPreview = introFull.length > 900 ? `${introFull.slice(0, 900)}...` : introFull;
   const langName =
     currentLang === 'zh-TW'
-      ? '中文（繁體）'
+      ? tx.langNameZhTw
       : currentLang === 'zh-CN'
-        ? '中文（简体）'
+        ? tx.langNameZhCn
         : currentLang === 'en'
-          ? 'English'
-          : '中文（繁體）';
+          ? tx.langNameEn
+          : tx.langNameZhTw;
   const walletBound = WALLET.isWalletBound(user.id);
   const walletData = WALLET.getWalletData(user.id);
   const walletStatus = walletBound
-    ? `已綁定：\`${walletData?.walletAddress || 'unknown'}\``
-    : '未綁定（可中途綁定，立即入帳）';
+    ? tx.walletBound(walletData?.walletAddress || 'unknown')
+    : tx.walletUnbound;
   
   if (player?.activeMessageId) {
     await disableMessageComponents(interaction.channel, player.activeMessageId);
   }
   
   const embed = new EmbedBuilder()
-    .setTitle(`⚙️ ${t('settings')}`)
+    .setTitle(tx.title)
     .setColor(0x0099ff)
-    .setDescription('遊戲設置（可在此查看世界導讀）')
+    .setDescription(tx.desc)
     .addFields(
-      { name: '🌐 語言 / Language', value: `目前：${langName}`, inline: false },
-      { name: '💳 錢包', value: walletStatus, inline: false },
-      { name: '📖 世界導讀', value: introPreview, inline: false }
+      { name: tx.fieldLanguage, value: `${tx.currentPrefix}${langName}`, inline: false },
+      { name: tx.fieldWallet, value: walletStatus, inline: false },
+      { name: tx.fieldWorldIntro, value: introPreview, inline: false }
     );
   
   const row = new ActionRowBuilder().addComponents(
@@ -7745,13 +8410,13 @@ async function showSettings(interaction, user) {
     new ButtonBuilder().setCustomId('lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(walletBound ? 'sync_wallet_now' : 'open_wallet_modal')
-      .setLabel(walletBound ? '🔄 同步資產' : '💳 綁定錢包')
+      .setLabel(walletBound ? tx.btnSyncWallet : tx.btnBindWallet)
       .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('settings_back').setLabel(tx.btnBack).setStyle(ButtonStyle.Secondary)
   );
 
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('open_renaiss_world').setLabel('🌍 renaiss世界').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId('open_renaiss_world').setLabel(tx.btnWorld).setStyle(ButtonStyle.Success)
   );
 
   await interaction.update({ embeds: [embed], components: [row, row2] });
@@ -7759,21 +8424,12 @@ async function showSettings(interaction, user) {
 
 async function showRenaissWorldGuide(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const lang = player?.language || 'zh-TW';
+  const lang = getPlayerUILang(player);
+  const tx = getSettingsText(lang);
   const intro = getWorldIntroTemplate(lang);
 
-  const title =
-    lang === 'en'
-      ? '🌍 Renaiss World'
-      : lang === 'zh-CN'
-        ? '🌍 Renaiss 世界'
-        : '🌍 Renaiss 世界';
-  const desc =
-    lang === 'en'
-      ? `${intro}\n\nMain story is passively triggered by your actions.`
-      : lang === 'zh-CN'
-        ? `${intro}\n\n主线会由你的行动被动触发。`
-        : `${intro}\n\n主線會由你的行動被動觸發。`;
+  const title = tx.worldTitle;
+  const desc = `${intro}\n\n${tx.worldDescSuffix}`;
 
   const embed = new EmbedBuilder()
     .setTitle(title)
@@ -7781,8 +8437,8 @@ async function showRenaissWorldGuide(interaction, user) {
     .setDescription(desc);
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('world_back_settings').setLabel('⚙️ 返回設定').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回冒險').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('world_back_settings').setLabel(tx.btnBackSettings).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('settings_back').setLabel(tx.btnBackAdventure).setStyle(ButtonStyle.Secondary)
   );
 
   await interaction.update({ embeds: [embed], components: [row] });
@@ -7989,12 +8645,10 @@ async function handleGachaResult(interaction, user, count) {
     .setDescription(`💰 花費 ${result.cost} Rns 代幣\n💡 拉霸規則：三格相同 = 5% 大獎（不改原本機率）\n\n**開到以下招式：**\n${resultsText}\n\n**總價值：${result.totalValue} Rns 代幣**\n**⭐ 獲得升級點數：+${result.earnedPoints} 點**\n**📊 已開包數：${result.totalDraws} 包**`)
     .addFields(
       { name: '📚 本次獲取技能晶片', value: `${gainedChips.length} 枚\n${String(chipSummary).slice(0, 1000)}`, inline: false },
-      { name: '📌 學習規則', value: '抽到的是技能晶片；點下方按鈕可「學習技能並上陣」。學習後也可到招式配置調整。', inline: false },
+      { name: '📌 學習規則', value: '抽到的是技能晶片；請到「📜 去配置招式」頁面用下拉選單學習/取消學習。', inline: false },
       { name: '📦 販賣規則', value: '商店掛賣時，會以「技能晶片」名稱販賣。', inline: false }
     );
 
-  // 保留本次抽卡結果，供「學習上陣」按鈕使用
-  player.tempGachaResults = result.draws;
   CORE.savePlayer(player);
 
   await interaction.update({ embeds: [makeSpinEmbed(0, false, '機台啟動中...')], components: [] });
@@ -8012,23 +8666,12 @@ async function handleGachaResult(interaction, user, count) {
   }
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  const learnButtons = result.draws.slice(0, 10).map((r, i) =>
-    new ButtonBuilder()
-      .setCustomId(`learn_move_${i}`)
-      .setLabel(`學習 ${r.tierEmoji} ${r.move.name}`.slice(0, 80))
-      .setStyle(r.tier === 3 ? ButtonStyle.Danger : r.tier === 2 ? ButtonStyle.Primary : ButtonStyle.Secondary)
-  );
-  const learnRows = [];
-  for (let i = 0; i < learnButtons.length; i += 5) {
-    learnRows.push(new ActionRowBuilder().addComponents(learnButtons.slice(i, i + 5)));
-  }
-
   const rowAction = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('open_gacha').setLabel('繼續抽').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('show_moves').setLabel('📜 去配置招式').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Primary)
   );
-  const finalRows = [...learnRows, rowAction];
+  const finalRows = [rowAction];
 
   if (spinMsg?.edit) {
     await spinMsg.edit({ embeds: [finalEmbed], components: finalRows }).catch(async () => {
@@ -8037,35 +8680,6 @@ async function handleGachaResult(interaction, user, count) {
     return;
   }
   await interaction.followUp({ embeds: [finalEmbed], components: finalRows }).catch(() => {});
-}
-
-// ============== 學習抽到的招式 ==============
-async function handleLearnMove(interaction, user, moveIndex) {
-  const player = CORE.loadPlayer(user.id);
-  if (!player || !Array.isArray(player.tempGachaResults) || player.tempGachaResults.length === 0) {
-    await interaction.reply({ content: '⚠️ 找不到可學習的技能晶片，請先抽獎。', ephemeral: true }).catch(() => {});
-    return;
-  }
-  const moveData = player.tempGachaResults[moveIndex];
-  if (!moveData?.move) {
-    await interaction.reply({ content: '⚠️ 這枚技能晶片不存在或已過期。', ephemeral: true }).catch(() => {});
-    return;
-  }
-
-  const learned = GACHA.learnMoveForBattle(user.id, moveData.move);
-  if (!learned?.success) {
-    await interaction.reply({ content: `❌ ${learned?.reason || '學習失敗'}`, ephemeral: true }).catch(() => {});
-    return;
-  }
-
-  const note = learned.replacedMoveName
-    ? `（上陣名額已滿，已替換「${learned.replacedMoveName}」）`
-    : '';
-  const status = learned.newlyLearned ? '📘 學會新技能並上陣' : '🧠 已學技能上陣';
-  await interaction.reply({
-    content: `${status}：**${moveData.move.name}** ${note}`.trim(),
-    ephemeral: true
-  }).catch(() => {});
 }
 
 // ============== 分配 HP ==============
@@ -8110,6 +8724,7 @@ async function handleAllocateHP(interaction, user, petId) {
 async function showCharacter(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
+  const uiLang = getPlayerUILang(player);
   
   if (!player) {
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
@@ -8136,8 +8751,8 @@ async function showCharacter(interaction, user) {
     .addFields(
       { name: '📊 等級', value: String(player.level), inline: true },
       { name: '🍀 幸運值', value: String(player.stats.運氣), inline: true },
-      { name: t('hp'), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
-      { name: t('gold'), value: String(player.stats.財富), inline: true },
+      { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
+      { name: t('gold', uiLang), value: String(player.stats.財富), inline: true },
       { name: '🎖️ 友誼賽成就', value: `${mentorCount} 位`, inline: true },
       { name: '🧾 已完成導師', value: mentorPreview, inline: false }
     );
@@ -8145,7 +8760,7 @@ async function showCharacter(interaction, user) {
   if (pet) {
     embed.addFields(
       { name: '---寵物---', value: `**${pet.name}** (${pet.type})`, inline: false },
-      { name: t('hp'), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
       { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
       { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
     );
@@ -8153,7 +8768,7 @@ async function showCharacter(interaction, user) {
   
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('show_finance_ledger').setLabel('💸 資金流水').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
   
   await interaction.update({ embeds: [embed], components: [row] });
@@ -8207,10 +8822,17 @@ function describeMoveEffects(moveOrEffect = {}) {
 
 // ============== 招式列表 ==============
 async function showMovesList(interaction, user, selectedPetId = '', notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', embeds: [], components: [] });
+    return;
+  }
+
   const ownedPets = getPlayerOwnedPets(user.id);
   if (ownedPets.length === 0) {
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Primary)
     );
     await interaction.update({ content: '❌ 沒有寵物！', embeds: [], components: [row] });
     return;
@@ -8221,12 +8843,18 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     const defaultPet = PET.loadPet(user.id);
     selectedPet = ownedPets.find((p) => p.id === defaultPet?.id) || ownedPets[0];
   }
+  if (!Array.isArray(selectedPet.moves)) selectedPet.moves = [];
 
   for (const pet of ownedPets) {
     normalizePetMoveLoadout(pet, true);
   }
   const selectedLoadout = normalizePetMoveLoadout(selectedPet, false);
   const selectedSet = new Set(selectedLoadout.activeMoveIds);
+  const allChipEntries = getLearnableSkillChipEntries(player, selectedPet);
+  const learnableChips = allChipEntries.filter((entry) => Boolean(entry?.canLearn));
+  const allChipTotal = allChipEntries.reduce((sum, item) => sum + Number(item?.count || 0), 0);
+  const learnableChipTotal = learnableChips.reduce((sum, item) => sum + Number(item?.count || 0), 0);
+  const forgettableMoves = getForgettablePetMoves(selectedPet);
 
   const unlockedMoves = (selectedPet.moves || []).map((m, i) => {
     const isFlee = Boolean(m?.effect && m.effect.flee);
@@ -8246,11 +8874,25 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     return `${i + 1}. **${pet.name}**（${pet.type}）\n攜帶：${loadout.activeMoves.length}/${PET_MOVE_LOADOUT_LIMIT}｜${activeNames}`;
   }).join('\n\n');
 
+  const chipOverview = allChipEntries.length > 0
+    ? allChipEntries
+      .map((entry, idx) => {
+        const move = entry.move || {};
+        const tierEmoji = move.tier === 3 ? '🔮' : move.tier === 2 ? '💠' : '⚪';
+        const mark = entry.canLearn ? '✅可學' : (entry.reason === '已學會' ? '📘已學' : '🚫不可學');
+        return `${idx + 1}. ${tierEmoji} ${move.name} x${entry.count}｜${mark}`;
+      })
+      .join('\n')
+    : '（背包目前沒有技能晶片）';
+
   const description = [
     notice ? `✅ ${notice}` : '',
     `**目前管理：${selectedPet.name}**（${selectedPet.type}）`,
+    `學習入口：請用下拉選單「學習技能晶片」`,
+    `取消學習：會退回技能晶片到背包，可拿去賣`,
     `可攜帶上陣招式：**${PET_MOVE_LOADOUT_LIMIT}**（逃跑技能固定，不占名額）`,
-    `已解鎖招式：${selectedPet.moves.length}`
+    `已解鎖招式：${selectedPet.moves.length}`,
+    `背包晶片：${allChipTotal} 枚｜可學：${learnableChipTotal} 枚 / ${learnableChips.length} 種`
   ].filter(Boolean).join('\n');
 
   const embed = new EmbedBuilder()
@@ -8259,6 +8901,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     .setDescription(description)
     .addFields(
       { name: `🧭 ${selectedPet.name} 招式清單`, value: unlockedMoves.slice(0, 1024), inline: false },
+      { name: '🎒 可學習技能晶片', value: chipOverview.slice(0, 1024), inline: false },
       { name: '🐾 全寵物攜帶總覽', value: petSummary.slice(0, 1024), inline: false }
     );
 
@@ -8276,6 +8919,44 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     .setPlaceholder('選擇要管理的寵物')
     .addOptions(petSelectOptions);
   const rowPetSelect = new ActionRowBuilder().addComponents(petSelect);
+
+  let rowLearnChip = null;
+  if (learnableChips.length > 0) {
+    const learnOptions = learnableChips.slice(0, 25).map((entry) => {
+      const move = entry.move || {};
+      const tierText = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
+      return {
+        label: `${move.name}`.slice(0, 100),
+        description: `${move.element || '未知'} / ${tierText} / 晶片 x${entry.count}`.slice(0, 100),
+        value: `${selectedPet.id}::${move.id}`
+      };
+    });
+    rowLearnChip = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('moves_learn_chip')
+        .setPlaceholder(`學習技能晶片（${learnableChipTotal} 枚）`)
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(learnOptions)
+    );
+  }
+
+  let rowUnlearnChip = null;
+  if (forgettableMoves.length > 0) {
+    const unlearnOptions = forgettableMoves.slice(0, 25).map((move) => ({
+      label: `${move.name}`.slice(0, 100),
+      description: `取消後會退回技能晶片`.slice(0, 100),
+      value: `${selectedPet.id}::${move.id}`
+    }));
+    rowUnlearnChip = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('moves_unlearn_chip')
+        .setPlaceholder('取消學習（退回技能晶片）')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(unlearnOptions)
+    );
+  }
 
   const attackMoves = getPetAttackMoves(selectedPet);
   let rowMoveAssign = null;
@@ -8297,10 +8978,14 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
 
   const rowButtons = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
 
-  const components = rowMoveAssign ? [rowPetSelect, rowMoveAssign, rowButtons] : [rowPetSelect, rowButtons];
+  const components = [rowPetSelect];
+  if (rowLearnChip) components.push(rowLearnChip);
+  if (rowUnlearnChip) components.push(rowUnlearnChip);
+  if (rowMoveAssign) components.push(rowMoveAssign);
+  components.push(rowButtons);
   await interaction.update({ embeds: [embed], content: null, components });
 }
 
@@ -9556,6 +10241,7 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
 async function showInventory(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
+  const uiLang = getPlayerUILang(player);
   
   if (!player) {
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
@@ -9583,10 +10269,10 @@ async function showInventory(interaction, user) {
       { name: '🌿 草藥', value: herbsList, inline: true }
     )
     .addFields({ name: '🧰 可售素材（前10）', value: goodsList, inline: false })
-    .addFields({ name: t('gold'), value: `${player.stats.財富} Rns 代幣`, inline: false });
+    .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
   
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back')).setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Primary)
   );
   
   await interaction.update({ embeds: [embed], components: [row] });
@@ -11070,6 +11756,7 @@ async function startManualBattle(interaction, user) {
 async function startAutoBattle(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
+  const uiLang = getPlayerUILang(player);
   if (!player || !pet) {
     await interaction.update({ content: '❌ 沒有可用招式，無法開始 AI 戰鬥。', components: [] });
     return;
@@ -11180,7 +11867,7 @@ async function startAutoBattle(interaction, user) {
           { name: '🩸 戰後 HP', value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await interaction.update({ embeds: [embed], content: null, components: [row] });
       return;
@@ -11228,7 +11915,7 @@ async function startAutoBattle(interaction, user) {
       );
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
 
     await interaction.update({ embeds: [embed], content: null, components: [row] });
@@ -11244,7 +11931,7 @@ async function startAutoBattle(interaction, user) {
         .setColor(0x4fa3ff)
         .setDescription(`${detail}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`);
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await interaction.update({ embeds: [embed], content: null, components: [row] });
       return;
@@ -11305,6 +11992,7 @@ async function handleFight(interaction, user) {
 async function handleUseMove(interaction, user, moveIndex) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
+  const uiLang = getPlayerUILang(player);
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, pet);
   const availableMoves = getCombatantMoves(combatant, pet);
@@ -11356,10 +12044,10 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setDescription(`${playerPhase.message}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
@@ -11397,17 +12085,17 @@ async function handleUseMove(interaction, user, moveIndex) {
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
-      .setTitle(t('victory'))
+      .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
       .setDescription(playerPhase.message)
       .addFields(
-        { name: t('gold'), value: `${playerPhase.gold}`, inline: true },
-        { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
+        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
     
     await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
@@ -11422,7 +12110,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setColor(0x4fa3ff)
         .setDescription(`${playerPhase.message}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`);
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
@@ -11476,10 +12164,10 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setDescription(`${combinedMessage}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
       return;
@@ -11517,16 +12205,16 @@ async function handleUseMove(interaction, user, moveIndex) {
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
-      .setTitle(t('victory'))
+      .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
       .setDescription(combinedMessage)
       .addFields(
-        { name: t('gold'), value: `${enemyPhase.gold}`, inline: true },
-        { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
+        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
     await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
     return;
@@ -11540,7 +12228,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setColor(0x4fa3ff)
         .setDescription(`${combinedMessage}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`);
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
       return;
@@ -11573,6 +12261,7 @@ async function handleUseMove(interaction, user, moveIndex) {
 async function handleBattleWait(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
+  const uiLang = getPlayerUILang(player);
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, pet);
 
@@ -11607,10 +12296,10 @@ async function handleBattleWait(interaction, user) {
         .setDescription(`${playerPhase.message}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
@@ -11647,16 +12336,16 @@ async function handleBattleWait(interaction, user) {
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
-      .setTitle(t('victory'))
+      .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
       .setDescription(`${playerPhase.message}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
       .addFields(
-        { name: t('gold'), value: `${playerPhase.gold}`, inline: true },
-        { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
+        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
     await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
     return;
@@ -11670,7 +12359,7 @@ async function handleBattleWait(interaction, user) {
         .setColor(0x4fa3ff)
         .setDescription(`${playerPhase.message || ''}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`.trim());
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
@@ -11726,10 +12415,10 @@ async function handleBattleWait(interaction, user) {
         .setDescription(`${combinedMessage}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, 'edit');
       return;
@@ -11766,16 +12455,16 @@ async function handleBattleWait(interaction, user) {
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
-      .setTitle(t('victory'))
+      .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
       .setDescription(`${combinedMessage}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
       .addFields(
-        { name: t('gold'), value: `${enemyPhase.gold}`, inline: true },
-        { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
+        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
     await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
     return;
@@ -11789,7 +12478,7 @@ async function handleBattleWait(interaction, user) {
         .setColor(0x4fa3ff)
         .setDescription(`${combinedMessage || ''}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`.trim());
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
       return;
@@ -11827,6 +12516,7 @@ async function handleBattleWait(interaction, user) {
 async function handleFlee(interaction, user, attemptNum) {
   const player = CORE.loadPlayer(user.id);
   const pet = PET.loadPet(user.id);
+  const uiLang = getPlayerUILang(player);
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, pet);
 
@@ -11874,7 +12564,7 @@ async function handleFlee(interaction, user, attemptNum) {
       .setDescription(result.message);
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
 
     await interaction.update({ embeds: [embed], components: [row] });
