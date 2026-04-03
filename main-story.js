@@ -5,6 +5,7 @@
 
 const { sanitizeWorldObject } = require('./style-sanitizer');
 const BATTLE = require('./battle-system');
+const ISLAND_STORY = require('./island-story');
 
 const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',
@@ -26,6 +27,10 @@ const ENDING_RULES = {
 };
 
 function getCompletedLocationCount(player) {
+  if (ISLAND_STORY && typeof ISLAND_STORY.countCompletedIslands === 'function') {
+    const total = Number(ISLAND_STORY.countCompletedIslands(player));
+    if (Number.isFinite(total) && total >= 0) return total;
+  }
   const completed = player?.locationArcState?.completedLocations;
   if (!completed || typeof completed !== 'object' || Array.isArray(completed)) return 0;
   return Object.keys(completed).length;

@@ -11,6 +11,7 @@ const {
   getLocationProfile,
   getNearbyPoints
 } = require('./world-map');
+const ISLAND_STORY = require('./island-story');
 const MAIN_STORY = require('./main-story');
 const WORLD_LORE = require('./world-lore');
 const CORE = require('./game-core');
@@ -1479,6 +1480,11 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const alignment = mapFactionLabel(alignmentRaw);
   const newbieMask = isInNewbiePhase(player);
   const arcMeta = getLocationArcMeta(player);
+  const islandState = ISLAND_STORY.getIslandStoryState(player, location) || null;
+  const islandGuidePrompt = ISLAND_STORY.buildIslandGuidancePrompt(player, location);
+  const islandStage = Number(islandState?.stage || 0);
+  const islandStageCount = Math.max(1, Number(islandState?.stageCount || 3));
+  const islandCompleted = Boolean(islandState?.completed);
   const mainStoryState = typeof MAIN_STORY.ensureMainStoryState === 'function'
     ? MAIN_STORY.ensureMainStoryState(player)
     : null;
@@ -1498,6 +1504,10 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const nearbyHint = nearbyPoints.length > 0 ? nearbyPoints.join('、') : '周遭地標資訊不足';
   const portalDestinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
   const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
+  const navigationTarget = String(player?.navigationTarget || '').trim();
+  const navigationInstruction = navigationTarget
+    ? `玩家已在地圖設定座標導航目標：${navigationTarget}。本段敘事必須讓行動朝該地點推進，並在環境描寫中呈現前進路徑。`
+    : '';
   const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
   const npcs = RENAISS_NPCS[location] || [];
   
@@ -1585,8 +1595,10 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
 地區篇章進度：第 ${Math.max(1, arcMeta.turnsInLocation)} / ${arcMeta.targetTurns} 段（階段：${arcMeta.phase}）
 已完成跨區篇章：${arcMeta.completedLocations}
+島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
+導航目標：${navigationTarget || '（未設定）'}
 附近可疑勢力：${digitalPresenceText}
 玩家：${safePlayerName}
 寵物：${petName}(${petType})
@@ -1602,6 +1614,8 @@ ${memorySection}
 ${inventorySection}
 ${npcDialogueSection}
 ${mainlinePinsSection}
+${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
+${navigationInstruction ? `\n【導航約束】\n${navigationInstruction}` : ''}
 ${openingBeatSection}
 
 【上一個行動】
@@ -1635,6 +1649,8 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 23. 若本回合為開局段落，必須明確完成主角身份與動機介紹，且語氣要像故事開場而非條列設定
 24. 凡出現引號對話，必須標明發話者；若是未命名角色，請給固定臨時代號（例如：神秘女子A、神秘女子B）並在後續沿用
 25. 若【主線鋪陳保留】有內容，至少延續其中 1 個重點，但只在相關段落自然呼應，不要每句都硬提
+26. 若「島嶼劇情狀態」顯示進行中，優先推進該地在地衝突與線索，不要跳過島內收束直接跨區
+27. 若「島嶼劇情狀態」顯示已完成，移除硬引導語氣，改為開放世界敘事
 
 直接開始講：`;
 
@@ -1705,6 +1721,11 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     storySignals.market && !arcMeta.seenMarketChoice && arcMeta.turnsInLocation >= 1
   );
   const location = player.location || '河港鎮';
+  const islandState = ISLAND_STORY.getIslandStoryState(player, location) || null;
+  const islandGuidePrompt = ISLAND_STORY.buildIslandGuidancePrompt(player, location);
+  const islandStage = Number(islandState?.stage || 0);
+  const islandStageCount = Math.max(1, Number(islandState?.stageCount || 3));
+  const islandCompleted = Boolean(islandState?.completed);
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
   const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
@@ -1712,6 +1733,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const nearbyHint = nearbyPoints.length > 0 ? nearbyPoints.join('、') : '周遭地標資訊不足';
   const portalDestinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
   const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
+  const navigationTarget = String(player?.navigationTarget || '').trim();
   const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
   const petName = pet?.name || '寵物';
   const playerName = player.name || '冒險者';
@@ -1759,8 +1781,10 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 【當前情境】
 位置：${location} - ${locDesc}
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
+島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
+導航目標：${navigationTarget || '（未設定）'}
 附近可疑勢力：${digitalPresenceText}
 玩家：${playerName}
 寵物：${petName}
@@ -1769,6 +1793,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 上一個選擇：${sourceChoiceText || '（無）'}
 最近已做過的選擇（避免重複）：${recentChoiceText || '（無）'}
 ${memorySection}
+${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
+${navigationTarget ? `\n【導航約束】\n玩家已在地圖設定導航目標「${navigationTarget}」，至少 1 個選項必須是朝該地點推進的具體行動。` : ''}
 
 【完整故事全文（必讀）】
 ${fullStoryText || '（無）'}
@@ -1799,6 +1825,9 @@ ${anchorText}
 9. 地名只能用於「在某地調查/前往某地」，禁止把地名當物件（例如禁止「把廣州送去檢測」）
 10. 避免與「最近已做過的選擇」重複同動詞同目的（例如連續多次「檢測」「詢問」「追查同線索」）
 11. 5 個選項要有足夠發散度，避免都在做同一件事
+12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
+13. 若島嶼劇情進行中，至少 2 個選項要明確推進島內主題（來自島內引導段）
+14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
@@ -1885,139 +1914,6 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
   }
 }
 
-// ========== 初始選項生成（開場用）============
-async function generateInitialChoices(player, pet) {
-  const startedAt = Date.now();
-  const newbieMask = isInNewbiePhase(player);
-  const location = player.location || '河港鎮';
-  const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
-  const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
-  const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
-  const nearbyPoints = typeof getNearbyPoints === 'function' ? getNearbyPoints(location, 4) : [];
-  const nearbyHint = nearbyPoints.length > 0 ? nearbyPoints.join('、') : '周遭地標資訊不足';
-  const portalDestinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
-  const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
-  const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
-  const petName = pet?.name || '寵物';
-  const playerName = player.name || '冒險者';
-  const npcs = RENAISS_NPCS[location] || [];
-  
-  let npcStatusText = '';
-  for (const npc of npcs) {
-    npcStatusText += `${npc.name}、`;
-  }
-  
-  const playerLang = player?.language || 'zh-TW';
-  const langInstruction = {
-    'zh-TW': '請用繁體中文輸出',
-    'zh-CN': '請用簡體中文輸出',
-    'en': 'Please output in English'
-  }[playerLang] || '請用繁體中文輸出';
-  
-  const prompt = `你是 Renaiss 世界的冒險策劃師，設計開場選項要有吸引力。
-風格限制：原創「科技收藏×真偽鑑識」敘事，禁止武俠語氣，禁止既有 IP 名詞（寶可夢、數碼寶貝、斗羅大陸等）。
-
-【開場情境】
-位置：${location} - ${locDesc}
-區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
-附近可互動地點：${nearbyHint}
-附近傳送門可通往：${portalHint}
-附近可疑勢力：${digitalPresenceText}
-玩家：${playerName}
-寵物：${petName}
-當地NPC：${npcStatusText || '沒有重要NPC'}
-語言設定：${playerLang}
-
-【任務】
-玩家剛來到${location}，請設計5個吸引人的冒險選項。${langInstruction}。要求：
-1. 每個選項要有創意、有畫面感
-2. 不要無聊選項
-3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
-   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]"}
-4. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐
-5. 避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴，優先使用收藏語彙
-6. 刮刮樂只允許在鑑價站互動中出現，這裡禁止輸出「刮刮樂」相關選項
-
-風險標籤：
-- [🔥高風險] - 可能危險
-- [💰需花錢] - 需要金錢
-- [🤝需社交] - 需要交談
-- [🔍需探索] - 需要探索
-- [⚔️會戰鬥] - 衝突升高（不一定立刻戰鬥）
-- [🎁高回報] - 回報豐厚
-- [❓有驚喜] - 結果未知
-
-規則補充：
-1. 真正會立刻戰鬥的選項，句尾要加「（會進入戰鬥）」。
-2. [⚔️會戰鬥] 多數是衝突鋪陳，不要全部都即時開打。
-
-${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
-
-  try {
-    const initialAnchors = [location, ...npcs.map((npc) => String(npc?.name || '').trim())]
-      .map((token) => sanitizeAnchorToken(token, 16))
-      .filter(Boolean);
-    let validatedChoices = null;
-    let lastIssues = [];
-    let feedbackText = '';
-    let choicePool = [];
-
-    for (let pass = 0; pass < 3; pass++) {
-      const passPrompt = feedbackText
-        ? `${prompt}\n\n【上一輪違規問題】\n${feedbackText}\n\n請完全重寫 5 個選項，不可沿用上一輪句子。`
-        : prompt;
-      const result = await callAI(passPrompt, 1.0, {
-        label: `generateInitialChoices.pass${pass + 1}`,
-        maxTokens: CHOICE_MAX_TOKENS,
-        timeoutMs: CHOICE_TIMEOUT_MS,
-        retries: 3
-      });
-      const normalizedResult = normalizeOutputByLanguage(result, playerLang);
-      const parsedChoices = parseChoicesFromAIResult(normalizedResult, playerLang);
-      choicePool = mergeChoicePool(choicePool, parsedChoices, playerLang);
-      const candidateChoices = pickTopChoicesFromPool(choicePool, {
-        anchors: initialAnchors,
-        location,
-        previousStory: ''
-      }, CHOICE_OUTPUT_COUNT);
-      const issues = validateChoiceSet(candidateChoices, {
-        anchors: initialAnchors,
-        location,
-        previousStory: ''
-      });
-      if (issues.length === 0) {
-        validatedChoices = candidateChoices.slice(0, CHOICE_OUTPUT_COUNT);
-        break;
-      }
-      lastIssues = issues;
-      feedbackText = issues.map((item, idx) => `${idx + 1}. ${item}`).join('\n');
-      console.warn(`[AI][initialChoices] pass${pass + 1} invalid: ${issues.join(' | ')} | pool=${choicePool.length}`);
-    }
-
-    if (!validatedChoices) {
-      const mergedChoices = pickTopChoicesFromPool(choicePool, {
-        anchors: initialAnchors,
-        location,
-        previousStory: ''
-      }, CHOICE_OUTPUT_COUNT);
-      if (mergedChoices.length === CHOICE_OUTPUT_COUNT) {
-        console.warn(`[AI][initialChoices] use merged pool fallback, issues=${lastIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
-        validatedChoices = mergedChoices;
-      } else {
-        throw new Error(`initial choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
-      }
-    }
-
-    recordAIPerf('initialChoices', Date.now() - startedAt);
-    console.log(`[AI][generateInitialChoices] total ${Date.now() - startedAt}ms`);
-    return validatedChoices;
-  } catch (e) {
-    console.error('[AI] 生成開場選項失敗（無本地模板補位）:', e.message);
-    recordAIPerf('initialChoices', Date.now() - startedAt);
-    return [];
-  }
-}
-
 async function analyzeMainlineForeshadowCandidates(payload = {}) {
   const storyText = String(payload.storyText || '').trim();
   if (!storyText) return [];
@@ -2079,7 +1975,6 @@ async function analyzeMainlineForeshadowCandidates(payload = {}) {
 module.exports = {
   generateStory,
   generateChoicesWithAI,
-  generateInitialChoices,
   analyzeMainlineForeshadowCandidates,
   getAIPerfStats,
   RENAISS_NPCS,

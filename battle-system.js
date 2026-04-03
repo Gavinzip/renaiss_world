@@ -912,56 +912,9 @@ function calculatePlayerMoveDamage(move, player, fighter) {
   };
 }
 
-// ============== 執行戰鬥回合 ==============
-function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null, options = {}) {
+function resolveBattleOutcome(player, fighter, enemy, options = {}) {
   const dryRun = Boolean(options?.dryRun);
   const nonLethal = Boolean(options?.nonLethal || enemy?.nonLethal);
-  if (!chosenMove || typeof chosenMove !== 'object') {
-    return {
-      victory: null,
-      enemyHp: enemy?.hp || 0,
-      playerHp: fighter?.hp || 0,
-      petName: fighter?.name || '寵物',
-      enemyName: enemy?.name || '敵人',
-      message: '⚠️ 當前沒有可用攻擊招式，請改用逃跑或返回主選單。'
-    };
-  }
-
-  ensureStatusState(fighter);
-  ensureStatusState(enemy);
-
-  const lines = [];
-  const fighterLabel = fighter?.isHuman ? `🧍 ${fighter.name}` : `🐾 ${fighter.name}`;
-  const enemyLabel = `👹 ${enemy.name}`;
-
-  const fighterDot = applyDotEffectsAtTurnStart(fighter, fighterLabel);
-  const enemyDot = applyDotEffectsAtTurnStart(enemy, enemyLabel);
-  lines.push(...fighterDot.lines, ...enemyDot.lines);
-
-  if (enemy.hp <= 0 || fighter.hp <= 0) {
-    lines.push('☠️ 回合開始時已有一方倒下。');
-  } else {
-    const normalizedPlayerMove = normalizeMove(chosenMove, fighter.attack || 10);
-    const playerMoveDmg = calculatePlayerMoveDamage(normalizedPlayerMove, player, fighter);
-    applyAttack(fighter, enemy, normalizedPlayerMove, playerMoveDmg, lines, fighterLabel, enemyLabel);
-
-    if (enemy.hp > 0 && enemyMove) {
-      const normalizedEnemyMove = normalizeMove(enemyMove, enemy.attack || 10);
-      const enemyMoveDmg = calculatePlayerMoveDamage(
-        {
-          baseDamage: normalizedEnemyMove.baseDamage ?? normalizedEnemyMove.damage,
-          effect: normalizedEnemyMove.effect || {},
-          tier: normalizedEnemyMove.tier || 1
-        },
-        player,
-        enemy
-      );
-      applyAttack(enemy, fighter, normalizedEnemyMove, enemyMoveDmg, lines, enemyLabel, fighterLabel);
-    }
-  }
-
-  decayStatusEndRound(fighter);
-  decayStatusEndRound(enemy);
 
   if (enemy.hp <= 0) {
     const reward = enemy.reward?.gold || [20, 40];
@@ -979,14 +932,13 @@ function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null
     const outcomeText = nonLethal
       ? `🤝 你在切磋中壓制了${enemy.name}。`
       : `🏆 你擊敗了${enemy.name}！獲得 ${goldReward} Rns！${wantedLevel > 0 ? `\n⚠️ 你現在是 ${wantedLevel} 級通緝犯！` : ''}`;
-
     return {
       victory: true,
       enemy: enemy.name,
       enemyId,
       gold: goldReward,
       wantedLevel,
-      message: `${lines.join('\n')}\n${outcomeText}`
+      outcomeText
     };
   }
 
@@ -995,17 +947,172 @@ function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null
       victory: false,
       death: true,
       defeatedFighterType: fighter?.isHuman ? 'player' : 'pet',
-      message: `${lines.join('\n')}\n💀 你被${enemy.name}擊敗了...`
+      outcomeText: `💀 你被${enemy.name}擊敗了...`
+    };
+  }
+
+  return null;
+}
+
+function buildBattleResult(lines = [], base = {}, fighter = null, enemy = null) {
+  const cleanLines = Array.isArray(lines) ? lines.filter(Boolean) : [];
+  const outcomeText = String(base?.outcomeText || '').trim();
+  const message = outcomeText
+    ? [...cleanLines, outcomeText].filter(Boolean).join('\n')
+    : cleanLines.join('\n');
+  return {
+    victory: base?.victory ?? null,
+    death: Boolean(base?.death),
+    defeatedFighterType: base?.defeatedFighterType,
+    enemy: base?.enemy || enemy?.name,
+    enemyId: base?.enemyId || enemy?.id,
+    gold: Number(base?.gold || 0),
+    wantedLevel: Number(base?.wantedLevel || 0),
+    outcomeText,
+    enemyHp: Number(enemy?.hp || 0),
+    playerHp: Number(fighter?.hp || 0),
+    petName: fighter?.name || '寵物',
+    enemyName: enemy?.name || '敵人',
+    lines: cleanLines,
+    message
+  };
+}
+
+function executeBattlePlayerPhase(player, fighter, enemy, chosenMove, options = {}) {
+  if (!chosenMove || typeof chosenMove !== 'object') {
+    return buildBattleResult(
+      ['⚠️ 當前沒有可用攻擊招式，請改用逃跑或返回主選單。'],
+      { victory: null },
+      fighter,
+      enemy
+    );
+  }
+
+  ensureStatusState(fighter);
+  ensureStatusState(enemy);
+
+  const lines = [];
+  const fighterLabel = fighter?.isHuman ? `🧍 ${fighter.name}` : `🐾 ${fighter.name}`;
+  const enemyLabel = `👹 ${enemy.name}`;
+
+  const fighterDot = applyDotEffectsAtTurnStart(fighter, fighterLabel);
+  const enemyDot = applyDotEffectsAtTurnStart(enemy, enemyLabel);
+  const turnStartLines = [...fighterDot.lines, ...enemyDot.lines];
+  lines.push(...turnStartLines);
+
+  const playerActionStart = lines.length;
+  let normalizedPlayerMove = normalizeMove(chosenMove, fighter.attack || 10);
+  let playerDamage = 0;
+  if (enemy.hp <= 0 || fighter.hp <= 0) {
+    lines.push('☠️ 回合開始時已有一方倒下。');
+  } else {
+    const playerMoveDmg = calculatePlayerMoveDamage(normalizedPlayerMove, player, fighter);
+    const playerAttackResult = applyAttack(fighter, enemy, normalizedPlayerMove, playerMoveDmg, lines, fighterLabel, enemyLabel);
+    playerDamage = Math.max(0, Number(playerAttackResult?.dealtDamage || 0));
+  }
+  const playerLines = lines.slice(playerActionStart);
+
+  if (enemy.hp <= 0 || fighter.hp <= 0) {
+    decayStatusEndRound(fighter);
+    decayStatusEndRound(enemy);
+    const outcome = resolveBattleOutcome(player, fighter, enemy, options) || { victory: null };
+    return {
+      ...buildBattleResult(lines, outcome, fighter, enemy),
+      phase: 'player',
+      completed: true,
+      turnStartLines,
+      playerLines,
+      playerMoveName: normalizedPlayerMove?.name || chosenMove?.name || '普通攻擊',
+      playerDamage,
+      enemyMoveName: '',
+      enemyDamage: 0
     };
   }
 
   return {
-    victory: null,
-    enemyHp: enemy.hp,
-    playerHp: fighter.hp,
-    petName: fighter.name,
-    enemyName: enemy.name,
-    message: lines.join('\n')
+    ...buildBattleResult(lines, { victory: null }, fighter, enemy),
+    phase: 'player',
+    completed: false,
+    turnStartLines,
+    playerLines,
+    playerMoveName: normalizedPlayerMove?.name || chosenMove?.name || '普通攻擊',
+    playerDamage,
+    enemyMoveName: '',
+    enemyDamage: 0
+  };
+}
+
+function executeBattleEnemyPhase(player, fighter, enemy, enemyMove = null, options = {}) {
+  ensureStatusState(fighter);
+  ensureStatusState(enemy);
+
+  const lines = [];
+  const fighterLabel = fighter?.isHuman ? `🧍 ${fighter.name}` : `🐾 ${fighter.name}`;
+  const enemyLabel = `👹 ${enemy.name}`;
+
+  let normalizedEnemyMove = enemyMove ? normalizeMove(enemyMove, enemy.attack || 10) : null;
+  let enemyDamage = 0;
+  if (enemy.hp > 0 && fighter.hp > 0 && normalizedEnemyMove) {
+    const enemyMoveDmg = calculatePlayerMoveDamage(
+      {
+        baseDamage: normalizedEnemyMove.baseDamage ?? normalizedEnemyMove.damage,
+        effect: normalizedEnemyMove.effect || {},
+        tier: normalizedEnemyMove.tier || 1
+      },
+      player,
+      enemy
+    );
+    const enemyAttackResult = applyAttack(enemy, fighter, normalizedEnemyMove, enemyMoveDmg, lines, enemyLabel, fighterLabel);
+    enemyDamage = Math.max(0, Number(enemyAttackResult?.dealtDamage || 0));
+  } else if (enemy.hp > 0 && fighter.hp > 0 && !normalizedEnemyMove) {
+    lines.push(`⚠️ ${enemyLabel}本回合沒有可用攻擊。`);
+  }
+
+  decayStatusEndRound(fighter);
+  decayStatusEndRound(enemy);
+
+  const outcome = resolveBattleOutcome(player, fighter, enemy, options) || { victory: null };
+  return {
+    ...buildBattleResult(lines, outcome, fighter, enemy),
+    phase: 'enemy',
+    completed: outcome.victory !== null,
+    enemyLines: lines,
+    enemyMoveName: normalizedEnemyMove?.name || '',
+    enemyDamage
+  };
+}
+
+// ============== 執行戰鬥回合 ==============
+function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null, options = {}) {
+  const playerPhase = executeBattlePlayerPhase(player, fighter, enemy, chosenMove, options);
+  if (playerPhase.completed) return playerPhase;
+
+  const enemyPhase = executeBattleEnemyPhase(player, fighter, enemy, enemyMove, options);
+  const mergedLines = [...(playerPhase.lines || []), ...(enemyPhase.lines || [])];
+  const merged = buildBattleResult(
+    mergedLines,
+    {
+      victory: enemyPhase.victory,
+      death: enemyPhase.death,
+      defeatedFighterType: enemyPhase.defeatedFighterType,
+      enemy: enemyPhase.enemy,
+      enemyId: enemyPhase.enemyId,
+      gold: enemyPhase.gold,
+      wantedLevel: enemyPhase.wantedLevel,
+      outcomeText: enemyPhase.outcomeText
+    },
+    fighter,
+    enemy
+  );
+  return {
+    ...merged,
+    turnStartLines: playerPhase.turnStartLines || [],
+    playerLines: playerPhase.playerLines || [],
+    playerMoveName: playerPhase.playerMoveName || '',
+    playerDamage: Number(playerPhase.playerDamage || 0),
+    enemyLines: enemyPhase.enemyLines || [],
+    enemyMoveName: enemyPhase.enemyMoveName || '',
+    enemyDamage: Number(enemyPhase.enemyDamage || 0)
   };
 }
 
@@ -1051,6 +1158,8 @@ module.exports = {
   getMoveEnergyCost,
   getMoveEffectSuccessRate,
   calculatePlayerMoveDamage,
+  executeBattlePlayerPhase,
+  executeBattleEnemyPhase,
   executeBattleRound,
   enemyChooseMove
 };

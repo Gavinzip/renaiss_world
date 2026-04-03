@@ -9,17 +9,17 @@ const ISLAND_MAP_TEXT = `                     ~ ~ ~ 雲海航道 ~ ~ ~
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ~                               RENAISS 星域                            ~
 ~                                                                      ~
-~  【北境高原 D2-5】            【中原核心 D1-3】                         ~
+~  【北境高原 D4】              【中原核心 D1】                           ~
 ~   雪白山莊─霜狼哨站            河港鎮─襄陽城─洛陽城─大都─青石關          ~
 ~      │      │                    │        │       │                  ~
 ~   玄冰裂谷  草原部落            龍脊山道  墨林古道  皇城內廷              ~
 ~                                                                      ~
-~  【西域沙海 D2-4】             【南疆水網 D1-3】                         ~
+~  【西域沙海 D2】               【南疆水網 D1】                           ~
 ~   敦煌─喀什爾─赤沙前哨          廣州─鏡湖渡口─大理─雲棧茶嶺─南疆苗疆      ~
 ~      │         │                   │                 │               ~
 ~   鳴沙廢城   砂輪遺站             海潮碼頭           霧雨古祭壇            ~
 ~                                                                      ~
-~  【群島航線 D2-4】             【隱秘深域 D4-5】                         ~
+~  【群島航線 D3】               【隱秘深域 D5】                           ~
 ~   星潮港─珊瑚環礁─桃花島─潮汐試煉島    光明頂─無光礦坑─黑木崖─天機遺都          ~
 ~          \        \      /             \                 /           ~
 ~            ~~~ 蓬萊仙島 ~~~               ~~~ 死亡之海 ~~~             ~
@@ -30,46 +30,56 @@ const REGION_CATALOG = [
   {
     id: 'central_core',
     name: '中原核心',
-    difficultyRange: 'D1-D3',
+    difficultyRange: 'D1',
+    difficulty: 1,
     theme: '城邦與商道網絡，秩序與利益交錯',
     locations: ['河港鎮', '襄陽城', '龍脊山道', '洛陽城', '墨林古道', '大都', '皇城內廷', '青石關']
   },
   {
     id: 'west_desert',
     name: '西域沙海',
-    difficultyRange: 'D2-D4',
+    difficultyRange: 'D2',
+    difficulty: 2,
     theme: '綠洲據點與古遺跡，風沙掩埋祕密',
     locations: ['敦煌', '喀什爾', '赤沙前哨', '砂輪遺站', '鳴沙廢城']
   },
   {
     id: 'southern_delta',
     name: '南疆水網',
-    difficultyRange: 'D1-D3',
+    difficultyRange: 'D1',
+    difficulty: 1,
     theme: '港埠、山城與雨林祭壇並存的多生態帶',
     locations: ['廣州', '海潮碼頭', '鏡湖渡口', '大理', '雲棧茶嶺', '南疆苗疆', '霧雨古祭壇']
   },
   {
     id: 'northern_highland',
     name: '北境高原',
-    difficultyRange: 'D2-D5',
+    difficultyRange: 'D4',
+    difficulty: 4,
     theme: '寒原、部落與冰封裂谷，生存壓力極高',
     locations: ['草原部落', '霜狼哨站', '雪白山莊', '玄冰裂谷']
   },
   {
     id: 'island_routes',
     name: '群島航線',
-    difficultyRange: 'D2-D4',
+    difficultyRange: 'D3',
+    difficulty: 3,
     theme: '海路跳島、機關島鏈與靈氣島嶼',
     locations: ['星潮港', '珊瑚環礁', '桃花島', '潮汐試煉島', '蓬萊仙島']
   },
   {
     id: 'hidden_deeps',
     name: '隱秘深域',
-    difficultyRange: 'D4-D5',
+    difficultyRange: 'D5',
+    difficulty: 5,
     theme: '高風險權力核心與古代禁區',
     locations: ['光明頂', '無光礦坑', '黑木崖', '天機遺都', '死亡之海']
   }
 ];
+
+const REGION_DIFFICULTY_BY_ID = Object.fromEntries(
+  REGION_CATALOG.map((region) => [String(region.id || ''), Math.max(1, Math.min(5, Number(region.difficulty || 3)))])
+);
 
 const LOCATION_PROFILES = {
   '河港鎮': {
@@ -399,6 +409,39 @@ const REGION_PORTAL_HUBS = {
   hidden_deeps: '光明頂'
 };
 
+function buildLocationStoryMetadata() {
+  const byLocation = {};
+  for (const region of REGION_CATALOG) {
+    const list = Array.isArray(region?.locations) ? region.locations : [];
+    const regionDifficulty = Math.max(1, Math.min(5, Number(REGION_DIFFICULTY_BY_ID[String(region.id || '')] || region?.difficulty || 3)));
+    for (let i = 0; i < list.length; i++) {
+      const name = list[i];
+      if (!name) continue;
+      const profile = LOCATION_PROFILES[name] || {};
+      const difficulty = regionDifficulty;
+      const nextPrimary = list[i + 1] || null;
+      const stageCount = difficulty <= 2 ? 3 : difficulty === 3 ? 4 : 5;
+      const desc = String(profile.desc || '').trim();
+      const shortHook = desc
+        ? desc.split('，')[0].split('。')[0].trim()
+        : `${name}仍有待探索的在地勢力與事件線`;
+      byLocation[name] = {
+        location: name,
+        regionId: String(region.id || ''),
+        regionName: String(region.name || ''),
+        difficulty,
+        stageCount,
+        nextPrimary,
+        hook: shortHook,
+        storyTag: `${String(region.name || '未知區域')}·D${difficulty}`
+      };
+    }
+  }
+  return byLocation;
+}
+
+const LOCATION_STORY_METADATA = buildLocationStoryMetadata();
+
 function createPortalConnections() {
   const graph = new Map();
 
@@ -458,6 +501,91 @@ function createPortalConnections() {
 
 const PORTAL_CONNECTIONS = createPortalConnections();
 
+const REGION_MINIMAP_LAYOUTS = {
+  central_core: {
+    width: 24,
+    height: 12,
+    points: {
+      '河港鎮': [3, 6],
+      '襄陽城': [8, 6],
+      '龍脊山道': [8, 9],
+      '洛陽城': [13, 6],
+      '墨林古道': [13, 9],
+      '大都': [18, 6],
+      '皇城內廷': [18, 9],
+      '青石關': [22, 6]
+    },
+    water: [[1, 2], [2, 2], [3, 2], [4, 2]],
+    forest: [[11, 10], [12, 10], [13, 10], [14, 10]]
+  },
+  west_desert: {
+    width: 24,
+    height: 12,
+    points: {
+      '敦煌': [4, 6],
+      '喀什爾': [9, 6],
+      '赤沙前哨': [14, 6],
+      '砂輪遺站': [14, 9],
+      '鳴沙廢城': [6, 9]
+    },
+    water: [[20, 2], [21, 2], [22, 2]],
+    forest: [[3, 10], [4, 10]]
+  },
+  southern_delta: {
+    width: 24,
+    height: 12,
+    points: {
+      '廣州': [3, 7],
+      '海潮碼頭': [6, 9],
+      '鏡湖渡口': [8, 7],
+      '大理': [12, 7],
+      '雲棧茶嶺': [16, 7],
+      '南疆苗疆': [20, 7],
+      '霧雨古祭壇': [20, 10]
+    },
+    water: [[2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4]],
+    forest: [[17, 10], [18, 10], [19, 10]]
+  },
+  northern_highland: {
+    width: 24,
+    height: 12,
+    points: {
+      '草原部落': [6, 8],
+      '霜狼哨站': [11, 6],
+      '雪白山莊': [16, 5],
+      '玄冰裂谷': [20, 9]
+    },
+    water: [[3, 3], [4, 3], [5, 3]],
+    forest: [[7, 10], [8, 10], [9, 10]]
+  },
+  island_routes: {
+    width: 24,
+    height: 12,
+    points: {
+      '星潮港': [4, 6],
+      '珊瑚環礁': [9, 6],
+      '桃花島': [13, 6],
+      '潮汐試煉島': [17, 6],
+      '蓬萊仙島': [13, 3]
+    },
+    water: [[2, 9], [3, 9], [4, 9], [5, 9], [6, 9], [7, 9], [8, 9], [9, 9], [10, 9], [11, 9], [12, 9], [13, 9], [14, 9], [15, 9], [16, 9], [17, 9], [18, 9], [19, 9], [20, 9]],
+    forest: [[12, 2], [13, 2], [14, 2]]
+  },
+  hidden_deeps: {
+    width: 24,
+    height: 12,
+    points: {
+      '光明頂': [4, 5],
+      '無光礦坑': [9, 7],
+      '黑木崖': [14, 7],
+      '天機遺都': [19, 7],
+      '死亡之海': [22, 10]
+    },
+    water: [[1, 10], [2, 10], [3, 10], [4, 10], [5, 10], [6, 10]],
+    forest: [[17, 3], [18, 3]]
+  }
+};
+
 const ANSI = {
   reset: '\u001b[0m',
   brightYellow: '\u001b[1;33m',
@@ -481,10 +609,134 @@ function buildIslandMapAnsi(currentLocation = '') {
   return colored;
 }
 
-function getPortalDestinations(location) {
-  if (!location) return [];
+function getLocationRegionId(location) {
   const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const profile = LOCATION_PROFILES[normalized];
+  if (!profile) return '';
+  const region = REGION_CATALOG.find((item) => String(item?.name || '') === String(profile.region || ''));
+  return String(region?.id || '');
+}
+
+function getRegionByLocation(location) {
+  const regionId = getLocationRegionId(location);
+  if (!regionId) return null;
+  const found = REGION_CATALOG.find((region) => String(region?.id || '') === regionId);
+  return found ? { ...found, locations: Array.isArray(found.locations) ? [...found.locations] : [] } : null;
+}
+
+function getLocationPortalHub(location) {
+  const regionId = getLocationRegionId(location);
+  if (!regionId) return '';
+  return String(REGION_PORTAL_HUBS[regionId] || '');
+}
+
+function getRegionPortalHubs() {
+  const hubs = [];
+  const seen = new Set();
+  for (const region of REGION_CATALOG) {
+    const regionId = String(region?.id || '');
+    if (!regionId) continue;
+    const hub = String(REGION_PORTAL_HUBS[regionId] || region?.locations?.[0] || '').trim();
+    if (!hub || seen.has(hub)) continue;
+    seen.add(hub);
+    hubs.push(hub);
+  }
+  return hubs;
+}
+
+function getRegionLocationsByLocation(location) {
+  const region = getRegionByLocation(location);
+  return Array.isArray(region?.locations) ? [...region.locations] : [];
+}
+
+function getLocationCoordinate(location) {
+  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const regionId = getLocationRegionId(normalized);
+  if (!regionId) return null;
+  const layout = REGION_MINIMAP_LAYOUTS[regionId];
+  const point = layout?.points?.[normalized];
+  if (!Array.isArray(point) || point.length < 2) return null;
+  return {
+    regionId,
+    x: Number(point[0]),
+    y: Number(point[1])
+  };
+}
+
+function buildRegionMapSnapshot(location = '') {
+  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const region = getRegionByLocation(normalized);
+  if (!region) return null;
+  const regionId = String(region.id || '');
+  const layout = REGION_MINIMAP_LAYOUTS[regionId];
+  if (!layout) return null;
+
+  const width = Math.max(12, Number(layout.width || 24));
+  const height = Math.max(8, Number(layout.height || 12));
+  const rows = Array.from({ length: height }, () => Array.from({ length: width }, () => '░'));
+
+  for (const [x, y] of Array.isArray(layout.water) ? layout.water : []) {
+    if (y >= 0 && y < height && x >= 0 && x < width) rows[y][x] = '≈';
+  }
+  for (const [x, y] of Array.isArray(layout.forest) ? layout.forest : []) {
+    if (y >= 0 && y < height && x >= 0 && x < width) rows[y][x] = '♣';
+  }
+
+  const portalHub = getLocationPortalHub(normalized);
+  const entries = [];
+  for (const loc of region.locations || []) {
+    const point = layout.points?.[loc];
+    if (!Array.isArray(point) || point.length < 2) continue;
+    const x = Number(point[0]);
+    const y = Number(point[1]);
+    if (!(y >= 0 && y < height && x >= 0 && x < width)) continue;
+
+    let symbol = '●';
+    if (loc === portalHub) symbol = '◎';
+    if (loc === normalized) symbol = '◉';
+    rows[y][x] = symbol;
+    entries.push({
+      location: loc,
+      x,
+      y,
+      isPortalHub: loc === portalHub,
+      isCurrent: loc === normalized
+    });
+  }
+
+  const borderTop = `┌${'─'.repeat(width)}┐`;
+  const borderBottom = `└${'─'.repeat(width)}┘`;
+  const mapRows = [borderTop];
+  for (const row of rows) {
+    mapRows.push(`│${row.join('')}│`);
+  }
+  mapRows.push(borderBottom);
+
+  const currentCoord = entries.find((item) => item.isCurrent) || null;
+  return {
+    regionId,
+    regionName: String(region.name || ''),
+    difficultyRange: String(region.difficultyRange || ''),
+    portalHub,
+    mapRows,
+    locations: entries,
+    currentCoordinate: currentCoord
+  };
+}
+
+function getPortalDestinations(location) {
+  if (!location) return getRegionPortalHubs();
+  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const hubs = getRegionPortalHubs().filter((hub) => hub !== normalized);
+  if (hubs.length > 0) return hubs;
   return Array.isArray(PORTAL_CONNECTIONS[normalized]) ? [...PORTAL_CONNECTIONS[normalized]] : [];
+}
+
+function getLocationStoryMetadata(location) {
+  if (!location) return null;
+  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const data = LOCATION_STORY_METADATA[normalized];
+  return data ? { ...data } : null;
 }
 
 function getLocationProfile(location) {
@@ -492,9 +744,15 @@ function getLocationProfile(location) {
   const normalized = LEGACY_LOCATION_ALIASES[location] || location;
   const profile = LOCATION_PROFILES[normalized];
   if (!profile) return null;
+  const region = REGION_CATALOG.find((item) => String(item?.name || '') === String(profile.region || ''));
+  const regionDifficulty = Math.max(
+    1,
+    Math.min(5, Number(REGION_DIFFICULTY_BY_ID[String(region?.id || '')] || region?.difficulty || profile.difficulty || 3))
+  );
   return {
     name: normalized,
     ...profile,
+    difficulty: regionDifficulty,
     nearby: Array.isArray(profile.nearby) ? [...profile.nearby] : [],
     landmarks: Array.isArray(profile.landmarks) ? [...profile.landmarks] : [],
     resources: Array.isArray(profile.resources) ? [...profile.resources] : []
@@ -535,7 +793,7 @@ function getBeginnerSpawnLocations() {
     const profile = LOCATION_PROFILES[loc];
     if (!profile) return false;
     if (profile.starterEligible === false) return false;
-    return Number(profile.difficulty || 3) <= 2;
+    return Number(getLocationDifficulty(loc) || 3) <= 2;
   });
 }
 
@@ -547,10 +805,20 @@ module.exports = {
   ISLAND_MAP_TEXT,
   buildIslandMapAnsi,
   getPortalDestinations,
+  getLocationPortalHub,
+  getRegionPortalHubs,
+  getRegionByLocation,
+  getRegionLocationsByLocation,
+  getLocationCoordinate,
+  buildRegionMapSnapshot,
+  getLocationStoryMetadata,
+  LOCATION_STORY_METADATA,
   MAP_LOCATIONS,
   LOCATION_DESCRIPTIONS,
   LOCATION_PROFILES,
   REGION_CATALOG,
+  REGION_PORTAL_HUBS,
+  getLocationRegionId,
   getLocationProfile,
   getLocationDifficulty,
   getNearbyPoints,

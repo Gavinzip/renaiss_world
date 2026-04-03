@@ -15,7 +15,8 @@ const {
   MAP_LOCATIONS,
   LOCATION_PROFILES,
   REGION_CATALOG,
-  getBeginnerSpawnLocations
+  getBeginnerSpawnLocations,
+  getLocationDifficulty
 } = require('./world-map');
 
 // ============== 設定 ==============
@@ -47,7 +48,7 @@ const WORLD_MAP = {
         resources: Array.isArray(profile.resources) ? [...profile.resources] : [],
         nearby: Array.isArray(profile.nearby) ? [...profile.nearby] : [],
         landmarks: Array.isArray(profile.landmarks) ? [...profile.landmarks] : [],
-        difficulty: Number(profile.difficulty || 3),
+        difficulty: Number(getLocationDifficulty(locationName) || 3),
         starterEligible: profile.starterEligible !== false
       };
     })
@@ -372,8 +373,7 @@ function clearAllNpcQuoteMemory() {
 }
 
 function getLocationDifficultyValue(location = '') {
-  const profile = LOCATION_PROFILES[String(location || '').trim()] || {};
-  return Math.max(1, Number(profile.difficulty || 3));
+  return Math.max(1, Number(getLocationDifficulty(String(location || '').trim()) || 3));
 }
 
 function pickDigitalRoamerSpawnLocation() {
@@ -682,10 +682,9 @@ function pickWeightedUniqueLocations(pool, count) {
 function buildFactionPresencePools() {
   const entries = MAP_LOCATIONS
     .map((name) => {
-      const profile = LOCATION_PROFILES[name] || {};
       return {
         name,
-        difficulty: Number(profile.difficulty || 3)
+        difficulty: Number(getLocationDifficulty(name) || 3)
       };
     })
     .filter(item => item.name);
@@ -1003,6 +1002,7 @@ const LONG_TERM_MEMORY_CONFIG = {
   maxTagItems: 5,
   maxHighlights: 4
 };
+const MEMORY_AUDIT_LIMIT = 240;
 
 const MEMORY_NAMESPACE = 'story';
 const NPC_MEMORY_PUBLIC_NAMESPACE = 'npc_public';
@@ -1062,6 +1062,28 @@ function normalizeMemoryEntry(entry, fallbackType = 'action') {
   };
 }
 
+function normalizeMemoryAuditEntry(entry = {}) {
+  if (!entry || typeof entry !== 'object') return null;
+  const content = String(entry.content || '').trim();
+  const layer = String(entry.layer || '').trim();
+  const category = String(entry.category || '').trim();
+  const reason = String(entry.reason || '').trim();
+  if (!content && !reason) return null;
+  return {
+    id: String(entry.id || `ma_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`),
+    at: Number.isFinite(Number(entry.at)) ? Number(entry.at) : Date.now(),
+    turn: Math.max(0, Math.floor(Number(entry.turn || 0))),
+    location: String(entry.location || '').trim().slice(0, 32),
+    layer: layer || 'player_memory',
+    category: category || '一般記憶',
+    reason: reason || '系統判定需保留',
+    content: content.slice(0, 200),
+    outcome: String(entry.outcome || '').trim().slice(0, 160),
+    source: String(entry.source || '').trim().slice(0, 32),
+    tags: Array.isArray(entry.tags) ? entry.tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 8) : []
+  };
+}
+
 function normalizePlayerMemorySchema(player) {
   if (!player || typeof player !== 'object') return player;
 
@@ -1083,9 +1105,79 @@ function normalizePlayerMemorySchema(player) {
   }
 
   player.memories = deduped;
+  const audits = Array.isArray(player.memoryAudit) ? player.memoryAudit : [];
+  const normalizedAudits = [];
+  const seenAudit = new Set();
+  for (const item of audits) {
+    const row = normalizeMemoryAuditEntry(item);
+    if (!row) continue;
+    const key = `${row.turn}|${row.layer}|${row.content}|${row.reason}|${row.at}`;
+    if (seenAudit.has(key)) continue;
+    seenAudit.add(key);
+    normalizedAudits.push(row);
+    if (normalizedAudits.length >= MEMORY_AUDIT_LIMIT) break;
+  }
+  player.memoryAudit = normalizedAudits;
   player.memoryDigest = normalizeMemoryDigest(player.memoryDigest);
   if ('memory' in player) delete player.memory;
   return player;
+}
+
+function deriveMemoryAuditMeta(memory = {}) {
+  const type = String(memory.type || '').trim();
+  const tags = Array.isArray(memory.tags) ? memory.tags.map((t) => String(t).toLowerCase()) : [];
+  const importance = Number(memory.importance || 0);
+  const reasons = [];
+  let category = '一般記憶';
+
+  if (type === '主線' || tags.includes('main_story')) {
+    category = '主線記憶';
+    reasons.push('符合主線推進標記');
+  } else if (type === '戰鬥' || tags.includes('battle') || tags.includes('combat')) {
+    category = '戰鬥記憶';
+    reasons.push('屬於戰鬥結果，影響後續風險');
+  } else if (type === '交易' || tags.includes('market') || tags.includes('shop_haggle')) {
+    category = '交易記憶';
+    reasons.push('屬於交易/議價紀錄');
+  } else if (type === '移動' || type === 'travel' || tags.includes('travel') || tags.includes('portal')) {
+    category = '地點記憶';
+    reasons.push('屬於移動/地點變更');
+  } else if (type === '對話' || tags.includes('dialogue') || tags.includes('npc_quote')) {
+    category = '對話記憶';
+    reasons.push('屬於可引用對話');
+  }
+
+  if (importance >= 3) reasons.push(`重要度=${importance}`);
+  if (reasons.length === 0) reasons.push(`type=${type || 'action'}`);
+  return { category, reason: reasons.join('｜') };
+}
+
+function appendPlayerMemoryAudit(player, entry = {}) {
+  if (!player || typeof player !== 'object') return null;
+  normalizePlayerMemorySchema(player);
+  if (!Array.isArray(player.memoryAudit)) player.memoryAudit = [];
+  const row = normalizeMemoryAuditEntry({
+    turn: Math.max(0, Math.floor(Number(player.storyTurns || 0))),
+    location: String(player.location || ''),
+    ...entry
+  });
+  if (!row) return null;
+  player.memoryAudit.unshift(row);
+  if (player.memoryAudit.length > MEMORY_AUDIT_LIMIT) player.memoryAudit.length = MEMORY_AUDIT_LIMIT;
+  return row;
+}
+
+function getPlayerMemoryAudit(playerId, options = {}) {
+  const player = loadPlayer(playerId);
+  if (!player) return [];
+  normalizePlayerMemorySchema(player);
+  const limit = Math.max(1, Math.min(80, Number(options.limit || 30)));
+  const turnFrom = Number.isFinite(Number(options.turnFrom)) ? Number(options.turnFrom) : null;
+  const list = Array.isArray(player.memoryAudit) ? player.memoryAudit : [];
+  return list
+    .filter((item) => (turnFrom === null ? true : Number(item.turn || 0) >= turnFrom))
+    .slice(0, limit)
+    .map((item) => ({ ...item }));
 }
 
 function summarizeCountMap(mapObj, maxItems = 4) {
@@ -1243,6 +1335,16 @@ function appendPlayerMemory(player, memory) {
 
   player.memories.unshift(normalized);
   if (player.memories.length > 80) player.memories.length = 80;
+  const auditMeta = deriveMemoryAuditMeta(normalized);
+  appendPlayerMemoryAudit(player, {
+    layer: 'player_memory',
+    category: auditMeta.category,
+    reason: auditMeta.reason,
+    content: normalized.content,
+    outcome: normalized.outcome,
+    tags: normalized.tags,
+    source: normalized.type || 'action'
+  });
   ensureLongTermMemoryDigest(player, true);
   MEMORY_INDEX
     .rememberPlayerMemory(player, normalized, { namespace: MEMORY_NAMESPACE })
@@ -2483,6 +2585,7 @@ function createPlayer(discordId, name, gender, sect) {
     },
     
     memories: [],
+    memoryAudit: [],
     memoryDigest: null,
     storyTurns: 0,
     currentStory: '',
@@ -2933,6 +3036,8 @@ module.exports = {
   // 玩家記憶系統
   addPlayerMemory,
   appendPlayerMemory,
+  appendPlayerMemoryAudit,
+  getPlayerMemoryAudit,
   rebuildPlayerMemoryDigest,
   rebuildPlayerMemoryIndex,
   rebuildAllPlayersMemoryIndex,

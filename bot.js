@@ -9,10 +9,12 @@ const {
   Client, GatewayIntentBits, EmbedBuilder,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle,
-  StringSelectMenuBuilder
+  StringSelectMenuBuilder, AttachmentBuilder
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { spawnSync } = require('child_process');
 
 // 讀取 .env 檔案
 const envPath = path.join(__dirname, '.env');
@@ -69,6 +71,7 @@ const WISH = require('./wish-pool-ai');
 const MAIN_STORY = require('./main-story');
 const ECON = require('./economy-system');
 const MEMORY_INDEX = require('./memory-index');
+const ISLAND_STORY = require('./island-story');
 const { startWorldBackupScheduler, runWorldBackup, getBackupDebugStatus } = require('./world-backup');
 const {
   ISLAND_MAP_TEXT,
@@ -76,7 +79,11 @@ const {
   MAP_LOCATIONS,
   getLocationProfile,
   getLocationStoryContext,
-  getPortalDestinations
+  getPortalDestinations,
+  getLocationPortalHub,
+  getRegionPortalHubs,
+  getRegionLocationsByLocation,
+  buildRegionMapSnapshot
 } = require('./world-map');
 
 try {
@@ -412,6 +419,15 @@ async function lockPressedButtonImmediately(interaction) {
   await disableMessageComponents(interaction.channel, interaction.message.id);
 }
 
+async function updateInteractionMessage(interaction, payload) {
+  if (!interaction) return;
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply(payload);
+    return;
+  }
+  await interaction.update(payload);
+}
+
 async function resumeExistingOnboardingOrGame(interaction, user) {
   const existingPlayer = CORE.loadPlayer(user.id);
   const existingPet = PET.loadPet(user.id);
@@ -471,6 +487,7 @@ const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 
 const PET_MOVE_LOADOUT_LIMIT = Math.max(1, Math.min(5, Number(process.env.PET_MOVE_LOADOUT_LIMIT || 5)));
 const SHOP_SELL_SELECT_LIMIT = 25;
 const SHOP_HAGGLE_SELECT_LIMIT = 25;
+const SHOP_HAGGLE_BULK_SELECT_LIMIT = 20;
 const SHOP_HAGGLE_OFFER_TTL_MS = 10 * 60 * 1000;
 const SHOP_HAGGLE_BLOCKED_ITEMS = new Set(['乾糧一包', '水囊']);
 const NPC_DIALOGUE_LOG_LIMIT = Math.max(20, Math.min(200, Number(process.env.NPC_DIALOGUE_LOG_LIMIT || 80)));
@@ -479,6 +496,7 @@ const GENERATION_HISTORY_LIMIT = Math.max(5, Math.min(100, Number(process.env.GE
 const MAP_ENABLE_WIDE_ANSI = String(process.env.MAP_ENABLE_WIDE_ANSI || '0') === '1';
 const MARKET_GUARANTEE_GAP_TURNS = Math.max(1, Math.min(8, Number(process.env.MARKET_GUARANTEE_GAP_TURNS || 3)));
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
+const LOCATION_STORY_BATTLE_MIN_TURNS = Math.max(0, Math.min(6, Number(process.env.LOCATION_STORY_BATTLE_MIN_TURNS || 1)));
 const PORTAL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.PORTAL_GUIDE_MIN_TURNS || 1)));
 const PORTAL_RESHOW_COOLDOWN_TURNS = Math.max(1, Math.min(10, Number(process.env.PORTAL_RESHOW_COOLDOWN_TURNS || 2)));
 const WISH_POOL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.WISH_POOL_GUIDE_MIN_TURNS || 2)));
@@ -502,6 +520,9 @@ const STORY_DIALOGUE_PIN_TTL_TURNS = Math.max(4, Math.min(40, Number(process.env
 const MAINLINE_PIN_LIMIT = Math.max(8, Math.min(80, Number(process.env.MAINLINE_PIN_LIMIT || 32)));
 const MAINLINE_PIN_TTL_TURNS = Math.max(6, Math.min(80, Number(process.env.MAINLINE_PIN_TTL_TURNS || 20)));
 const MAINLINE_CUE_PATTERN = /(可疑|供應隊|帳本|來源|流向|封存艙|金屬壓印|航海羅盤|座標|傳送門|門紋|節點|神秘鑑價站|鑑價站|四巨頭|試煉|追兵|攔截|線索|不明勢力|暗潮)/u;
+const LOCATION_ENTRY_GATE_ENABLED = String(process.env.LOCATION_ENTRY_GATE_ENABLED || '1') !== '0';
+const LOCATION_ENTRY_MIN_WINRATE = Math.max(1, Math.min(99, Number(process.env.LOCATION_ENTRY_MIN_WINRATE || 50)));
+const AGGRESSIVE_CHOICE_TARGET_RATE = Math.max(0, Math.min(1, Number(process.env.AGGRESSIVE_CHOICE_TARGET_RATE || 0.9)));
 
 function tryAcquireStoryLock(userId, reason = 'story') {
   if (!userId) return true;
@@ -820,6 +841,7 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       moves: '📜 招式',
       character: '👤 個人',
       profile: '💳 檔案',
+      memoryCheck: '🧠 記憶檢查',
       gacha: '🎰 抽獎',
       map: '🗺️ 地圖',
       quickShopReady: '🏪 鑑價站',
@@ -830,6 +852,7 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       moves: '📜 招式',
       character: '👤 个人',
       profile: '💳 档案',
+      memoryCheck: '🧠 记忆检查',
       gacha: '🎰 抽奖',
       map: '🗺️ 地图',
       quickShopReady: '🏪 鉴价站',
@@ -840,6 +863,7 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       moves: '📜 Moves',
       character: '👤 Character',
       profile: '💳 Profile',
+      memoryCheck: '🧠 Memory',
       gacha: '🎰 Draw',
       map: '🗺️ Map',
       quickShopReady: '🏪 Appraisal',
@@ -858,6 +882,7 @@ function appendMainMenuUtilityButtons(buttons = [], player = null) {
     new ButtonBuilder().setCustomId('show_moves').setLabel(labels.moves).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_character').setLabel(labels.character).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_profile').setLabel(labels.profile).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_memory_audit').setLabel(labels.memoryCheck).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_gacha').setLabel(labels.gacha).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_map').setLabel(labels.map).setStyle(ButtonStyle.Secondary),
     buildQuickShopButton(player)
@@ -1313,12 +1338,14 @@ function incrementPlayerStoryTurns(player, amount = 1) {
 
 function ensureLocationArcState(player) {
   if (!player || typeof player !== 'object') return null;
+  ensurePlayerIslandState(player);
   if (!player.locationArcState || typeof player.locationArcState !== 'object') {
     player.locationArcState = {
       currentLocation: String(player.location || ''),
       turnsInLocation: 0,
       completedLocations: {},
-      systemExposureByLocation: {}
+      systemExposureByLocation: {},
+      storyProgressByLocation: {}
     };
   }
   if (typeof player.locationArcState.completedLocations !== 'object' || Array.isArray(player.locationArcState.completedLocations)) {
@@ -1327,13 +1354,46 @@ function ensureLocationArcState(player) {
   if (typeof player.locationArcState.systemExposureByLocation !== 'object' || Array.isArray(player.locationArcState.systemExposureByLocation)) {
     player.locationArcState.systemExposureByLocation = {};
   }
+  if (typeof player.locationArcState.storyProgressByLocation !== 'object' || Array.isArray(player.locationArcState.storyProgressByLocation)) {
+    player.locationArcState.storyProgressByLocation = {};
+  }
   if (!Number.isFinite(Number(player.locationArcState.turnsInLocation))) {
     player.locationArcState.turnsInLocation = 0;
   }
   if (typeof player.locationArcState.currentLocation !== 'string') {
     player.locationArcState.currentLocation = String(player.location || '');
   }
+  const currentLoc = String(player.locationArcState.currentLocation || player.location || '');
+  if (currentLoc) {
+    ensureLocationStoryProgressEntry(player.locationArcState, currentLoc);
+  }
   return player.locationArcState;
+}
+
+function ensureLocationStoryProgressEntry(state, location = '') {
+  if (!state || typeof state !== 'object') return null;
+  const loc = String(location || '').trim();
+  if (!loc) return null;
+  if (typeof state.storyProgressByLocation !== 'object' || Array.isArray(state.storyProgressByLocation)) {
+    state.storyProgressByLocation = {};
+  }
+  const current = state.storyProgressByLocation[loc];
+  if (!current || typeof current !== 'object') {
+    state.storyProgressByLocation[loc] = {
+      battleDone: false,
+      battleCount: 0,
+      lastBattleTurn: 0,
+      lastBattleNpcId: '',
+      lastBattleNpcName: ''
+    };
+  }
+  const row = state.storyProgressByLocation[loc];
+  if (typeof row.battleDone !== 'boolean') row.battleDone = false;
+  if (!Number.isFinite(Number(row.battleCount))) row.battleCount = 0;
+  if (!Number.isFinite(Number(row.lastBattleTurn))) row.lastBattleTurn = 0;
+  row.lastBattleNpcId = String(row.lastBattleNpcId || '').trim();
+  row.lastBattleNpcName = String(row.lastBattleNpcName || '').trim();
+  return row;
 }
 
 function syncLocationArcLocation(player) {
@@ -1349,12 +1409,32 @@ function syncLocationArcLocation(player) {
         marketShown: false
       };
     }
+    if (nowLocation) {
+      ensurePlayerIslandState(player);
+      if (ISLAND_STORY && typeof ISLAND_STORY.ensureIslandStoryEntry === 'function') {
+        ISLAND_STORY.ensureIslandStoryEntry(player, nowLocation);
+      }
+    }
     return state;
   }
 
   if (state.currentLocation && Number(state.turnsInLocation || 0) >= LOCATION_ARC_COMPLETE_TURNS) {
     const prev = String(state.currentLocation);
-    state.completedLocations[prev] = Number(state.completedLocations[prev] || 0) + 1;
+    const prevProgress = ensureLocationStoryProgressEntry(state, prev);
+    if (ISLAND_STORY && typeof ISLAND_STORY.updateIslandStoryProgress === 'function') {
+      ISLAND_STORY.updateIslandStoryProgress(player, {
+        location: prev,
+        turnsInLocation: Number(state.turnsInLocation || 0),
+        targetTurns: LOCATION_ARC_COMPLETE_TURNS,
+        battleDone: Boolean(prevProgress?.battleDone)
+      });
+    }
+    const prevIslandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+      ? ISLAND_STORY.getIslandStoryState(player, prev)
+      : null;
+    if (prevIslandState?.completed) {
+      state.completedLocations[prev] = Number(state.completedLocations[prev] || 0) + 1;
+    }
   }
   state.currentLocation = nowLocation;
   state.turnsInLocation = 0;
@@ -1365,6 +1445,13 @@ function syncLocationArcLocation(player) {
       wishPoolShown: false,
       marketShown: false
     };
+  }
+  if (nowLocation) {
+    ensureLocationStoryProgressEntry(state, nowLocation);
+    ensurePlayerIslandState(player);
+    if (ISLAND_STORY && typeof ISLAND_STORY.ensureIslandStoryEntry === 'function') {
+      ISLAND_STORY.ensureIslandStoryEntry(player, nowLocation);
+    }
   }
   return state;
 }
@@ -1395,6 +1482,30 @@ function getCurrentLocationExposure(player) {
   return state.systemExposureByLocation[currentLocation];
 }
 
+function getCurrentLocationStoryProgress(player) {
+  const state = syncLocationArcLocation(player);
+  if (!state) return null;
+  const currentLocation = String(state.currentLocation || player?.location || '').trim();
+  if (!currentLocation) return null;
+  return ensureLocationStoryProgressEntry(state, currentLocation);
+}
+
+function hasCurrentLocationStoryBattleDone(player) {
+  const progress = getCurrentLocationStoryProgress(player);
+  return Boolean(progress?.battleDone);
+}
+
+function markCurrentLocationStoryBattleDone(player, payload = {}) {
+  if (!player) return;
+  const progress = getCurrentLocationStoryProgress(player);
+  if (!progress) return;
+  progress.battleDone = true;
+  progress.battleCount = Math.max(0, Number(progress.battleCount || 0)) + 1;
+  progress.lastBattleTurn = getPlayerStoryTurns(player);
+  progress.lastBattleNpcId = String(payload.npcId || payload.enemyId || progress.lastBattleNpcId || '').trim();
+  progress.lastBattleNpcName = String(payload.npcName || payload.enemyName || progress.lastBattleNpcName || '').trim();
+}
+
 function markSystemChoiceExposure(player, choices = []) {
   if (!player) return;
   const exposure = getCurrentLocationExposure(player);
@@ -1412,7 +1523,7 @@ function createGuaranteedPortalChoice(player) {
     tag: '[❓有驚喜]',
     name: '靠近傳送門節點',
     choice: `先前往${location}附近的傳送門節點查看可前往的地點`,
-    desc: '可開啟傳送門地圖並選擇下一個島嶼'
+    desc: '可開啟主傳送門地圖並選擇下一個區域'
   };
 }
 
@@ -1450,7 +1561,9 @@ function markPortalChoiceShown(player, exposure = null) {
 function ensurePortalChoiceAvailability(player, choices = []) {
   const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
+  const forceByIslandCompletion = Boolean(player?.forcePortalChoice);
   if (list.some(isPortalChoice)) {
+    if (forceByIslandCompletion) player.forcePortalChoice = false;
     markPortalChoiceShown(player);
     return list;
   }
@@ -1478,7 +1591,7 @@ function ensurePortalChoiceAvailability(player, choices = []) {
     (portalCue || travelGateCue || nearCompletion);
   const forcePortal = (travelGateCue && canReshow) || (hardCompletion && (portalCue || canReshow));
 
-  if (!forcePortal && !shouldGuidePortal) return list;
+  if (!forcePortal && !shouldGuidePortal && !forceByIslandCompletion) return list;
 
   const injected = createGuaranteedPortalChoice(player);
   const protectedActions = new Set(['wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'custom_input', 'mentor_spar']);
@@ -1490,6 +1603,7 @@ function ensurePortalChoiceAvailability(player, choices = []) {
     }
   }
   list[replaceIdx] = injected;
+  if (forceByIslandCompletion) player.forcePortalChoice = false;
   markPortalChoiceShown(player, exposure);
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
@@ -1830,6 +1944,199 @@ function enforceMentorSparAvailability(player, choices = []) {
   });
 }
 
+function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
+  if (!npc || typeof npc !== 'object') return null;
+  const difficulty = getLocationDifficultyForPlayer(player);
+  const battle = Math.max(12, Number(npc?.stats?.戰力 || 24));
+  const hpBase = Math.max(72, Number(npc?.stats?.生命 || 86));
+  const energy = Math.max(10, Number(npc?.stats?.能量 || 24));
+  const hp = Math.max(72, Math.min(420, Math.floor(hpBase * 1.2 + difficulty * 14)));
+  const attack = Math.max(14, Math.min(95, Math.floor(battle * 0.5 + difficulty * 4)));
+  const defense = Math.max(6, Math.min(52, Math.floor(battle * 0.24 + energy * 0.16)));
+  const skillNames = Object.keys(npc?.skills || {}).filter(Boolean).slice(0, 4);
+  const align = String(npc?.align || 'neutral').trim().toLowerCase();
+  const sectText = [npc?.sect || '', npc?.title || '', npc?.name || ''].join(' ');
+  const villain = align === 'evil' || /(digital|暗潮|黑市|滲透|叛徒|賊|匪|殺手|刺客|掠奪)/iu.test(sectText);
+  const rewardMin = Math.max(36, 22 + difficulty * 18 + Math.floor(battle * 0.35));
+  const rewardMax = rewardMin + 80 + difficulty * 8;
+  return {
+    id: String(npc.id || npc.name || 'local_story_enemy').trim(),
+    name: String(npc.name || '可疑敵手').trim(),
+    hp,
+    maxHp: hp,
+    attack,
+    defense,
+    moves: skillNames.length > 0 ? skillNames : ['突襲', '破綻追擊', '壓制'],
+    reward: { gold: [rewardMin, rewardMax] },
+    faction: villain ? 'digital' : 'neutral',
+    villain,
+    isMonster: false,
+    companionPet: false
+  };
+}
+
+function getNearbyStoryBattleNpcCandidates(player) {
+  if (!player) return [];
+  const location = String(player.location || '').trim();
+  if (!location) return [];
+  const ids = typeof CORE.getNearbyNpcIds === 'function'
+    ? CORE.getNearbyNpcIds(location, 8)
+    : [];
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const rows = [];
+  for (const npcId of ids) {
+    const info = typeof CORE.getAgentFullInfo === 'function'
+      ? CORE.getAgentFullInfo(npcId)
+      : null;
+    if (!info) continue;
+    if (typeof CORE.isNPCAlive === 'function' && !CORE.isNPCAlive(info.id || npcId)) continue;
+    if (String(info.loc || '').trim() !== location) continue;
+    rows.push(info);
+  }
+  return rows;
+}
+
+function scoreStoryBattleNpcCandidate(npc = null) {
+  if (!npc || typeof npc !== 'object') return -999;
+  const align = String(npc.align || '').trim().toLowerCase();
+  const battle = Number(npc?.stats?.戰力 || 0);
+  const sect = [npc.sect || '', npc.title || '', npc.name || ''].join(' ');
+  let score = battle;
+  if (align === 'evil') score += 120;
+  else if (align === 'neutral') score += 26;
+  else score += 10;
+  if (/digital|暗潮|黑市|滲透|叛徒|賊|匪|殺手|刺客/u.test(sect)) score += 85;
+  if (npc.roaming) score += 40;
+  return score;
+}
+
+function resolveLocationStoryBattleTarget(player) {
+  const candidates = getNearbyStoryBattleNpcCandidates(player)
+    .sort((a, b) => {
+      const scoreGap = scoreStoryBattleNpcCandidate(b) - scoreStoryBattleNpcCandidate(a);
+      if (scoreGap !== 0) return scoreGap;
+      return String(a?.id || '').localeCompare(String(b?.id || ''));
+    });
+  const picked = candidates[0];
+  if (picked) {
+    return {
+      npcId: String(picked.id || '').trim(),
+      npcName: String(picked.name || '在地勢力').trim(),
+      npcTitle: String(picked.title || '').trim(),
+      enemy: buildStoryBattleEnemyFromNpc(picked, player)
+    };
+  }
+
+  const location = String(player?.location || '').trim();
+  const roaming = typeof CORE.buildRoamingDigitalEncounterEnemy === 'function'
+    ? CORE.buildRoamingDigitalEncounterEnemy(location, { limit: 2, forceRelocate: false, persist: false })
+    : null;
+  if (roaming?.enemy) {
+    return {
+      npcId: String(roaming.npcId || roaming.enemy?.id || 'digital_roamer').trim(),
+      npcName: String(roaming.enemy?.name || '匿名滲透者').trim(),
+      npcTitle: 'Digital 滲透者',
+      enemy: {
+        ...roaming.enemy,
+        companionPet: false
+      }
+    };
+  }
+  return null;
+}
+
+function createGuaranteedLocationStoryBattleChoice(player) {
+  const target = resolveLocationStoryBattleTarget(player);
+  if (!target?.enemy) return null;
+  const location = String(player?.location || '附近據點').trim();
+  const titleSuffix = target.npcTitle ? `（${target.npcTitle}）` : '';
+  return {
+    action: 'location_story_battle',
+    tag: '[⚔️會戰鬥]',
+    name: `攔截 ${target.npcName}`,
+    choice: `在${location}鎖定${target.npcName}${titleSuffix}並正面交鋒（會進入戰鬥）`,
+    desc: `地區篇章關鍵戰：對手來自${location}在地勢力`,
+    npcId: target.npcId,
+    npcName: target.npcName,
+    enemy: target.enemy,
+    locationStoryBattle: true
+  };
+}
+
+function ensureLocationStoryBattleChoiceAvailability(player, choices = []) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
+  if (!player || list.length === 0) return list;
+  if (hasCurrentLocationStoryBattleDone(player)) return list;
+
+  const state = syncLocationArcLocation(player);
+  const turnsInLocation = Number(state?.turnsInLocation || 0);
+  if (turnsInLocation < LOCATION_STORY_BATTLE_MIN_TURNS) return list;
+  if (list.some((choice) => String(choice?.action || '').trim() === 'location_story_battle')) return list;
+
+  const injected = createGuaranteedLocationStoryBattleChoice(player);
+  if (!injected) return list;
+
+  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'custom_input']);
+  let replaceIdx = list.length - 1;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (!protectedActions.has(String(list[i]?.action || ''))) {
+      replaceIdx = i;
+      break;
+    }
+  }
+  list[replaceIdx] = injected;
+  return list.slice(0, CHOICE_DISPLAY_COUNT);
+}
+
+function isAggressiveChoice(choice) {
+  if (!choice || typeof choice !== 'object') return false;
+  const action = String(choice.action || '').trim();
+  if (action === 'fight' || action === 'location_story_battle') return true;
+  if (isImmediateBattleChoice(choice)) return true;
+  const text = [choice.tag || '', choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+  return /(🔥|高風險|會戰鬥|強攻|突襲|追擊|攔截|硬闖|正面交鋒|死鬥|搏命)/u.test(text);
+}
+
+function createGuaranteedAggressiveChoice(player) {
+  const location = String(player?.location || '附近區域').trim() || '附近區域';
+  return {
+    action: 'conflict',
+    tag: '[🔥高風險]',
+    name: '強行追擊目標',
+    choice: `沿著${location}外圍強行追擊可疑目標，逼對方現身`,
+    desc: '高風險突進，可能引發埋伏或連續衝突'
+  };
+}
+
+function ensureAggressiveChoiceAvailability(player, choices = []) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
+  if (!player || list.length === 0) return list;
+  if (list.some(isAggressiveChoice)) return list;
+  if (Math.random() > AGGRESSIVE_CHOICE_TARGET_RATE) return list;
+
+  const injected = createGuaranteedAggressiveChoice(player);
+  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'custom_input', 'mentor_spar']);
+  let replaceIdx = list.length - 1;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (!protectedActions.has(String(list[i]?.action || ''))) {
+      replaceIdx = i;
+      break;
+    }
+  }
+  list[replaceIdx] = injected;
+  return list.slice(0, CHOICE_DISPLAY_COUNT);
+}
+
+function shouldCountCombatForLocationStory(event = {}, result = {}, enemy = null) {
+  const action = String(event?.action || '').trim();
+  if (action === 'mentor_spar') return false;
+  if (action === 'location_story_battle') return true;
+  if (Boolean(event?.locationStoryBattle || result?.locationStoryBattle)) return true;
+  if (event?.npcId || result?.npcId) return true;
+  if (enemy && enemy.isMonster === false) return true;
+  return false;
+}
+
 function ensureEarlyGameIncomeChoice(player, choices = []) {
   const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
@@ -1857,6 +2164,8 @@ function applyChoicePolicy(player, choices = []) {
   list = ensurePortalChoiceAvailability(player, list);
   list = ensureWishPoolChoiceAvailability(player, list);
   list = ensureMarketChoiceAvailability(player, list);
+  list = ensureLocationStoryBattleChoiceAvailability(player, list);
+  list = ensureAggressiveChoiceAvailability(player, list);
   list = ensureEarlyGameIncomeChoice(player, list);
   markSystemChoiceExposure(player, list);
   return list.slice(0, CHOICE_DISPLAY_COUNT);
@@ -2273,6 +2582,30 @@ function rememberStoryDialogues(player, storyText = '') {
   }
   const pinCount = upsertStoryDialoguePins(player, rows);
   const mainlineCount = upsertMainlineForeshadowPins(player, clues);
+  if (typeof CORE.appendPlayerMemoryAudit === 'function') {
+    if (added > 0 || pinCount > 0) {
+      const quotePreview = rows.slice(0, 2).map((row) => `${row.speaker}：「${String(row.text || '').slice(0, 24)}」`).join('、');
+      CORE.appendPlayerMemoryAudit(player, {
+        layer: 'npc_quote_pin',
+        category: '對話記憶',
+        reason: `從故事抽取可驗證對話 ${added} 條；寫入對話釘選 ${pinCount} 條`,
+        content: quotePreview || '本回合抽取到可驗證對話',
+        source: 'story_quote_extract',
+        tags: ['npc_quote', 'dialogue_pin']
+      });
+    }
+    if (mainlineCount > 0) {
+      const cluePreview = clues.slice(0, 2).join('、');
+      CORE.appendPlayerMemoryAudit(player, {
+        layer: 'mainline_pin',
+        category: '主線記憶',
+        reason: `命中主線鋪陳線索，保留 ${mainlineCount} 條供後續延續`,
+        content: cluePreview || '本回合新增主線鋪陳',
+        source: 'story_mainline_extract',
+        tags: ['main_story', 'mainline_pin']
+      });
+    }
+  }
   return { quotes: added, dialoguePins: pinCount, mainline: mainlineCount };
 }
 
@@ -2301,6 +2634,16 @@ function triggerMainlineForeshadowAIInBackground(player, options = {}) {
       ensurePlayerGenerationSchema(fresh);
       const inserted = upsertMainlineForeshadowPins(fresh, lines);
       if (inserted > 0) {
+        if (typeof CORE.appendPlayerMemoryAudit === 'function') {
+          CORE.appendPlayerMemoryAudit(fresh, {
+            layer: 'mainline_ai',
+            category: '主線記憶',
+            reason: `背景AI判定為長期鋪陳，寫入 ${inserted} 條主線釘選`,
+            content: lines.slice(0, 2).join('、') || '背景AI補充主線鋪陳',
+            source: `mainline_ai_${phase}`,
+            tags: ['main_story', 'mainline_ai']
+          });
+        }
         CORE.savePlayer(fresh);
         console.log(`[MainlineAI] phase=${phase} player=${playerId} inserted=${inserted}`);
       }
@@ -3068,6 +3411,7 @@ const WAIT_COMBAT_MOVE = {
   effect: { wait: true },
   desc: '本回合不攻擊，保留節奏與能量'
 };
+const MANUAL_ENEMY_RESPONSE_DELAY_MS = 1000;
 
 function summarizeBattleDetailForStory(detail = '', maxLen = 260) {
   const text = String(detail || '').replace(/\s+/g, ' ').trim();
@@ -3621,6 +3965,221 @@ function estimateBattleOutcome(player, pet, enemy, fighterType = null) {
   };
 }
 
+const LOCATION_ENTRY_BASELINE_CURVE = Object.freeze({
+  1: { hp: 56, attack: 10, defense: 3 },
+  2: { hp: 72, attack: 12, defense: 4 },
+  3: { hp: 94, attack: 15, defense: 5 },
+  4: { hp: 122, attack: 18, defense: 7 },
+  5: { hp: 154, attack: 22, defense: 9 }
+});
+
+function getPlayerProgressDifficultyTier(player) {
+  const currentProfile = typeof getLocationProfile === 'function'
+    ? getLocationProfile(player?.location || '')
+    : null;
+  let tier = Math.max(1, Math.min(5, Number(currentProfile?.difficulty || 1)));
+
+  if (ISLAND_STORY && typeof ISLAND_STORY.getUnlockedLocations === 'function') {
+    const unlocked = ISLAND_STORY.getUnlockedLocations(player);
+    for (const loc of unlocked) {
+      const profile = typeof getLocationProfile === 'function' ? getLocationProfile(loc) : null;
+      const diff = Math.max(1, Math.min(5, Number(profile?.difficulty || 1)));
+      if (diff > tier) tier = diff;
+    }
+  }
+  return tier;
+}
+
+function ensureEntryGateProgressState(player) {
+  if (!player || typeof player !== 'object') return null;
+  if (!player.entryGateProgress || typeof player.entryGateProgress !== 'object' || Array.isArray(player.entryGateProgress)) {
+    player.entryGateProgress = {
+      entryPowerByTier: {}
+    };
+  }
+  if (!player.entryGateProgress.entryPowerByTier || typeof player.entryGateProgress.entryPowerByTier !== 'object') {
+    player.entryGateProgress.entryPowerByTier = {};
+  }
+  return player.entryGateProgress;
+}
+
+function calculateCurrentCombatPower(player, pet = null) {
+  if (!player) return 0;
+  const safePet = pet || PET.loadPet(player.id);
+  const fighterType = CORE.canPetFight(safePet) ? 'pet' : 'player';
+  const combatant = fighterType === 'player'
+    ? buildHumanCombatant(player)
+    : getActiveCombatant(player, safePet);
+  if (!combatant) return 0;
+
+  const level = Math.max(1, Number(player?.level || 1));
+  const moves = getCombatantMoves(combatant, safePet);
+  let avgMovePressure = Math.max(1, Number(combatant.attack || 10) * 0.8);
+  if (moves.length > 0) {
+    const total = moves.reduce((sum, move) => {
+      const dmg = BATTLE.calculatePlayerMoveDamage(move, player, combatant);
+      return sum + Math.max(1, Number(dmg?.total || dmg?.base || 0));
+    }, 0);
+    avgMovePressure = Math.max(1, total / moves.length);
+  }
+
+  const score =
+    Number(combatant.attack || 0) * 2.4 +
+    Number(combatant.defense || 0) * 1.6 +
+    Number(combatant.maxHp || combatant.hp || 0) * 0.45 +
+    avgMovePressure * 1.3 +
+    level * 4;
+  return Math.max(1, Math.round(score));
+}
+
+function getEntryTierBaselinePower(player, tier, currentPower) {
+  const safeTier = Math.max(1, Math.min(5, Number(tier || 1)));
+  const state = ensureEntryGateProgressState(player);
+  if (!state) return Math.max(1, Number(currentPower || 1));
+  if (!Number.isFinite(Number(state.entryPowerByTier[safeTier]))) {
+    state.entryPowerByTier[safeTier] = Math.max(1, Number(currentPower || 1));
+  }
+  return Math.max(1, Number(state.entryPowerByTier[safeTier] || currentPower || 1));
+}
+
+function ensurePlayerIslandState(player) {
+  if (!player || typeof player !== 'object') return;
+  ensureEntryGateProgressState(player);
+  if (ISLAND_STORY && typeof ISLAND_STORY.ensureIslandStoryState === 'function') {
+    ISLAND_STORY.ensureIslandStoryState(player);
+  }
+  if (ISLAND_STORY && typeof ISLAND_STORY.ensureUnlockedLocations === 'function') {
+    ISLAND_STORY.ensureUnlockedLocations(player);
+  }
+  const currentLoc = String(player.location || player.spawnLocation || '').trim();
+  if (currentLoc && ISLAND_STORY && typeof ISLAND_STORY.unlockLocation === 'function') {
+    ISLAND_STORY.unlockLocation(player, currentLoc);
+  }
+  const tier = getPlayerProgressDifficultyTier(player);
+  const power = calculateCurrentCombatPower(player);
+  getEntryTierBaselinePower(player, tier, power);
+}
+
+function syncCurrentIslandStoryProgress(player) {
+  if (!player || typeof player !== 'object') return null;
+  ensurePlayerIslandState(player);
+  const location = String(player.location || '').trim();
+  if (!location) return null;
+  const state = syncLocationArcLocation(player);
+  const turnsInLocation = Math.max(0, Number(state?.turnsInLocation || 0));
+  const storyProgress = getCurrentLocationStoryProgress(player);
+  const battleDone = Boolean(storyProgress?.battleDone);
+  if (!ISLAND_STORY || typeof ISLAND_STORY.updateIslandStoryProgress !== 'function') return null;
+  return ISLAND_STORY.updateIslandStoryProgress(player, {
+    location,
+    turnsInLocation,
+    targetTurns: LOCATION_ARC_COMPLETE_TURNS,
+    battleDone
+  });
+}
+
+function buildLocationEntryBaselineEnemy(targetLocation, player = null) {
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(targetLocation) : null;
+  const difficulty = Math.max(1, Math.min(5, Number(profile?.difficulty || 3)));
+  const progressTier = getPlayerProgressDifficultyTier(player);
+  const gap = difficulty - progressTier;
+  const curve = LOCATION_ENTRY_BASELINE_CURVE[difficulty] || LOCATION_ENTRY_BASELINE_CURVE[3];
+  const name = `D${difficulty} 守門者`;
+  const scale =
+    gap <= 0
+      ? { hp: 1.0, attack: 1.0, defense: 1.0 }
+      : gap === 1
+        ? { hp: 1.1, attack: 1.1, defense: 1.1 }
+        : gap === 2
+          ? { hp: 1.25, attack: 1.25, defense: 1.25 }
+          : { hp: 1.4, attack: 1.4, defense: 1.35 };
+  const hp = Math.max(1, Math.floor(Number(curve.hp || 140) * scale.hp));
+  const attack = Math.max(1, Math.floor(Number(curve.attack || 24) * scale.attack));
+  const defense = Math.max(0, Math.floor(Number(curve.defense || 10) * scale.defense));
+  const levelRef = Math.max(1, Number(player?.level || 1) + difficulty * 2);
+  return {
+    id: `entry_gate_d${difficulty}`,
+    name,
+    hp,
+    maxHp: hp,
+    attack,
+    defense,
+    moves: BATTLE.buildEnemyMoveLoadout(name, levelRef, ['壓制斬', '試探突進', '破勢重擊'], {
+      villain: false,
+      attack
+    }),
+    reward: { gold: [0, 0] },
+    isMonster: false,
+    companionPet: false,
+    ignoreBeginnerBalance: true,
+    ignoreBeginnerDanger: true,
+    entryGap: gap,
+    progressTier
+  };
+}
+
+function canEnterLocation(player, targetLocation) {
+  if (!LOCATION_ENTRY_GATE_ENABLED) {
+    return { allowed: true, winRate: 100, rank: '關閉', reason: 'entry_gate_disabled' };
+  }
+  if (!player || !targetLocation) {
+    return { allowed: false, winRate: 0, rank: '資料不足', reason: 'missing_player_or_location' };
+  }
+  const target = String(targetLocation || '').trim();
+  if (!target) return { allowed: false, winRate: 0, rank: '資料不足', reason: 'empty_target' };
+  if (String(player.location || '').trim() === target) {
+    return { allowed: true, winRate: 80, rawWinRate: 80, rank: '同地點', reason: 'same_location' };
+  }
+
+  ensurePlayerIslandState(player);
+  const gateEnemy = buildLocationEntryBaselineEnemy(target, player);
+  const pet = PET.loadPet(player.id);
+  const fighterType = CORE.canPetFight(pet) ? 'pet' : 'player';
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(target) : null;
+  const targetDifficulty = Math.max(1, Math.min(5, Number(profile?.difficulty || 3)));
+  const progressTier = getPlayerProgressDifficultyTier(player);
+  const gap = targetDifficulty - progressTier;
+  const currentPower = calculateCurrentCombatPower(player, pet);
+  const tierBaselinePower = getEntryTierBaselinePower(player, progressTier, currentPower);
+  const powerDelta = currentPower - tierBaselinePower;
+  const progressRatio = tierBaselinePower > 0 ? powerDelta / tierBaselinePower : 0;
+
+  const baseWinRate =
+    gap <= 0
+      ? 80
+      : gap === 1
+        ? 30
+        : gap === 2
+          ? 16
+          : 8;
+  const growthGain =
+    gap <= 0
+      ? 24
+      : gap === 1
+        ? 260
+        : gap === 2
+          ? 210
+          : 170;
+
+  const rawWinRate = Math.max(0, Math.min(100, baseWinRate + progressRatio * growthGain));
+  const winRate = Math.max(1, Math.min(99, Math.round(rawWinRate)));
+  const allowed = winRate > LOCATION_ENTRY_MIN_WINRATE;
+  const rank = winRate >= 75 ? '高機率' : winRate >= 55 ? '可一戰' : winRate >= 35 ? '偏低' : '高風險';
+  return {
+    allowed,
+    targetLocation: target,
+    difficulty: targetDifficulty,
+    winRate,
+    rawWinRate,
+    rank,
+    fighterType,
+    progressTier,
+    powerDelta: Math.round(powerDelta),
+    reason: allowed ? 'ok' : 'winrate_too_low',
+    gateEnemy
+  };
+}
+
 function pickBestMoveForAI(player, pet, enemy, combatant = null, availableEnergy = Number.POSITIVE_INFINITY) {
   const activeCombatant = combatant || getActiveCombatant(player, pet);
   const candidateMoves = getCombatantMoves(activeCombatant, pet);
@@ -3688,6 +4247,85 @@ function getPlayerMapViewMode(player) {
   return normalizeMapViewMode(player?.mapViewMode);
 }
 
+function getRegionMapRendererScriptPath() {
+  return path.join(__dirname, 'tools', 'render_region_map.py');
+}
+
+function renderRegionMapImageBuffer(snapshot, statusText = '') {
+  if (!snapshot || !Array.isArray(snapshot.mapRows) || snapshot.mapRows.length === 0) return null;
+  const scriptPath = getRegionMapRendererScriptPath();
+  if (!fs.existsSync(scriptPath)) return null;
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'renaiss-map-'));
+  const inPath = path.join(tempDir, 'map-input.json');
+  const outPath = path.join(tempDir, 'map-output.png');
+  const fontPath = path.join(__dirname, 'NotoSansMonoCJKtc-Regular.otf');
+  const payload = {
+    map_rows: snapshot.mapRows,
+    labels: Array.isArray(snapshot.locations)
+      ? snapshot.locations.map((row) => ({
+        location: String(row.location || ''),
+        x: Number(row.x) + 1,
+        y: Number(row.y) + 1,
+        name: String(row.location || ''),
+        marker: row.isCurrent && row.isPortalHub
+          ? '◎'
+          : (row.isCurrent ? '' : (row.isPortalHub ? '◎' : '')),
+        npc_count: 0
+      }))
+      : [],
+    zone_name: `${snapshot.regionName} ${snapshot.difficultyRange ? `(${snapshot.difficultyRange})` : ''}`.trim(),
+    status: statusText
+  };
+
+  try {
+    fs.writeFileSync(inPath, JSON.stringify(payload), 'utf8');
+    const args = [scriptPath, '--input', inPath, '--output', outPath];
+    if (fs.existsSync(fontPath)) args.push('--font', fontPath);
+    const run = spawnSync('python3', args, { cwd: __dirname, encoding: 'utf8', timeout: 4500 });
+    if (run.status !== 0) return null;
+    if (!fs.existsSync(outPath)) return null;
+    return fs.readFileSync(outPath);
+  } catch {
+    return null;
+  } finally {
+    try { if (fs.existsSync(inPath)) fs.unlinkSync(inPath); } catch {}
+    try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch {}
+    try { fs.rmdirSync(tempDir); } catch {}
+  }
+}
+
+function buildRegionMoveSelectRow(player, snapshot, islandCompleted) {
+  const locations = Array.isArray(snapshot?.locations) ? snapshot.locations : [];
+  const current = String(player?.location || '').trim();
+  const options = locations
+    .filter((row) => String(row?.location || '').trim() && String(row.location) !== current)
+    .slice(0, 25)
+    .map((row) => ({
+      label: String(row.location).slice(0, 100),
+      description: row.isPortalHub ? '主傳送門地點' : '區內可探索地點',
+      value: String(row.location)
+    }));
+
+  const placeholder = islandCompleted
+    ? (options.length > 0 ? '選擇區內移動目標（會導向下一段劇情）' : '本區暫無其他可移動座標')
+    : '本地劇情未完成，尚未開放自由探索';
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId('map_region_move_select')
+    .setPlaceholder(placeholder)
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(!islandCompleted || options.length === 0)
+    .addOptions(options.length > 0 ? options : [{
+      label: '尚未開放',
+      description: '先完成本地劇情',
+      value: '__locked__'
+    }]);
+
+  return new ActionRowBuilder().addComponents(select);
+}
+
 function saveMapReturnSnapshot(player, message) {
   if (!player || !message) return;
   const embeds = Array.isArray(message.embeds) ? message.embeds.map(e => e.toJSON()) : [];
@@ -3734,10 +4372,11 @@ function snapshotHasUsableComponents(snapshot) {
 }
 
 function buildPortalUsageGuide(player) {
-  const destinations = typeof getPortalDestinations === 'function'
+  const allDestinations = typeof getPortalDestinations === 'function'
     ? getPortalDestinations(player?.location || '')
     : [];
-  const preview = destinations.length > 0 ? destinations.slice(0, 3).join('、') : '未知';
+  const destinations = Array.isArray(allDestinations) ? allDestinations : [];
+  const preview = destinations.length > 0 ? destinations.slice(0, 3).join('、') : '暫無可用節點';
   return `🌀 **傳送門操作：** 先按「🗺️ 地圖」→ 再按「🌀 傳送門」→ 選目的地（如：${preview}）。`;
 }
 
@@ -3820,29 +4459,77 @@ function pickRoamDestination(player) {
 
 function maybeApplyRoamMovement(player, event, result, queueMemory) {
   if (!player || !event || !result) return null;
-  if (!isRoamEligibleAction(player, event, result)) return null;
-  const chance = getRoamMoveChance(event, result);
-  if (Math.random() > chance) return null;
-
   const fromLocation = String(player.location || '');
-  const targetLocation = pickRoamDestination(player);
-  if (!targetLocation || targetLocation === fromLocation) return null;
+  const manualTarget = String(player.navigationTarget || '').trim();
+  if (!manualTarget) return null;
+  if (!isRoamEligibleAction(player, event, result)) return null;
+
+  const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, fromLocation)
+    : null;
+  const islandCompleted = Boolean(islandState?.completed);
+  if (!islandCompleted) {
+    player.navigationTarget = '';
+    const lockedLine = `🧭 你想前往 **${manualTarget}**，但本地劇情尚未完成，只能先沿主線推進。`;
+    result.message = `${String(result.message || '').trim()}\n\n${lockedLine}`.trim();
+    return null;
+  }
+
+  const targetLocation = manualTarget;
+  if (!targetLocation || targetLocation === fromLocation) {
+    player.navigationTarget = '';
+    return null;
+  }
+  const fromProfile = typeof getLocationProfile === 'function' ? getLocationProfile(fromLocation) : null;
+  const targetProfile = typeof getLocationProfile === 'function' ? getLocationProfile(targetLocation) : null;
+  if (!fromProfile || !targetProfile || String(fromProfile.region || '') !== String(targetProfile.region || '')) {
+    player.navigationTarget = '';
+    const blockedLine = `🧭 區內移動僅限同一大區；跨區請使用主傳送門。`;
+    result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
+    return null;
+  }
+
+  const entryGate = canEnterLocation(player, targetLocation);
+  if (!entryGate.allowed) {
+    player.navigationTarget = '';
+    const blockedLine = `🛑 你朝 **${targetLocation}** 推進時感到壓力失衡（預估勝率 ${entryGate.winRate}%），只好先在 **${fromLocation}** 整備。`;
+    result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
+    result.autoTravel = {
+      fromLocation,
+      targetLocation,
+      blocked: true,
+      winRate: entryGate.winRate,
+      reason: 'entry_gate'
+    };
+    if (typeof queueMemory === 'function') {
+      queueMemory({
+        type: '移動',
+        content: `嘗試探索前往${targetLocation}`,
+        outcome: `受阻｜勝率 ${entryGate.winRate}%`,
+        importance: 1,
+        tags: ['travel', 'wander', 'blocked', 'entry_gate']
+      });
+    }
+    return result.autoTravel;
+  }
 
   player.location = targetLocation;
   syncLocationArcLocation(player);
+  ensurePlayerIslandState(player);
   player.portalMenuOpen = false;
+  player.navigationTarget = '';
 
-  const moveLine = `🧭 你順著路線離開 **${fromLocation}**，一路推進到 **${targetLocation}**。`;
+  const moveLine = `🧭 你依照地圖座標離開 **${fromLocation}**，一路推進到 **${targetLocation}**。`;
   result.message = `${String(result.message || '').trim()}\n\n${moveLine}`.trim();
-  result.autoTravel = { fromLocation, targetLocation, reason: 'wander' };
+  result.autoTravel = { fromLocation, targetLocation, reason: 'manual_navigation' };
 
   if (typeof queueMemory === 'function') {
     queueMemory({
       type: '移動',
-      content: `從${fromLocation}一路探索到${targetLocation}`,
-      outcome: '自然移動（晃圖）',
+      content: `依座標導航從${fromLocation}前往${targetLocation}`,
+      outcome: '區內自由探索移動',
       importance: 2,
-      tags: ['travel', 'wander']
+      tags: ['travel', 'navigation', 'map_move']
     });
   }
 
@@ -3896,11 +4583,14 @@ function maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice)
   return null;
 }
 
-function buildMapComponents(page, currentLocation, canOpenPortal = false, mapViewMode = 'text') {
-  const maxPage = Math.max(0, Math.ceil(MAP_LOCATIONS.length / MAP_PAGE_SIZE) - 1);
+function buildMapComponents(page, currentLocation, canOpenPortal = false, mapViewMode = 'text', regionLocations = []) {
+  const sourceLocations = Array.isArray(regionLocations) && regionLocations.length > 0
+    ? regionLocations
+    : MAP_LOCATIONS;
+  const maxPage = Math.max(0, Math.ceil(sourceLocations.length / MAP_PAGE_SIZE) - 1);
   const safePage = Math.max(0, Math.min(page, maxPage));
   const start = safePage * MAP_PAGE_SIZE;
-  const pageLocations = MAP_LOCATIONS.slice(start, start + MAP_PAGE_SIZE);
+  const pageLocations = sourceLocations.slice(start, start + MAP_PAGE_SIZE);
   const safeMapViewMode = normalizeMapViewMode(mapViewMode);
 
   const rows = [];
@@ -3963,15 +4653,34 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     }
     return;
   }
+  ensurePlayerIslandState(player);
+  CORE.savePlayer(player);
+  const currentIslandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, player.location)
+    : null;
+  const islandCompleted = Boolean(currentIslandState?.completed);
+  const regionSnapshot = typeof buildRegionMapSnapshot === 'function'
+    ? buildRegionMapSnapshot(player.location || '')
+    : null;
+  const regionLocations = typeof getRegionLocationsByLocation === 'function'
+    ? getRegionLocationsByLocation(player.location || '')
+    : [];
 
   const nearbyPortals = typeof getPortalDestinations === 'function'
     ? getPortalDestinations(player.location || '')
     : [];
-  const canOpenPortal = Boolean(player.portalMenuOpen && nearbyPortals.length > 0);
+  const canOpenPortal = Boolean(player.portalMenuOpen && Array.isArray(nearbyPortals) && nearbyPortals.length > 0);
   const mapViewMode = getPlayerMapViewMode(player);
-  const { rows, safePage, maxPage, pageLocations } = buildMapComponents(page, player.location, canOpenPortal, mapViewMode);
+  const { rows, safePage, maxPage, pageLocations } = buildMapComponents(
+    page,
+    player.location,
+    canOpenPortal,
+    mapViewMode,
+    regionLocations
+  );
+  rows.push(buildRegionMoveSelectRow(player, regionSnapshot, islandCompleted));
   const useWideAnsiMap = mapViewMode === 'ascii';
-  const renderedMap = useWideAnsiMap
+  const renderedMap = useWideAnsiMap && !regionSnapshot
     ? (typeof buildIslandMapAnsi === 'function'
       ? buildIslandMapAnsi(player.location)
       : ISLAND_MAP_TEXT)
@@ -3998,28 +4707,67 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const compactMap = useWideAnsiMap
     ? ''
     : `**本頁地圖（手機友善）**\n${pageSummary || '（本頁無地點）'}`;
+  const locationSummary = Array.isArray(regionSnapshot?.locations)
+    ? regionSnapshot.locations
+      .map((row) => `${row.isCurrent ? '◉' : (row.isPortalHub ? '◎' : '●')} ${row.location}`)
+      .join('、')
+    : '';
   const mapBlock = useWideAnsiMap
-    ? ('```ansi\n' + renderedMap + '\n```')
+    ? (regionSnapshot
+      ? '```' + regionSnapshot.mapRows.join('\n') + '\n```'
+      : ('```ansi\n' + renderedMap + '\n```'))
     : compactMap;
+  const mapImageStatus = `圖例：@你、◎主傳送門、●城市、▲森林（城市名前有◎代表該城可直接傳送）`;
+  const renderedMapImage = regionSnapshot ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus) : null;
+  const nearbyPlaces = Array.isArray(currentProfile?.nearby) && currentProfile.nearby.length > 0
+    ? currentProfile.nearby.slice(0, 4).join('、')
+    : '未知';
+  const nearbyLandmarks = Array.isArray(currentProfile?.landmarks) && currentProfile.landmarks.length > 0
+    ? currentProfile.landmarks.slice(0, 3).join('、')
+    : '未知';
+  const nearbyResources = Array.isArray(currentProfile?.resources) && currentProfile.resources.length > 0
+    ? currentProfile.resources.slice(0, 4).join('、')
+    : '未知';
+  const nearbyPortalsText = Array.isArray(nearbyPortals) && nearbyPortals.length > 0
+    ? nearbyPortals.slice(0, 6).join('、')
+    : '附近無可用傳送門';
   const mapDesc =
     mapBlock +
     `\n**目前位置：** ◉${player.location || '未知'}◉（地圖中已高亮）` +
     `\n**地圖顯示：** ${useWideAnsiMap ? 'ASCII 版' : '文字版'}` +
+    `\n**當前分區：** ${regionSnapshot?.regionName || currentProfile?.region || '未知'}` +
     `\n**區域難度：** ${currentProfile ? `D${currentProfile.difficulty}` : '未知'}` +
+    `\n**導航目標：** ${String(player.navigationTarget || '').trim() || '（未設定）'}` +
+    `\n**當前主傳送門：** ${typeof getLocationPortalHub === 'function' ? (getLocationPortalHub(player.location || '') || '未知') : '未知'}` +
+    `\n**六大區主傳送門：** ${(typeof getRegionPortalHubs === 'function' ? getRegionPortalHubs() : []).join('、') || '未知'}` +
+    `\n**自由探索：** ${islandCompleted ? '已開放（可用下拉選單設定區內目的地）' : '未開放（先完成本地劇情）'}` +
+    `\n**圖例：** @黃色=你｜◎橘色=主傳送門｜●紫色=城市｜▲綠色=森林` +
+    `\n**附近可互動內容：**` +
+    `\n- 周邊場景：${nearbyPlaces}` +
+    `\n- 地標：${nearbyLandmarks}` +
+    `\n- 資源/商機：${nearbyResources}` +
+    `\n- 傳送門可往：${nearbyPortalsText}` +
     (locationContext ? `\n**當前地區情報：** ${locationContext}` : '') +
     `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
+    (locationSummary ? `\n\n**分區城市**\n${locationSummary}` : '') +
     (useWideAnsiMap && pageSummary ? `\n\n**本頁地區情報**\n${pageSummary}` : '') +
     (canOpenPortal ? `\n\n${buildPortalUsageGuide(player)}` : '') +
-    '\n_地圖僅供查看，移動請透過劇情中的「傳送門」選項。_' +
+    '\n_區內移動請用下拉選單，跨區移動請用傳送門。_' +
     (notice ? `\n${notice}` : '');
 
   const embed = new EmbedBuilder()
     .setTitle('🗺️ Renaiss 群島海圖')
     .setColor(0x4da6ff)
     .setDescription(mapDesc);
+  if (renderedMapImage) {
+    embed.setImage('attachment://region-map.png');
+  }
+  const files = renderedMapImage
+    ? [new AttachmentBuilder(renderedMapImage, { name: 'region-map.png' })]
+    : [];
 
-  if (interaction.isButton && interaction.isButton()) {
-    await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
+  if ((interaction.isButton && interaction.isButton()) || (interaction.isStringSelectMenu && interaction.isStringSelectMenu())) {
+    await interaction.update({ embeds: [embed], components: rows, files }).catch(() => {});
     if (interaction.message?.id) {
       trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
     }
@@ -4027,10 +4775,10 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   }
 
   if (interaction.deferred || interaction.replied) {
-    const msg = await interaction.followUp({ embeds: [embed], components: rows }).catch(() => null);
+    const msg = await interaction.followUp({ embeds: [embed], components: rows, files }).catch(() => null);
     if (msg) trackActiveGameMessage(player, interaction.channel?.id, msg.id);
   } else {
-    const msg = await interaction.reply({ embeds: [embed], components: rows }).catch(() => null);
+    const msg = await interaction.reply({ embeds: [embed], components: rows, files }).catch(() => null);
     if (msg) trackActiveGameMessage(player, interaction.channel?.id, msg.id);
   }
 }
@@ -4041,18 +4789,19 @@ async function showPortalSelection(interaction, user) {
     await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
     return;
   }
+  ensurePlayerIslandState(player);
 
-  const destinations = typeof getPortalDestinations === 'function'
+  const allDestinations = typeof getPortalDestinations === 'function'
     ? getPortalDestinations(player.location || '')
     : [];
-  if (!player.portalMenuOpen || destinations.length === 0) {
+  const destinations = Array.isArray(allDestinations) ? allDestinations : [];
+  if (!player.portalMenuOpen || allDestinations.length === 0) {
     await interaction.reply({
       content: '⚠️ 你目前尚未啟用傳送門。請先在故事選項中選擇「前往附近傳送門」。',
       ephemeral: true
     }).catch(() => {});
     return;
   }
-
   const rows = [];
   for (let i = 0; i < destinations.length; i += 4) {
     const buttons = destinations.slice(i, i + 4).map((loc, idx) => {
@@ -4076,6 +4825,7 @@ async function showPortalSelection(interaction, user) {
     .setColor(0x7b68ee)
     .setDescription(
       `你已啟動 ${player.location} 附近的傳送門網路。\n` +
+      `（六大區主傳送門互通）\n` +
       `請點選要傳送到的目的地：\n\n` +
       destinations.map((loc, idx) => `${idx + 1}. ${loc}`).join('\n')
     );
@@ -4798,17 +5548,59 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId.startsWith('map_loc_') ||
       customId.startsWith('portal_jump_') ||
       customId.startsWith('map_goto_');
+    const isShopFlowButton = customId.startsWith('shop_');
     // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
       customId === 'open_profile';
-    if (!isMapFlowButton && !isModalLauncherButton) {
+    if (!isMapFlowButton && !isModalLauncherButton && !isShopFlowButton) {
       await lockPressedButtonImmediately(interaction);
     }
   }
 
   // ===== 招式配置下拉 =====
   if (interaction.isStringSelectMenu()) {
+    if (customId === 'map_region_move_select') {
+      const player = CORE.loadPlayer(user.id);
+      if (!player) {
+        await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
+        return;
+      }
+      ensurePlayerIslandState(player);
+      const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+        ? ISLAND_STORY.getIslandStoryState(player, player.location)
+        : null;
+      if (!islandState?.completed) {
+        await interaction.reply({
+          content: '🧭 本地劇情尚未完成，還不能自由探索。先推進本島故事。',
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+      const target = String(interaction.values?.[0] || '').trim();
+      if (!target || target === '__locked__') {
+        await interaction.reply({ content: '⚠️ 請選擇有效目的地。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const currentProfile = typeof getLocationProfile === 'function' ? getLocationProfile(player.location || '') : null;
+      const targetProfile = typeof getLocationProfile === 'function' ? getLocationProfile(target) : null;
+      if (!currentProfile || !targetProfile || String(currentProfile.region || '') !== String(targetProfile.region || '')) {
+        await interaction.reply({
+          content: '⚠️ 區內移動只能選同一大區地點；跨區請使用主傳送門。',
+          ephemeral: true
+        }).catch(() => {});
+        return;
+      }
+      if (target === String(player.location || '')) {
+        await showIslandMap(interaction, user, 0, `✅ 你已在 ${target}`);
+        return;
+      }
+      player.navigationTarget = target;
+      CORE.savePlayer(player);
+      await showIslandMap(interaction, user, 0, `✅ 已設定目的地：${target}。下一段故事會朝這裡推進。`);
+      return;
+    }
+
     if (customId === 'moves_pet_select') {
       const petId = String(interaction.values?.[0] || '');
       await showMovesList(interaction, user, petId);
@@ -4914,7 +5706,47 @@ CLIENT.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: '⚠️ 議價選項資料錯誤，請重新選擇。', ephemeral: true }).catch(() => {});
         return;
       }
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate().catch(() => {});
+      }
       await showWorldShopHaggleOffer(interaction, user, marketType, spec);
+      return;
+    }
+
+    if (customId.startsWith('shop_haggle_bulk_select_')) {
+      const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+      const player = CORE.loadPlayer(user.id);
+      if (!player) {
+        await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+        return;
+      }
+      if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss')) {
+        await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const options = Array.isArray(player.shopSession.haggleDraftOptions) ? player.shopSession.haggleDraftOptions : [];
+      const rawValues = Array.isArray(interaction.values) ? interaction.values : [];
+      const selectedSpecs = [];
+      const used = new Set();
+      for (const raw of rawValues) {
+        const idx = Number(String(raw || '').replace('bulkidx_', ''));
+        if (!Number.isFinite(idx) || idx < 0 || idx >= options.length) continue;
+        const spec = options[idx];
+        const key = `${String(spec?.itemName || '').trim()}::${String(spec?.itemRef?.source || '')}`;
+        if (!spec || typeof spec !== 'object' || !String(spec?.itemName || '').trim() || used.has(key)) continue;
+        used.add(key);
+        selectedSpecs.push(spec);
+      }
+      if (selectedSpecs.length <= 0) {
+        await interaction.reply({ content: '⚠️ 請至少選擇 1 件商品。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      player.shopSession.haggleBulkSelectedSpecs = selectedSpecs.map((spec) => JSON.parse(JSON.stringify(spec)));
+      CORE.savePlayer(player);
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate().catch(() => {});
+      }
+      await showWorldShopHaggleAllOffer(interaction, user, marketType, selectedSpecs);
       return;
     }
   }
@@ -5181,20 +6013,33 @@ CLIENT.on('interactionCreate', async (interaction) => {
       await interaction.reply({ content: '❌ 找不到角色資料，請先 /start', ephemeral: true }).catch(() => {});
       return;
     }
+    ensurePlayerIslandState(player);
 
-    const destinations = typeof getPortalDestinations === 'function'
+    const rawDestinations = typeof getPortalDestinations === 'function'
       ? getPortalDestinations(player.location || '')
       : [];
+    const destinations = Array.isArray(rawDestinations) ? rawDestinations : [];
     const targetLocation = destinations[Number.isNaN(idx) ? -1 : idx];
     if (!targetLocation) {
       await interaction.reply({ content: '⚠️ 無效的傳送目的地。', ephemeral: true }).catch(() => {});
       return;
     }
 
+    const gate = canEnterLocation(player, targetLocation);
+    if (!gate.allowed) {
+      await interaction.reply({
+        content: `🛑 無法前往 **${targetLocation}**：目前勝率 ${gate.winRate}%（需要 > ${LOCATION_ENTRY_MIN_WINRATE}%）。`,
+        ephemeral: true
+      }).catch(() => {});
+      return;
+    }
+
     const fromLocation = player.location;
     player.location = targetLocation;
     syncLocationArcLocation(player);
+    ensurePlayerIslandState(player);
     player.portalMenuOpen = false;
+    player.navigationTarget = '';
     player.currentStory =
       `🌀 傳送門正在開啟，空間折疊完成。\n你已由 **${fromLocation}** 抵達 **${targetLocation}**。`;
     player.eventChoices = [];
@@ -5343,6 +6188,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId === 'show_memory_audit') {
+    await showMemoryAudit(interaction, user);
+    return;
+  }
+
   if (customId === 'quick_shop_entry' || customId.startsWith('quick_shop_')) {
     const explicitMarket = customId.includes('_renaiss') || customId.includes('_digital')
       ? parseMarketTypeFromCustomId(customId, 'renaiss')
@@ -5486,7 +6336,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   if (customId.startsWith('shop_haggle_all_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
-    await showWorldShopHaggleAllOffer(interaction, user, marketType);
+    await showWorldShopHaggleBulkPicker(interaction, user, marketType);
     return;
   }
 
@@ -5534,28 +6384,36 @@ CLIENT.on('interactionCreate', async (interaction) => {
     let soldLabel = String(pending.itemName || '商品');
     let soldCount = 1;
 
-    if (String(pending.scope || '') === 'all' || String(pending.spec?.kind || '') === 'all') {
-      const worldDay = Number(CORE.getWorld()?.day || 1);
-      const sellResult = await ECON.sellPlayerAtMarket(player, marketType, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
-      if (!sellResult || sellResult.error || Number(sellResult.soldCount || 0) <= 0) {
+    if (String(pending.scope || '') === 'bulk' || String(pending.scope || '') === 'all' || String(pending.spec?.kind || '') === 'all') {
+      const bulkSpecs = Array.isArray(pending.specs) ? pending.specs : [];
+      if (bulkSpecs.length <= 0) {
         player.shopSession.pendingHaggleOffer = null;
         CORE.savePlayer(player);
-        await showWorldShopHagglePicker(interaction, user, marketType, `全部議價失敗：${sellResult?.error || '目前沒有可售商品'}`);
+        await showWorldShopHaggleBulkPicker(interaction, user, marketType, '批次議價資料已失效，請重新選擇商品。');
         return;
       }
-      const rawTotal = Math.max(0, Number(sellResult.totalGold || 0));
-      quoted = Math.max(0, Math.floor(rawTotal * 0.7));
-      const discountLoss = Math.max(0, rawTotal - quoted);
-      if (discountLoss > 0) {
-        player.stats.財富 = Math.max(0, Number(player?.stats?.財富 || 0) - discountLoss);
+      const consume = consumeHaggleBulkItemsFromPlayer(player, bulkSpecs);
+      if (!consume.success) {
+        player.shopSession.pendingHaggleOffer = null;
+        CORE.savePlayer(player);
+        await showWorldShopHaggleBulkPicker(interaction, user, marketType, consume.reason || '商品已變動，請重新議價。');
+        return;
       }
-      soldCount = Math.max(1, Number(sellResult.soldCount || 1));
-      soldLabel = `全部商品（${soldCount} 件）`;
+      quoted = Math.max(0, Number(pending.quotedTotal || 0));
+      const rawTotal = Math.max(0, Number(pending.rawQuotedTotal || 0));
+      const discountLoss = Math.max(0, rawTotal - quoted);
+      soldCount = Math.max(1, Number(consume.totalRemoved || pending.soldCount || 1));
+      soldLabel = `批次商品（${soldCount} 件）`;
+
+      player.stats.財富 = Math.max(0, Number(player?.stats?.財富 || 0)) + quoted;
+      if (pending.marketStateAfter && typeof pending.marketStateAfter === 'object') {
+        player.marketState = JSON.parse(JSON.stringify(pending.marketStateAfter));
+      }
       if (quoted > 0) {
         recordCashflow(player, {
           amount: quoted,
           category: marketType === 'digital' ? 'market_digital_sell' : 'market_renaiss_sell',
-          source: `${getMarketTypeLabel(marketType)} 商店議價全部賣出（七折）`,
+          source: `${getMarketTypeLabel(marketType)} 批次議價賣出（七折）`,
           marketType
         });
       }
@@ -5563,7 +6421,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
         recordCashflow(player, {
           amount: -discountLoss,
           category: 'shop_haggle_bulk_discount',
-          source: `${getMarketTypeLabel(marketType)} 全賣七折折讓`,
+          source: `${getMarketTypeLabel(marketType)} 批次七折折讓`,
           marketType
         });
       }
@@ -7369,6 +8227,31 @@ function buildFinanceLedgerText(player, limit = 20) {
   }).join('\n');
 }
 
+function buildMemoryAuditRows(player, limit = 24) {
+  if (!player || typeof CORE.getPlayerMemoryAudit !== 'function') return [];
+  const rows = CORE.getPlayerMemoryAudit(player.id, { limit: Math.max(1, Math.min(60, Number(limit) || 24)) });
+  return Array.isArray(rows) ? rows : [];
+}
+
+function buildMemoryAuditText(rows = [], lang = 'zh-TW') {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return lang === 'en'
+      ? '(No memory records yet)'
+      : lang === 'zh-CN'
+        ? '（目前没有记忆流水）'
+        : '（目前沒有記憶流水）';
+  }
+  return rows.map((row, idx) => {
+    const turn = Math.max(0, Number(row?.turn || 0));
+    const category = String(row?.category || '一般記憶');
+    const reason = String(row?.reason || '系統判定需保留').slice(0, 44);
+    const content = String(row?.content || '').slice(0, 56) || '（空白）';
+    const outcome = String(row?.outcome || '').trim();
+    const outcomeText = outcome ? ` -> ${outcome.slice(0, 36)}` : '';
+    return `${idx + 1}. [T${turn}]【${category}】${content}${outcomeText}\n　└ 理由：${reason}`;
+  }).join('\n');
+}
+
 async function showFinanceLedger(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
@@ -7393,6 +8276,49 @@ async function showFinanceLedger(interaction, user) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
+async function showMemoryAudit(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  const uiLang = getPlayerUILang(player);
+  const rows = buildMemoryAuditRows(player, 24);
+  const auditText = buildMemoryAuditText(rows, uiLang);
+  const categoryCount = {};
+  for (const row of rows) {
+    const key = String(row?.category || '一般記憶');
+    categoryCount[key] = Number(categoryCount[key] || 0) + 1;
+  }
+  const categorySummary = Object.entries(categoryCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, count]) => `${name}x${count}`)
+    .join('、') || (uiLang === 'en' ? 'No records' : (uiLang === 'zh-CN' ? '暂无记录' : '暫無記錄'));
+
+  const title = uiLang === 'en' ? '🧠 Memory Audit' : (uiLang === 'zh-CN' ? '🧠 记忆检查' : '🧠 記憶檢查');
+  const desc = uiLang === 'en'
+    ? 'Detailed log of what was written into memory each turn and why.'
+    : (uiLang === 'zh-CN'
+      ? '查看每回合写入记忆的内容，以及为何被判定需要保留。'
+      : '查看每回合寫入記憶的內容，以及為何被判定需要保留。');
+  const streamTitle = uiLang === 'en' ? 'Recent 24 Records' : (uiLang === 'zh-CN' ? '最近24笔流水' : '最近24筆流水');
+  const descBody =
+    `${desc}\n\n` +
+    `${uiLang === 'en' ? '📊 Category Summary' : (uiLang === 'zh-CN' ? '📊 類別分佈' : '📊 類別分佈')}：${categorySummary}\n\n` +
+    `📒 ${streamTitle}\n${auditText}`;
+
+  const embed = new EmbedBuilder()
+    .setTitle(title)
+    .setColor(0x2563eb)
+    .setDescription(descBody.slice(0, 3950));
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('main_menu').setLabel(uiLang === 'en' ? 'Back to Menu' : (uiLang === 'zh-CN' ? '返回主选单' : '返回主選單')).setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
 }
@@ -7688,6 +8614,63 @@ function buildHaggleShadowPlayer(player, spec = {}, worldDay = 1) {
   return { shadow, candidate };
 }
 
+function buildHaggleBulkShadowPlayer(player, specs = [], worldDay = 1) {
+  const input = Array.isArray(specs) ? specs : [];
+  if (input.length <= 0) return { error: '請先選擇要批次議價的商品。' };
+
+  const shadow = JSON.parse(JSON.stringify(player || {}));
+  ECON.ensurePlayerEconomy(shadow);
+  shadow.tradeGoods = [];
+  shadow.herbs = [];
+  shadow.inventory = [];
+  if (!shadow.marketState || typeof shadow.marketState !== 'object') shadow.marketState = {};
+  shadow.marketState.lastSkillLicenseDay = Number(worldDay || 1);
+
+  const tradeGoods = Array.isArray(player?.tradeGoods) ? player.tradeGoods : [];
+  const herbs = Array.isArray(player?.herbs) ? player.herbs : [];
+  const inventory = Array.isArray(player?.inventory) ? player.inventory : [];
+
+  const normalizedSpecs = [];
+  const usedName = new Set();
+  for (const raw of input) {
+    const itemName = String(raw?.itemName || '').trim();
+    if (!itemName || usedName.has(itemName)) continue;
+    usedName.add(itemName);
+
+    let matched = 0;
+    for (const good of tradeGoods) {
+      if (String(good?.name || '').trim() !== itemName) continue;
+      shadow.tradeGoods.push(JSON.parse(JSON.stringify(good)));
+      matched += 1;
+    }
+    for (const herb of herbs) {
+      if (getDraftItemName(herb) !== itemName) continue;
+      shadow.herbs.push(typeof herb === 'string' ? herb : JSON.parse(JSON.stringify(herb)));
+      matched += 1;
+    }
+    for (const item of inventory) {
+      const name = getDraftItemName(item);
+      if (!name || SHOP_HAGGLE_BLOCKED_ITEMS.has(name) || name !== itemName) continue;
+      shadow.inventory.push(typeof item === 'string' ? item : JSON.parse(JSON.stringify(item)));
+      matched += 1;
+    }
+    if (matched <= 0) continue;
+
+    normalizedSpecs.push({
+      kind: 'item',
+      itemName,
+      quantityMax: matched,
+      itemRef: { kind: 'item', source: String(raw?.itemRef?.source || 'inventory') }
+    });
+  }
+
+  if (normalizedSpecs.length <= 0) {
+    return { error: '你選的商品目前已不存在，請重新選擇。' };
+  }
+
+  return { shadow, specs: normalizedSpecs };
+}
+
 function consumeHaggleItemFromPlayer(player, spec = {}) {
   const itemName = String(spec?.itemName || '').trim();
   const tradeGoodId = String(spec?.itemRef?.tradeGoodId || '').trim();
@@ -7735,16 +8718,104 @@ function consumeHaggleItemFromPlayer(player, spec = {}) {
   return { success: false, reason: `物品「${itemName}」已不存在或已被移除` };
 }
 
+function consumeHaggleBulkItemsFromPlayer(player, specs = []) {
+  const input = Array.isArray(specs) ? specs : [];
+  if (input.length <= 0) return { success: false, reason: '缺少批次議價項目' };
+
+  const countAvailable = (itemName) => {
+    let count = 0;
+    for (const good of Array.isArray(player?.tradeGoods) ? player.tradeGoods : []) {
+      if (String(good?.name || '').trim() === itemName) count += 1;
+    }
+    for (const herb of Array.isArray(player?.herbs) ? player.herbs : []) {
+      if (getDraftItemName(herb) === itemName) count += 1;
+    }
+    for (const item of Array.isArray(player?.inventory) ? player.inventory : []) {
+      const name = getDraftItemName(item);
+      if (!name || SHOP_HAGGLE_BLOCKED_ITEMS.has(name)) continue;
+      if (name === itemName) count += 1;
+    }
+    return count;
+  };
+
+  for (const raw of input) {
+    const itemName = String(raw?.itemName || '').trim();
+    const need = Math.max(1, Number(raw?.quantityMax || 1));
+    if (!itemName) continue;
+    const available = countAvailable(itemName);
+    if (available < need) {
+      return { success: false, reason: `商品「${itemName}」數量已變動，請重新議價。` };
+    }
+  }
+
+  const consumed = [];
+  for (const raw of input) {
+    const itemName = String(raw?.itemName || '').trim();
+    const need = Math.max(1, Number(raw?.quantityMax || 1));
+    if (!itemName) continue;
+    let remaining = need;
+
+    const tryTrade = () => {
+      const list = Array.isArray(player?.tradeGoods) ? player.tradeGoods : [];
+      for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
+        if (String(list[i]?.name || '').trim() !== itemName) continue;
+        list.splice(i, 1);
+        remaining -= 1;
+      }
+    };
+    const tryHerbs = () => {
+      const list = Array.isArray(player?.herbs) ? player.herbs : [];
+      for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
+        if (getDraftItemName(list[i]) !== itemName) continue;
+        list.splice(i, 1);
+        remaining -= 1;
+      }
+    };
+    const tryInv = () => {
+      const list = Array.isArray(player?.inventory) ? player.inventory : [];
+      for (let i = list.length - 1; i >= 0 && remaining > 0; i--) {
+        const name = getDraftItemName(list[i]);
+        if (!name || SHOP_HAGGLE_BLOCKED_ITEMS.has(name) || name !== itemName) continue;
+        list.splice(i, 1);
+        remaining -= 1;
+      }
+    };
+
+    const prefer = String(raw?.itemRef?.source || '').trim();
+    const chain = prefer === 'tradeGoods'
+      ? [tryTrade, tryHerbs, tryInv]
+      : prefer === 'herbs'
+        ? [tryHerbs, tryTrade, tryInv]
+        : prefer === 'inventory'
+          ? [tryInv, tryTrade, tryHerbs]
+          : [tryTrade, tryHerbs, tryInv];
+    for (const fn of chain) {
+      if (remaining <= 0) break;
+      fn();
+    }
+
+    const removed = need - remaining;
+    if (removed < need) {
+      return { success: false, reason: `商品「${itemName}」數量已變動，請重新議價。` };
+    }
+    consumed.push({ itemName, quantity: removed });
+  }
+
+  const totalRemoved = consumed.reduce((sum, entry) => sum + Number(entry.quantity || 0), 0);
+  if (totalRemoved <= 0) return { success: false, reason: '沒有可成交商品' };
+  return { success: true, consumed, totalRemoved };
+}
+
 function extractPitchFromHaggleMessage(message = '') {
   const text = String(message || '');
   const match = text.match(/🏪\s*[^：:\n]+[：:]\s*([^\n]+)/u);
   return String(match?.[1] || '').trim();
 }
 
-async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'renaiss') {
+async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'renaiss', selectedSpecs = null) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
@@ -7753,13 +8824,28 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
     await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
     return;
   }
+  const picked = Array.isArray(selectedSpecs)
+    ? selectedSpecs
+    : Array.isArray(player.shopSession?.haggleBulkSelectedSpecs)
+      ? player.shopSession.haggleBulkSelectedSpecs
+      : [];
+  if (picked.length <= 0) {
+    await showWorldShopHaggleBulkPicker(interaction, user, safeMarket, '請先從清單勾選要批次賣出的商品。');
+    return;
+  }
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferUpdate().catch(() => {});
+  }
 
   const worldDay = Number(CORE.getWorld()?.day || 1);
-  const shadow = JSON.parse(JSON.stringify(player || {}));
-  ECON.ensurePlayerEconomy(shadow);
-  const offerResult = await ECON.sellPlayerAtMarket(shadow, safeMarket, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
+  const built = buildHaggleBulkShadowPlayer(player, picked, worldDay);
+  if (built.error || !built.shadow || !Array.isArray(built.specs) || built.specs.length <= 0) {
+    await showWorldShopHaggleBulkPicker(interaction, user, safeMarket, built.error || '無法建立批次議價內容，請重新選擇。');
+    return;
+  }
+  const offerResult = await ECON.sellPlayerAtMarket(built.shadow, safeMarket, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
   if (!offerResult || offerResult.error || Number(offerResult.soldCount || 0) <= 0) {
-    await showWorldShopHagglePicker(interaction, user, safeMarket, `無法全部議價：${offerResult?.error || '目前沒有可售商品'}`);
+    await showWorldShopHaggleBulkPicker(interaction, user, safeMarket, `無法批次議價：${offerResult?.error || '目前沒有可售商品'}`);
     return;
   }
 
@@ -7770,9 +8856,14 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
     id: `haggle_all_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     marketType: safeMarket,
     createdAt: Date.now(),
-    scope: 'all',
-    itemName: '全部可賣商品',
-    spec: { kind: 'all' },
+    scope: 'bulk',
+    itemName: '已選商品（批次）',
+    specs: built.specs.map((spec) => ({
+      kind: 'item',
+      itemName: String(spec?.itemName || '').trim(),
+      quantityMax: Math.max(1, Number(spec?.quantityMax || 1)),
+      itemRef: { kind: 'item', source: String(spec?.itemRef?.source || 'inventory') }
+    })),
     quotedTotal,
     rawQuotedTotal: rawTotal,
     discountLoss,
@@ -7789,17 +8880,22 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
 
   const pitch = extractPitchFromHaggleMessage(offerResult.message);
   const detailLines = [];
-  detailLines.push('範圍：全部可賣商品');
+  const itemSummary = built.specs
+    .map((spec) => `${spec.itemName} x${Math.max(1, Number(spec.quantityMax || 1))}`)
+    .slice(0, 6)
+    .join('、');
+  detailLines.push(`範圍：已選 ${built.specs.length} 項商品`);
+  detailLines.push(`項目：${itemSummary}${built.specs.length > 6 ? '…' : ''}`);
   detailLines.push(`件數：${pending.soldCount} 件`);
   detailLines.push(`原始估價：${rawTotal} Rns 代幣`);
-  detailLines.push(`快速清倉（七折）：**${quotedTotal} Rns 代幣**`);
+  detailLines.push(`批次賣出（七折）：**${quotedTotal} Rns 代幣**`);
   detailLines.push(`折讓差額：-${discountLoss} Rns 代幣`);
   detailLines.push(`鑑價員：${pending.npcName}`);
   if (pitch) detailLines.push(`\n💬 ${pitch}`);
-  detailLines.push('\n請選擇是否同意「全部賣出（七折）」提案。');
+  detailLines.push('\n請選擇是否同意本次批次賣出（七折）提案。');
 
   const embed = new EmbedBuilder()
-    .setTitle(`🤝 全部議價提案｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(`🤝 批次議價提案｜${getMarketTypeLabel(safeMarket)}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(detailLines.join('\n'))
     .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
@@ -7808,13 +8904,13 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
     new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel('✅ 同意成交').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel('↩️ 退出議價').setStyle(ButtonStyle.Secondary)
   );
-  await interaction.update({ embeds: [embed], components: [row] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
-async function showWorldShopHagglePicker(interaction, user, marketType = 'renaiss', notice = '') {
+async function showWorldShopHaggleBulkPicker(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
@@ -7826,6 +8922,65 @@ async function showWorldShopHagglePicker(interaction, user, marketType = 'renais
 
   const draft = buildShopHaggleDraftOptions(player, user.id);
   player.shopSession.haggleDraftOptions = draft.options;
+  player.shopSession.haggleBulkSelectedSpecs = [];
+  player.shopSession.pendingHaggleOffer = null;
+  CORE.savePlayer(player);
+
+  const lines = [];
+  if (notice) lines.push(`✅ ${notice}`);
+  lines.push('請從下拉選單勾選要「批次賣出（七折）」的商品。');
+  lines.push('勾選完成後會即時顯示本次批次報價，再由你決定是否成交。');
+  lines.push(`可議價項目：${draft.options.length} 個`);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📦 批次賣出（七折）｜${getMarketTypeLabel(safeMarket)}`)
+    .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+    .setDescription(lines.join('\n'))
+    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+
+  if (draft.options.length <= 0) {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
+    );
+    await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
+    return;
+  }
+
+  const selectOptions = draft.options.slice(0, SHOP_HAGGLE_BULK_SELECT_LIMIT).map((option, idx) => ({
+    label: String(option.label || option.itemName || `選項${idx + 1}`).slice(0, 100),
+    description: String(option.description || '').slice(0, 100) || '選擇此商品加入批次賣出',
+    value: `bulkidx_${idx}`
+  }));
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`shop_haggle_bulk_select_${safeMarket}`)
+    .setPlaceholder('可複選：勾選要批次賣出的商品')
+    .setMinValues(1)
+    .setMaxValues(Math.min(selectOptions.length, 10))
+    .addOptions(selectOptions);
+
+  const row1 = new ActionRowBuilder().addComponents(select);
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
+  );
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row1, row2] });
+}
+
+async function showWorldShopHagglePicker(interaction, user, marketType = 'renaiss', notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  ECON.ensurePlayerEconomy(player);
+  const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
+    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const draft = buildShopHaggleDraftOptions(player, user.id);
+  player.shopSession.haggleDraftOptions = draft.options;
+  player.shopSession.haggleBulkSelectedSpecs = [];
   player.shopSession.pendingHaggleOffer = null;
   CORE.savePlayer(player);
 
@@ -7845,7 +9000,7 @@ async function showWorldShopHagglePicker(interaction, user, marketType = 'renais
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
     );
-    await interaction.update({ embeds: [embed], components: [row] });
+    await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
     return;
   }
 
@@ -7863,16 +9018,16 @@ async function showWorldShopHagglePicker(interaction, user, marketType = 'renais
 
   const row1 = new ActionRowBuilder().addComponents(select);
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_haggle_all_${safeMarket}`).setLabel('📦 全部賣出(七折)').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`shop_haggle_all_${safeMarket}`).setLabel('📦 批次賣出(七折)').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   );
-  await interaction.update({ embeds: [embed], components: [row1, row2] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row1, row2] });
 }
 
 async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss', spec = null) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
@@ -7891,6 +9046,9 @@ async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss
   if (built.error || !built.shadow) {
     await showWorldShopHagglePicker(interaction, user, safeMarket, built.error || '目前沒有可議價的項目。');
     return;
+  }
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferUpdate().catch(() => {});
   }
 
   const offerResult = await ECON.sellPlayerAtMarket(built.shadow, safeMarket, { worldDay }).catch((err) => ({ error: err?.message || String(err) }));
@@ -7943,7 +9101,7 @@ async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss
     new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel('✅ 同意成交').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel('↩️ 退出議價').setStyle(ButtonStyle.Secondary)
   );
-  await interaction.update({ embeds: [embed], components: [row] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
 async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss', notice = '') {
@@ -8202,6 +9360,7 @@ function openShopSession(player, marketType = 'renaiss', sourceChoice = '') {
     sellDraftOptions: [],
     pendingSellSpec: null,
     haggleDraftOptions: [],
+    haggleBulkSelectedSpecs: [],
     pendingHaggleOffer: null
   };
 }
@@ -8221,7 +9380,7 @@ function leaveShopSession(player) {
 async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
@@ -8254,13 +9413,13 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   ));
-  await interaction.update({ embeds: [embed], components: rows });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
 }
 
 async function showWorldShopScene(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
@@ -8294,7 +9453,7 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
     new ButtonBuilder().setCustomId(`shop_buy_${safeMarket}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
   );
-  await interaction.update({ embeds: [embed], components: [row1, row2] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row1, row2] });
 }
 
 // ============== 行囊/背包 ==============
@@ -8372,6 +9531,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   const worldDay = Number(CORE.getWorld()?.day || 1);
 
   MAIN_STORY.ensureMainStoryState(player);
+  ensurePlayerIslandState(player);
+  const islandLocationBefore = String(player.location || '').trim();
+  const islandStateBefore = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, islandLocationBefore)
+    : null;
   
   const choices = player.eventChoices || [];
   const event = choices[eventIndex];
@@ -8543,15 +9707,15 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     const nearbyPortals = typeof getPortalDestinations === 'function'
       ? getPortalDestinations(player.location || '')
       : [];
-    player.portalMenuOpen = nearbyPortals.length > 0;
+    player.portalMenuOpen = Array.isArray(nearbyPortals) && nearbyPortals.length > 0;
     extraStoryGuide = player.portalMenuOpen
       ? buildPortalUsageGuide(player)
-      : '🌀 你嘗試感應傳送門，但附近暫時沒有穩定門可啟動。';
+      : '🌀 你嘗試感應傳送門，但目前沒有可用的主節點。';
     result = {
       type: 'portal_ready',
       message: player.portalMenuOpen
         ? `你在${player.location}感應到穩定傳送門節點，門紋逐漸亮起。`
-        : `你在${player.location}搜尋傳送門訊號，但暫時未找到可用門。`
+        : `你在${player.location}搜尋傳送門訊號，但尚無可用主節點。`
     };
     queueMemory({
       type: '傳送',
@@ -8563,9 +9727,25 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   } else if (event.action === 'teleport' && event.targetLocation) {
     const fromLocation = player.location;
     const targetLocation = event.targetLocation;
+    const entryGate = canEnterLocation(player, targetLocation);
+    if (!entryGate.allowed) {
+      result = {
+        type: 'travel_blocked',
+        message: `🛑 你嘗試前往 **${targetLocation}**，但目前勝率僅 **${entryGate.winRate}%**（門檻 > ${LOCATION_ENTRY_MIN_WINRATE}%）。請先提升實力再前往。`
+      };
+      queueMemory({
+        type: '移動',
+        content: `嘗試前往${targetLocation}`,
+        outcome: `受阻｜勝率 ${entryGate.winRate}%`,
+        importance: 2,
+        tags: ['travel', 'blocked', 'entry_gate']
+      });
+    } else {
     player.location = targetLocation;
     syncLocationArcLocation(player);
+    ensurePlayerIslandState(player);
     player.portalMenuOpen = false;
+    player.navigationTarget = '';
     queueMemory({
       type: '移動',
       content: `經傳送門由${fromLocation}前往${targetLocation}`,
@@ -8577,6 +9757,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       type: 'travel',
       message: `🌀 傳送門啟動，空間在你腳下折疊。眨眼間，你已抵達 **${targetLocation}**。`
     };
+    }
   } else if (event.action === 'wish_pool') {
     const safeWishText = wishTextFromModal.slice(0, 120);
     selectedChoice = `在許願池許願：「${safeWishText}」`;
@@ -8646,6 +9827,42 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       outcome: `${outcome.verdict || 'costly'}｜${outcome.futureHook || ''}`.slice(0, 180),
       importance: outcome.verdict === 'allow' ? 2 : 3,
       tags: ['custom_input', String(outcome.verdict || 'costly')]
+    });
+  } else if (event.action === 'location_story_battle') {
+    const fallback = createGuaranteedLocationStoryBattleChoice(player);
+    const enemyTemplate = (event?.enemy && typeof event.enemy === 'object')
+      ? { ...event.enemy }
+      : (fallback?.enemy ? { ...fallback.enemy } : null);
+    const npcId = String(event?.npcId || fallback?.npcId || enemyTemplate?.id || '').trim();
+    const npcName = String(event?.npcName || fallback?.npcName || enemyTemplate?.name || '在地敵對勢力').trim();
+    selectedChoice = event.choice || fallback?.choice || `在${player.location}迎戰${npcName}`;
+    result = {
+      type: 'combat',
+      message:
+        String(event?.desc || '').trim() ||
+        `你沿著${player.location}的暗線追上${npcName}，雙方話語未落便爆發正面衝突。`,
+      enemy: enemyTemplate || {
+        id: npcId || 'local_story_enemy',
+        name: npcName || '在地敵對勢力',
+        hp: 130,
+        maxHp: 130,
+        attack: 28,
+        defense: 12,
+        moves: ['突襲', '壓制'],
+        reward: { gold: [60, 120] },
+        isMonster: false,
+        companionPet: false
+      },
+      npcId,
+      npcName,
+      locationStoryBattle: true
+    };
+    queueMemory({
+      type: '地區篇章',
+      content: `在${player.location}對上${npcName}`,
+      outcome: '地區關鍵戰啟動',
+      importance: 3,
+      tags: ['location_story', 'combat']
     });
   } else if (event.action === 'mentor_spar') {
     result = buildMentorSparResult(event, player, pet);
@@ -8875,6 +10092,40 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   player.stats.飽腹度 = Math.max(0, (player.stats.飽腹度 || 100) - Math.floor(Math.random() * 5 + 3));
   incrementPlayerStoryTurns(player, 1);
   incrementLocationArcTurns(player, 1);
+  const islandProgressAfterTurn = syncCurrentIslandStoryProgress(player);
+  const islandCompletedNow = Boolean(
+    !Boolean(islandStateBefore?.completed) &&
+    islandProgressAfterTurn?.completed
+  );
+  const nextIslandHint = islandCompletedNow && ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
+    ? ISLAND_STORY.getNextPrimaryLocation(player.location)
+    : '';
+  const nextPortalHubHint = nextIslandHint && typeof getLocationPortalHub === 'function'
+    ? String(getLocationPortalHub(nextIslandHint) || '').trim()
+    : '';
+  if (islandCompletedNow) {
+    const completedLine = nextPortalHubHint
+      ? `📍 你已完成 **${player.location}** 的島內篇章。主傳送門已啟動，建議前往 **${nextPortalHubHint}** 再推進下一區。`
+      : (nextIslandHint
+        ? `📍 你已完成 **${player.location}** 的島內篇章。主傳送門已啟動，可考慮前往 **${nextIslandHint}**，或留在本地自由探索。`
+        : `📍 你已完成 **${player.location}** 的島內篇章。主傳送門已啟動，你可以留在本地自由探索，或前往下一個地區。`);
+    result.message = `${String(result.message || '').trim()}\n\n${completedLine}`.trim();
+    player.portalMenuOpen = true;
+    player.forcePortalChoice = true;
+    if (nextPortalHubHint && ISLAND_STORY && typeof ISLAND_STORY.unlockLocation === 'function') {
+      ISLAND_STORY.unlockLocation(player, nextPortalHubHint);
+    }
+    queueMemory({
+      type: '地區篇章',
+      content: `${player.location} 劇情已完成`,
+      outcome: nextPortalHubHint
+        ? `主傳送門啟動｜建議前往 ${nextPortalHubHint}`
+        : (nextIslandHint ? `建議前往 ${nextIslandHint}` : '可自由探索或跨區'),
+      importance: 2,
+      tags: ['island_story', 'completed']
+    });
+    if (!extraStoryGuide) extraStoryGuide = buildPortalUsageGuide(player);
+  }
   if (typeof CORE.advanceRoamingDigitalVillains === 'function') {
     CORE.advanceRoamingDigitalVillains({ steps: 1, persist: true });
   }
@@ -8912,6 +10163,15 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       player,
       result?.isMentorSpar ? { skipBeginnerDanger: true } : undefined
     );
+    if (shouldCountCombatForLocationStory(event, result, enemy)) {
+      markCurrentLocationStoryBattleDone(player, {
+        npcId: String(event?.npcId || result?.npcId || enemy?.id || '').trim(),
+        npcName: String(event?.npcName || result?.npcName || enemy?.name || '').trim(),
+        enemyId: String(enemy?.id || '').trim(),
+        enemyName: String(enemy?.name || '').trim()
+      });
+      syncCurrentIslandStoryProgress(player);
+    }
     const mentorSparState = result?.isMentorSpar ? { ...(result?.mentorSpar || {}) } : null;
     const fighterType = CORE.canPetFight(pet) ? 'pet' : 'player';
     const battleEstimate = estimateBattleOutcome(player, pet, enemy, fighterType);
@@ -9334,9 +10594,10 @@ function advanceBattleTurnEnergy(player, spentCost = 0) {
   };
 }
 
-function buildBattleActionRows(player, pet, combatant) {
+function buildBattleActionRows(player, pet, combatant, options = {}) {
   const state = ensureBattleEnergyState(player);
   const battleState = player.battleState || {};
+  const disableAll = Boolean(options?.disableAll);
   const currentEnergy = state.energy;
   const indexedMoves = getCombatantMoves(combatant, pet)
     .map((m, i) => ({ move: m, index: i }))
@@ -9351,7 +10612,7 @@ function buildBattleActionRows(player, pet, combatant) {
       .setCustomId(`use_move_${index}`)
       .setLabel(`${m.name} ⚡${energyCost}`)
       .setStyle(canUse ? ButtonStyle.Danger : ButtonStyle.Secondary)
-      .setDisabled(!canUse);
+      .setDisabled(disableAll || !canUse);
   });
 
   const moveRow = new ActionRowBuilder().addComponents(
@@ -9361,10 +10622,92 @@ function buildBattleActionRows(player, pet, combatant) {
   );
   const fleeTry = battleState.fleeAttempts || 0;
   const actionRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('battle_wait').setLabel('⚡ 蓄能待機').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`flee_${fleeTry}`).setLabel(`${t('flee')} (70%×2)`).setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('battle_wait').setLabel('⚡ 蓄能待機').setStyle(ButtonStyle.Primary).setDisabled(disableAll),
+    new ButtonBuilder()
+      .setCustomId(`flee_${fleeTry}`)
+      .setLabel(`🏃 逃跑 70%（失敗 ${fleeTry}/2）`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(disableAll)
   );
   return [moveRow, actionRow];
+}
+
+function clipBattleCellText(text = '', maxLen = 18) {
+  const raw = String(text || '').trim() || '—';
+  if (raw.length <= maxLen) return raw;
+  return `${raw.slice(0, Math.max(1, maxLen - 1))}…`;
+}
+
+function extractActionExtra(lines = [], fallback = '無') {
+  const cleaned = (Array.isArray(lines) ? lines : [])
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+    .filter((line) => !/施展「/.test(line));
+  if (cleaned.length === 0) return fallback;
+  return cleaned.slice(0, 2).join(' / ');
+}
+
+function buildActionPanelLines(title, data = {}, width = 24) {
+  const safeWidth = Math.max(18, Number(width) || 24);
+  const inner = safeWidth;
+  const top = `┌─【${title}】${'─'.repeat(Math.max(0, inner - title.length - 4))}┐`;
+  const bottom = `└${'─'.repeat(inner + 2)}┘`;
+  const toLine = (value = '') => `│ ${clipBattleCellText(value, inner)}${' '.repeat(Math.max(0, inner - clipBattleCellText(value, inner).length))} │`;
+
+  if (data?.pending) {
+    return [
+      top,
+      toLine('（準備中...）'),
+      toLine(''),
+      toLine(''),
+      bottom
+    ];
+  }
+
+  const moveLine = data?.move ? `招式：${data.move}` : '（尚未行動）';
+  const damageLabel = data?.damageLabel || '造成';
+  const damageLine = Number.isFinite(Number(data?.damage))
+    ? `${damageLabel}：${Math.max(0, Number(data.damage))}`
+    : '';
+  const extraLine = `附加：${data?.extra || '無'}`;
+
+  return [
+    top,
+    toLine(moveLine),
+    toLine(damageLine),
+    toLine(extraLine),
+    bottom
+  ];
+}
+
+function buildDualActionPanels(actionView = {}) {
+  const ally = buildActionPanelLines('我方行動', actionView?.ally || {}, 26);
+  const enemy = buildActionPanelLines('敵方行動', actionView?.enemy || {}, 26);
+  const rows = [];
+  for (let i = 0; i < Math.max(ally.length, enemy.length); i++) {
+    rows.push(`${ally[i] || ''}    ${enemy[i] || ''}`);
+  }
+  return `\`\`\`text\n${rows.join('\n')}\n\`\`\``;
+}
+
+function buildActionViewFromPhase(playerPhase = null, enemyPhase = null, options = {}) {
+  const enemyPending = Boolean(options?.enemyPending);
+  return {
+    ally: {
+      move: playerPhase?.playerMoveName || '',
+      damage: Number.isFinite(Number(playerPhase?.playerDamage)) ? Number(playerPhase.playerDamage) : null,
+      damageLabel: '對敵造成',
+      extra: extractActionExtra(playerPhase?.playerLines || [])
+    },
+    enemy: enemyPending
+      ? { pending: true }
+      : {
+          move: enemyPhase?.enemyMoveName || '',
+          damage: Number.isFinite(Number(enemyPhase?.enemyDamage)) ? Number(enemyPhase.enemyDamage) : null,
+          damageLabel: '對我造成',
+          extra: extractActionExtra(enemyPhase?.enemyLines || [])
+        }
+  };
 }
 
 function buildAIBattleStory(rounds, combatant, enemy, finalResult) {
@@ -9419,11 +10762,14 @@ function buildManualBattleBoard(enemy, combatant, state) {
   const allyHp = `${combatant?.hp || 0}/${combatant?.maxHp || 0}`;
   const turn = Number(state?.turn || 1);
   const energy = Number(state?.energy || 0);
+  const roundText = `第 ${turn} 回合`;
+  const roundLine = `${' '.repeat(Math.max(0, 41 - roundText.length))}${roundText}`;
   return (
     '```text\n' +
+    `${roundLine}\n` +
     `                 ┌─【敵方】──────────────┐\n` +
     `                 │ ${enemyName} HP ${enemyHp}\n` +
-    `                 │ ATK ${enemy?.attack || 0}  回合 ${turn}\n` +
+    `                 │ ATK ${enemy?.attack || 0}\n` +
     `                 └───────────────────────┘\n` +
     `\n` +
     `┌─【我方】──────────────┐\n` +
@@ -9434,10 +10780,56 @@ function buildManualBattleBoard(enemy, combatant, state) {
   );
 }
 
-async function renderManualBattle(interaction, player, pet, roundMessage = '') {
+async function sendBattleMessage(interaction, payload, mode = 'update') {
+  if (mode === 'edit') {
+    if (interaction?.message?.edit) {
+      await interaction.message.edit(payload);
+      return;
+    }
+    if (interaction?.channel && interaction?.message?.id) {
+      const msg = await interaction.channel.messages.fetch(interaction.message.id);
+      if (msg) await msg.edit(payload);
+      return;
+    }
+  }
+  await interaction.update(payload);
+}
+
+function buildManualBattlePayload(player, pet, options = {}) {
+  const enemy = player?.battleState?.enemy;
+  const combatant = getActiveCombatant(player, pet);
+  const state = ensureBattleEnergyState(player);
+  const [moveRow, actionRow] = buildBattleActionRows(player, pet, combatant, { disableAll: Boolean(options?.disableActions) });
+  const dmgInfo = buildBattleMoveDetails(player, pet, combatant);
+  const fighterLabel = combatant.isHuman ? `🧍 ${combatant.name}` : `🐾 ${combatant.name}`;
+  const board = buildManualBattleBoard(enemy, combatant, state);
+  const actionPanels = buildDualActionPanels(options?.actionView || {});
+  const statusLines = []
+    .concat(Array.isArray(options?.turnStartLines) ? options.turnStartLines : [])
+    .concat(Array.isArray(options?.extraLines) ? options.extraLines : []);
+  const statusText = statusLines.length > 0
+    ? `\n**戰況更新：**\n${statusLines.join('\n')}\n`
+    : '';
+  const noticeLine = options?.notice ? `\n${options.notice}\n` : '';
+
+  return {
+    content:
+      `⚔️ **戰鬥中：${fighterLabel} vs ${enemy.name}**\n` +
+      `${board}` +
+      `${actionPanels}` +
+      `${statusText}` +
+      `${noticeLine}` +
+      `\n**招式：**\n${dmgInfo}`,
+    embeds: [],
+    components: [moveRow, actionRow]
+  };
+}
+
+async function renderManualBattle(interaction, player, pet, roundMessage = '', options = {}) {
   const enemy = player?.battleState?.enemy;
   if (!enemy) {
-    await interaction.update({ content: '❌ 找不到戰鬥狀態，請重新選擇戰鬥。', components: [] });
+    const mode = options?.mode === 'edit' ? 'edit' : 'update';
+    await sendBattleMessage(interaction, { content: '❌ 找不到戰鬥狀態，請重新選擇戰鬥。', components: [] }, mode);
     return;
   }
 
@@ -9445,26 +10837,18 @@ async function renderManualBattle(interaction, player, pet, roundMessage = '') {
     trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
   }
 
-  const combatant = getActiveCombatant(player, pet);
-  const state = ensureBattleEnergyState(player);
-  const [moveRow, actionRow] = buildBattleActionRows(player, pet, combatant);
-  const dmgInfo = buildBattleMoveDetails(player, pet, combatant);
-  const roundText = roundMessage ? `\n${roundMessage}\n` : '';
-  const fighterLabel = combatant.isHuman ? `🧍 ${combatant.name}` : `🐾 ${combatant.name}`;
-  const board = buildManualBattleBoard(enemy, combatant, state);
-
-  await interaction.update({
-    content:
-      `⚔️ **戰鬥中：${fighterLabel} vs ${enemy.name}**\n` +
-      `${board}` +
-      `${roundText}\n` +
-      `**招式：**\n${dmgInfo}`,
-    embeds: [],
-    components: [moveRow, actionRow]
+  const mode = options?.mode === 'edit' ? 'edit' : 'update';
+  const payload = buildManualBattlePayload(player, pet, {
+    disableActions: Boolean(options?.disableActions),
+    actionView: options?.actionView || {},
+    turnStartLines: options?.turnStartLines || [],
+    extraLines: roundMessage ? [roundMessage] : [],
+    notice: options?.notice || ''
   });
+  await sendBattleMessage(interaction, payload, mode);
 }
 
-async function showTrueGameOver(interaction, user, detailText) {
+async function showTrueGameOver(interaction, user, detailText, mode = 'update') {
   CORE.resetPlayerGame(user.id);
   const embed = new EmbedBuilder()
     .setTitle('💀 你戰死了...')
@@ -9473,10 +10857,10 @@ async function showTrueGameOver(interaction, user, detailText) {
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('choose_positive').setLabel('🔄 重新開始').setStyle(ButtonStyle.Danger)
   );
-  await interaction.update({ embeds: [embed], content: null, components: [row] });
+  await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
 }
 
-async function showPetDefeatedTransition(interaction, player, pet, battleDetail = '') {
+async function showPetDefeatedTransition(interaction, player, pet, battleDetail = '', mode = 'update') {
   PET.markPetDefeated(pet, '戰鬥落敗');
   PET.savePet(pet);
 
@@ -9507,7 +10891,7 @@ async function showPetDefeatedTransition(interaction, player, pet, battleDetail 
     new ButtonBuilder().setCustomId('battle_continue_human').setLabel('🧍 我親自上場').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('main_menu').setLabel('📖 先撤退').setStyle(ButtonStyle.Secondary)
   );
-  await interaction.update({ embeds: [embed], content: null, components: [row] });
+  await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
 }
 
 async function continueBattleWithHuman(interaction, user) {
@@ -9851,28 +11235,29 @@ async function handleUseMove(interaction, user, moveIndex) {
     await renderManualBattle(interaction, player, pet, '⚠️ 請使用下方「逃跑」按鈕，不是招式按鈕。');
     return;
   }
+
+  const battleOptions = player?.battleState?.mentorSpar ? { nonLethal: true } : undefined;
   const enemyMove = BATTLE.enemyChooseMove(enemy);
-  const resultRaw = BATTLE.executeBattleRound(
+  const playerPhaseRaw = BATTLE.executeBattlePlayerPhase(
     player,
     combatant,
     enemy,
     chosenMove,
-    enemyMove,
-    player?.battleState?.mentorSpar ? { nonLethal: true } : undefined
+    battleOptions
   );
-  const result = maybeResolveMentorSparResult(player, enemy, resultRaw);
+  const playerPhase = maybeResolveMentorSparResult(player, enemy, playerPhaseRaw);
 
   persistCombatantState(player, pet, combatant);
   PET.savePet(pet);
   CORE.savePlayer(player);
 
-  if (result.victory === true) {
+  if (playerPhase.victory === true) {
     if (player?.battleState?.mentorSpar) {
-      const mentorVictory = finalizeMentorSparVictory(player, pet, result.message);
+      const mentorVictory = finalizeMentorSparVictory(player, pet, playerPhase.message);
       const embed = new EmbedBuilder()
         .setTitle('🤝 友誼賽通過')
         .setColor(0x3cb371)
-        .setDescription(`${result.message}\n\n${mentorVictory.learnLine}`)
+        .setDescription(`${playerPhase.message}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
           { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
@@ -9880,15 +11265,15 @@ async function handleUseMove(interaction, user, moveIndex) {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
       );
-      await interaction.update({ embeds: [embed], components: [row] });
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
     const battleStateSnapshot = player?.battleState || {};
     const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
     const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
-    player.stats.財富 += result.gold;
+    player.stats.財富 += playerPhase.gold;
     recordCashflow(player, {
-      amount: Number(result.gold || 0),
+      amount: Number(playerPhase.gold || 0),
       category: 'battle_victory_manual',
       source: `手動戰鬥擊敗 ${enemy.name}`,
       marketType: 'renaiss'
@@ -9899,14 +11284,14 @@ async function handleUseMove(interaction, user, moveIndex) {
     rememberPlayer(player, {
       type: '戰鬥',
       content: `擊敗 ${enemy.name}`,
-      outcome: `獲得 ${result.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      outcome: `獲得 ${playerPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
       importance: 3,
       tags: ['battle', 'victory']
     });
     player.currentStory = composePostBattleStory(
       player,
-      `🏆 你擊敗了 **${enemy.name}**，取得 ${result.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
-      result.message,
+      `🏆 你擊敗了 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      playerPhase.message,
       `戰場餘波未散，你準備依據這次勝負帶來的新線索繼續推進。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
       sourceChoice,
       preBattleStory
@@ -9918,9 +11303,9 @@ async function handleUseMove(interaction, user, moveIndex) {
     const embed = new EmbedBuilder()
       .setTitle(t('victory'))
       .setColor(0x00ff00)
-      .setDescription(result.message)
+      .setDescription(playerPhase.message)
       .addFields(
-        { name: t('gold'), value: `${result.gold}`, inline: true },
+        { name: t('gold'), value: `${playerPhase.gold}`, inline: true },
         { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
@@ -9929,28 +11314,146 @@ async function handleUseMove(interaction, user, moveIndex) {
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
     );
     
-    await interaction.update({ embeds: [embed], components: [row] });
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
     return;
   }
 
-  if (result.victory === false) {
+  if (playerPhase.victory === false) {
     if (player?.battleState?.mentorSpar) {
-      const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, result.message);
+      const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, playerPhase.message);
       const embed = new EmbedBuilder()
         .setTitle('🤝 友誼賽落敗（已治療）')
         .setColor(0x4fa3ff)
-        .setDescription(`${result.message}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`);
+        .setDescription(`${playerPhase.message}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`);
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
       );
-      await interaction.update({ embeds: [embed], components: [row] });
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
     if (combatant.isHuman) {
-      await showTrueGameOver(interaction, user, result.message);
+      await showTrueGameOver(interaction, user, playerPhase.message, 'update');
       return;
     }
-    await showPetDefeatedTransition(interaction, player, pet, result.message);
+    await showPetDefeatedTransition(interaction, player, pet, playerPhase.message, 'update');
+    return;
+  }
+
+  await renderManualBattle(
+    interaction,
+    player,
+    pet,
+    '',
+    {
+      disableActions: true,
+      actionView: buildActionViewFromPhase(playerPhase, null, { enemyPending: true }),
+      turnStartLines: playerPhase.turnStartLines || [],
+      notice: '⏳ 敵方即將行動，按鈕暫時鎖定...'
+    }
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, MANUAL_ENEMY_RESPONSE_DELAY_MS));
+
+  const enemyPhaseRaw = BATTLE.executeBattleEnemyPhase(
+    player,
+    combatant,
+    enemy,
+    enemyMove,
+    battleOptions
+  );
+  const enemyPhase = maybeResolveMentorSparResult(player, enemy, enemyPhaseRaw);
+  const combinedLines = [...(playerPhase.lines || []), ...(enemyPhase.lines || [])].filter(Boolean);
+  const combinedMessage = enemyPhase.outcomeText
+    ? [...combinedLines, enemyPhase.outcomeText].join('\n')
+    : combinedLines.join('\n');
+
+  persistCombatantState(player, pet, combatant);
+  PET.savePet(pet);
+  CORE.savePlayer(player);
+
+  if (enemyPhase.victory === true) {
+    if (player?.battleState?.mentorSpar) {
+      const mentorVictory = finalizeMentorSparVictory(player, pet, combinedMessage);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 友誼賽通過')
+        .setColor(0x3cb371)
+        .setDescription(`${combinedMessage}\n\n${mentorVictory.learnLine}`)
+        .addFields(
+          { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
+          { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      return;
+    }
+    const battleStateSnapshot = player?.battleState || {};
+    const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
+    const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
+    player.stats.財富 += enemyPhase.gold;
+    recordCashflow(player, {
+      amount: Number(enemyPhase.gold || 0),
+      category: 'battle_victory_manual',
+      source: `手動戰鬥擊敗 ${enemy.name}`,
+      marketType: 'renaiss'
+    });
+    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    ECON.addTradeGood(player, battleLoot);
+    const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
+    rememberPlayer(player, {
+      type: '戰鬥',
+      content: `擊敗 ${enemy.name}`,
+      outcome: `獲得 ${enemyPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      importance: 3,
+      tags: ['battle', 'victory']
+    });
+    player.currentStory = composePostBattleStory(
+      player,
+      `🏆 你擊敗了 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      combinedMessage,
+      `戰場餘波未散，你準備依據這次勝負帶來的新線索繼續推進。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
+      sourceChoice,
+      preBattleStory
+    );
+    player.battleState = null;
+    player.eventChoices = [];
+    CORE.savePlayer(player);
+
+    const embed = new EmbedBuilder()
+      .setTitle(t('victory'))
+      .setColor(0x00ff00)
+      .setDescription(combinedMessage)
+      .addFields(
+        { name: t('gold'), value: `${enemyPhase.gold}`, inline: true },
+        { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
+      );
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+    );
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+    return;
+  }
+
+  if (enemyPhase.victory === false) {
+    if (player?.battleState?.mentorSpar) {
+      const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, combinedMessage);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 友誼賽落敗（已治療）')
+        .setColor(0x4fa3ff)
+        .setDescription(`${combinedMessage}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`);
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      return;
+    }
+    if (combatant.isHuman) {
+      await showTrueGameOver(interaction, user, combinedMessage, 'edit');
+      return;
+    }
+    await showPetDefeatedTransition(interaction, player, pet, combinedMessage, 'edit');
     return;
   }
 
@@ -9962,7 +11465,12 @@ async function handleUseMove(interaction, user, moveIndex) {
     interaction,
     player,
     pet,
-    `${result.message}\n⚡ 消耗：${chosenMove.name} -${energyCost} 能量，下一回合能量 ${next.energy}`
+    `⚡ 消耗：${chosenMove.name} -${energyCost} 能量，下一回合能量 ${next.energy}`,
+    {
+      mode: 'edit',
+      actionView: buildActionViewFromPhase(playerPhase, enemyPhase),
+      notice: '✅ 敵方已行動，輪到你選擇下一步。'
+    }
   );
 }
 
@@ -9980,26 +11488,27 @@ async function handleBattleWait(interaction, user) {
   const state = ensureBattleEnergyState(player);
   const beforeEnergy = state.energy;
   const enemyMove = BATTLE.enemyChooseMove(enemy);
-  const resultRaw = BATTLE.executeBattleRound(
+  const battleOptions = player?.battleState?.mentorSpar ? { nonLethal: true } : undefined;
+  const playerPhaseRaw = BATTLE.executeBattlePlayerPhase(
     player,
     combatant,
     enemy,
     WAIT_COMBAT_MOVE,
-    enemyMove,
-    player?.battleState?.mentorSpar ? { nonLethal: true } : undefined
+    battleOptions
   );
-  const result = maybeResolveMentorSparResult(player, enemy, resultRaw);
+  const playerPhase = maybeResolveMentorSparResult(player, enemy, playerPhaseRaw);
 
   persistCombatantState(player, pet, combatant);
   PET.savePet(pet);
+  CORE.savePlayer(player);
 
-  if (result.victory === true) {
+  if (playerPhase.victory === true) {
     if (player?.battleState?.mentorSpar) {
-      const mentorVictory = finalizeMentorSparVictory(player, pet, result.message);
+      const mentorVictory = finalizeMentorSparVictory(player, pet, playerPhase.message);
       const embed = new EmbedBuilder()
         .setTitle('🤝 友誼賽通過')
         .setColor(0x3cb371)
-        .setDescription(`${result.message}\n\n${mentorVictory.learnLine}`)
+        .setDescription(`${playerPhase.message}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
           { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
@@ -10007,15 +11516,15 @@ async function handleBattleWait(interaction, user) {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
       );
-      await interaction.update({ embeds: [embed], components: [row] });
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
-    player.stats.財富 += result.gold;
+    player.stats.財富 += playerPhase.gold;
     const battleStateSnapshot = player?.battleState || {};
     const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
     const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
     recordCashflow(player, {
-      amount: Number(result.gold || 0),
+      amount: Number(playerPhase.gold || 0),
       category: 'battle_victory_wait',
       source: `待機反擊擊敗 ${enemy.name}`,
       marketType: 'renaiss'
@@ -10026,14 +11535,14 @@ async function handleBattleWait(interaction, user) {
     rememberPlayer(player, {
       type: '戰鬥',
       content: `蓄能待機後反殺 ${enemy.name}`,
-      outcome: `獲得 ${result.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      outcome: `獲得 ${playerPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
       importance: 3,
       tags: ['battle', 'victory', 'wait_turn']
     });
     player.currentStory = composePostBattleStory(
       player,
-      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${result.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
-      result.message,
+      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      playerPhase.message,
       `你把這段對戰節奏記下，準備把優勢延伸到下一段冒險。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
       sourceChoice,
       preBattleStory
@@ -10044,40 +11553,159 @@ async function handleBattleWait(interaction, user) {
     const embed = new EmbedBuilder()
       .setTitle(t('victory'))
       .setColor(0x00ff00)
-      .setDescription(`${result.message}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
+      .setDescription(`${playerPhase.message}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
       .addFields(
-        { name: t('gold'), value: `${result.gold}`, inline: true },
+        { name: t('gold'), value: `${playerPhase.gold}`, inline: true },
         { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
     );
-    await interaction.update({ embeds: [embed], components: [row] });
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
     return;
   }
 
-  if (result.victory === false || combatant.hp <= 0) {
+  if (playerPhase.victory === false || combatant.hp <= 0) {
     if (player?.battleState?.mentorSpar) {
-      const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, result.message || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`);
+      const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, playerPhase.message || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`);
       const embed = new EmbedBuilder()
         .setTitle('🤝 友誼賽落敗（已治療）')
         .setColor(0x4fa3ff)
-        .setDescription(`${result.message || ''}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`.trim());
+        .setDescription(`${playerPhase.message || ''}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`.trim());
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
       );
-      await interaction.update({ embeds: [embed], components: [row] });
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
     CORE.savePlayer(player);
     if (combatant.isHuman) {
       player.battleState = null;
       CORE.savePlayer(player);
-      await showTrueGameOver(interaction, user, result.message || `💀 你在蓄能時被 ${enemy.name} 擊倒...`);
+      await showTrueGameOver(interaction, user, playerPhase.message || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, 'update');
       return;
     }
-    await showPetDefeatedTransition(interaction, player, pet, result.message || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`);
+    await showPetDefeatedTransition(interaction, player, pet, playerPhase.message || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`, 'update');
+    return;
+  }
+
+  await renderManualBattle(
+    interaction,
+    player,
+    pet,
+    '',
+    {
+      disableActions: true,
+      actionView: buildActionViewFromPhase(playerPhase, null, { enemyPending: true }),
+      turnStartLines: playerPhase.turnStartLines || [],
+      notice: '⏳ 敵方即將行動，按鈕暫時鎖定...'
+    }
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, MANUAL_ENEMY_RESPONSE_DELAY_MS));
+
+  const enemyPhaseRaw = BATTLE.executeBattleEnemyPhase(
+    player,
+    combatant,
+    enemy,
+    enemyMove,
+    battleOptions
+  );
+  const enemyPhase = maybeResolveMentorSparResult(player, enemy, enemyPhaseRaw);
+  const combinedLines = [...(playerPhase.lines || []), ...(enemyPhase.lines || [])].filter(Boolean);
+  const combinedMessage = enemyPhase.outcomeText
+    ? [...combinedLines, enemyPhase.outcomeText].join('\n')
+    : combinedLines.join('\n');
+
+  persistCombatantState(player, pet, combatant);
+  PET.savePet(pet);
+
+  if (enemyPhase.victory === true) {
+    if (player?.battleState?.mentorSpar) {
+      const mentorVictory = finalizeMentorSparVictory(player, pet, combinedMessage);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 友誼賽通過')
+        .setColor(0x3cb371)
+        .setDescription(`${combinedMessage}\n\n${mentorVictory.learnLine}`)
+        .addFields(
+          { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
+          { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, 'edit');
+      return;
+    }
+    player.stats.財富 += enemyPhase.gold;
+    const battleStateSnapshot = player?.battleState || {};
+    const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
+    const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
+    recordCashflow(player, {
+      amount: Number(enemyPhase.gold || 0),
+      category: 'battle_victory_wait',
+      source: `待機反擊擊敗 ${enemy.name}`,
+      marketType: 'renaiss'
+    });
+    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    ECON.addTradeGood(player, battleLoot);
+    const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
+    rememberPlayer(player, {
+      type: '戰鬥',
+      content: `蓄能待機後反殺 ${enemy.name}`,
+      outcome: `獲得 ${enemyPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      importance: 3,
+      tags: ['battle', 'victory', 'wait_turn']
+    });
+    player.currentStory = composePostBattleStory(
+      player,
+      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      combinedMessage,
+      `你把這段對戰節奏記下，準備把優勢延伸到下一段冒險。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
+      sourceChoice,
+      preBattleStory
+    );
+    player.battleState = null;
+    CORE.savePlayer(player);
+
+    const embed = new EmbedBuilder()
+      .setTitle(t('victory'))
+      .setColor(0x00ff00)
+      .setDescription(`${combinedMessage}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
+      .addFields(
+        { name: t('gold'), value: `${enemyPhase.gold}`, inline: true },
+        { name: t('hp'), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
+      );
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+    );
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+    return;
+  }
+
+  if (enemyPhase.victory === false || combatant.hp <= 0) {
+    if (player?.battleState?.mentorSpar) {
+      const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, combinedMessage || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 友誼賽落敗（已治療）')
+        .setColor(0x4fa3ff)
+        .setDescription(`${combinedMessage || ''}\n\n🩹 ${mentorDefeat.mentorName}當場替你的夥伴完成治療，已恢復滿血。`.trim());
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue')).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      return;
+    }
+    CORE.savePlayer(player);
+    if (combatant.isHuman) {
+      player.battleState = null;
+      CORE.savePlayer(player);
+      await showTrueGameOver(interaction, user, combinedMessage || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, 'edit');
+      return;
+    }
+    await showPetDefeatedTransition(interaction, player, pet, combinedMessage || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`, 'edit');
     return;
   }
 
@@ -10090,7 +11718,12 @@ async function handleBattleWait(interaction, user) {
     interaction,
     player,
     pet,
-    `${result.message}\n⚡ 能量 ${beforeEnergy} → ${next.energy}（+2）`
+    `⚡ 能量 ${beforeEnergy} → ${next.energy}（+2）`,
+    {
+      mode: 'edit',
+      actionView: buildActionViewFromPhase(playerPhase, enemyPhase),
+      notice: '✅ 敵方已行動，輪到你選擇下一步。'
+    }
   );
 }
 
@@ -10288,8 +11921,16 @@ CLIENT.on('ready', async () => {
 });
 
 // ============== 啟動 ==============
-CLIENT.login(CONFIG.DISCORD_TOKEN).catch(err => {
-  console.error('[Bot]', err.message);
-});
+if (require.main === module) {
+  CLIENT.login(CONFIG.DISCORD_TOKEN).catch(err => {
+    console.error('[Bot]', err.message);
+  });
+  console.log('[Renaiss World] 🌟 系統啟動中...');
+}
 
-console.log('[Renaiss World] 🌟 系統啟動中...');
+module.exports = {
+  canEnterLocation,
+  buildLocationEntryBaselineEnemy,
+  syncCurrentIslandStoryProgress,
+  ensurePlayerIslandState
+};
