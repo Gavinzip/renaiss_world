@@ -104,7 +104,8 @@ function _getBackupRepoDir() {
 function _runGit(args, cwd) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
   if (result.status !== 0) {
-    const err = _maskRepoSecrets((result.stderr || result.stdout || '').trim());
+    const rawErr = (result.stderr || result.stdout || result.error?.message || '').trim();
+    const err = _maskRepoSecrets(rawErr);
     const safeArgs = args.map((item) => _maskRepoSecrets(item)).join(' ');
     throw new Error(`git ${safeArgs} failed: ${err}`);
   }
@@ -114,7 +115,8 @@ function _runGit(args, cwd) {
 function _remoteHasBranch(repoUrl, branchName) {
   const result = spawnSync('git', ['ls-remote', '--heads', repoUrl, branchName], { encoding: 'utf-8' });
   if (result.status !== 0) {
-    const err = _maskRepoSecrets((result.stderr || result.stdout || '').trim());
+    const rawErr = (result.stderr || result.stdout || result.error?.message || '').trim();
+    const err = _maskRepoSecrets(rawErr);
     throw new Error(`git ls-remote --heads <repo> ${branchName} failed: ${err}`);
   }
   return Boolean(String(result.stdout || '').trim());

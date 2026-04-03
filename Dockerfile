@@ -8,6 +8,7 @@ ENV PYTHONUNBUFFERED=1
 # Install Python runtime + pip + CJK fonts, then install Pillow at build time.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
+    git \
     python3 \
     python3-pip \
     fonts-noto-cjk \
