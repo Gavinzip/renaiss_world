@@ -4472,10 +4472,37 @@ function getRegionMapRendererScriptPath() {
   return path.join(__dirname, 'tools', 'render_region_map.py');
 }
 
+function summarizeMapRenderFailure(runner = '', run = null) {
+  const tag = String(runner || 'python').trim();
+  const signal = String(run?.signal || '').trim();
+  const status = Number(run?.status);
+  const stderr = String(run?.stderr || '').trim();
+  const stdout = String(run?.stdout || '').trim();
+  const errMsg = String(run?.error?.message || '').trim();
+  const mixed = [stderr, stdout, errMsg].filter(Boolean).join('\n');
+
+  if (/No module named ['"]?PIL['"]?/i.test(mixed)) return `${tag} 缺少 Pillow（PIL）套件`;
+  if (/ENOENT/i.test(errMsg)) return `${tag} 指令不存在`;
+  if (/timed out/i.test(errMsg) || signal === 'SIGTERM' || signal === 'SIGKILL') return `${tag} 渲染逾時`;
+  if (/cannot open resource/i.test(mixed) || /OSError:.*resource/i.test(mixed)) return `${tag} 字型資源不可用`;
+  if (/can't open file|No such file or directory/i.test(mixed) && /render_region_map\.py/i.test(mixed)) {
+    return `${tag} 找不到地圖渲染腳本`;
+  }
+
+  const firstLine = (stderr || stdout || errMsg || '').split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+  if (firstLine) return `${tag} 失敗：${firstLine.slice(0, 120)}`;
+  if (Number.isFinite(status)) return `${tag} 失敗（exit ${status}）`;
+  return `${tag} 渲染失敗`;
+}
+
 function renderRegionMapImageBuffer(snapshot, statusText = '') {
-  if (!snapshot || !Array.isArray(snapshot.mapRows) || snapshot.mapRows.length === 0) return null;
+  if (!snapshot || !Array.isArray(snapshot.mapRows) || snapshot.mapRows.length === 0) {
+    return { buffer: null, error: '地圖資料為空' };
+  }
   const scriptPath = getRegionMapRendererScriptPath();
-  if (!fs.existsSync(scriptPath)) return null;
+  if (!fs.existsSync(scriptPath)) {
+    return { buffer: null, error: '找不到地圖渲染腳本 tools/render_region_map.py' };
+  }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'renaiss-map-'));
   const inPath = path.join(tempDir, 'map-input.json');
@@ -4505,9 +4532,17 @@ function renderRegionMapImageBuffer(snapshot, statusText = '') {
     if (fs.existsSync(fontPath)) args.push('--font', fontPath);
     const runners = ['python3', 'python'];
     let run = null;
+    const failReasons = [];
     for (const runner of runners) {
       run = spawnSync(runner, args, { cwd: __dirname, encoding: 'utf8', timeout: 12000 });
-      if (run.status === 0) break;
+      if (run.status === 0) {
+        if (fs.existsSync(outPath)) {
+          return { buffer: fs.readFileSync(outPath), error: '' };
+        }
+        failReasons.push(`${runner} 執行成功但未產生 PNG`);
+        continue;
+      }
+      failReasons.push(summarizeMapRenderFailure(runner, run));
     }
     if (!run || run.status !== 0) {
       console.log('[MapRender] python render failed:', {
@@ -4517,16 +4552,12 @@ function renderRegionMapImageBuffer(snapshot, statusText = '') {
         stdout: String(run?.stdout || '').slice(0, 600),
         stderr: String(run?.stderr || '').slice(0, 600)
       });
-      return null;
+      return { buffer: null, error: (failReasons.join('｜') || 'Python 渲染失敗').slice(0, 220) };
     }
-    if (!fs.existsSync(outPath)) {
-      console.log('[MapRender] output png missing after render');
-      return null;
-    }
-    return fs.readFileSync(outPath);
+    return { buffer: null, error: (failReasons.join('｜') || '渲染失敗（未知原因）').slice(0, 220) };
   } catch (e) {
     console.log('[MapRender] exception:', e?.message || e);
-    return null;
+    return { buffer: null, error: `程式例外：${String(e?.message || e).slice(0, 140)}` };
   } finally {
     try { if (fs.existsSync(inPath)) fs.unlinkSync(inPath); } catch {}
     try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch {}
@@ -4652,6 +4683,7 @@ function getMapText(lang = 'zh-TW') {
       mapSectionRegionInfo: '本頁地區情報',
       mapSectionAreaIntel: '當前地區情報',
       mapFieldMapDisplay: '地圖顯示',
+      mapFieldRenderError: '渲染失敗原因',
       mapFieldCurrentLocation: '目前位置',
       mapFieldCurrentRegion: '當前分區',
       mapFieldDifficulty: '區域難度',
@@ -4732,6 +4764,7 @@ function getMapText(lang = 'zh-TW') {
       mapSectionRegionInfo: '本页地区情报',
       mapSectionAreaIntel: '当前地区情报',
       mapFieldMapDisplay: '地图显示',
+      mapFieldRenderError: '渲染失败原因',
       mapFieldCurrentLocation: '目前位置',
       mapFieldCurrentRegion: '当前分区',
       mapFieldDifficulty: '区域难度',
@@ -4812,6 +4845,7 @@ function getMapText(lang = 'zh-TW') {
       mapSectionRegionInfo: 'Page Region Intel',
       mapSectionAreaIntel: 'Current Region Intel',
       mapFieldMapDisplay: 'Map Display',
+      mapFieldRenderError: 'Render Failure Reason',
       mapFieldCurrentLocation: 'Current Location',
       mapFieldCurrentRegion: 'Current Region',
       mapFieldDifficulty: 'Region Difficulty',
@@ -5289,8 +5323,12 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
       : ('```ansi\n' + renderedMap + '\n```'))
     : compactMap;
   const mapImageStatus = tx.mapLegendImage;
-  const renderedMapImage = regionSnapshot ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus) : null;
+  const mapRenderResult = regionSnapshot
+    ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus)
+    : { buffer: null, error: '缺少區域地圖資料' };
+  const renderedMapImage = mapRenderResult?.buffer || null;
   const hasRenderedMapImage = Boolean(renderedMapImage);
+  const renderErrorText = !hasRenderedMapImage ? String(mapRenderResult?.error || '').trim() : '';
   const visibleMapBlock = hasRenderedMapImage ? '' : mapBlock;
   const mapDisplayLabel = hasRenderedMapImage
     ? tx.mapDisplayImage
@@ -5342,6 +5380,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
       `\n**${tx.mapFieldCurrentPortalHub}：** ${portalHubText}` +
       `\n**${tx.mapFieldMainPortalHubs}：** ${mainPortalHubText}` +
       `\n**${tx.mapFieldFreeExplore}：** ${freeExploreText}` +
+      (renderErrorText ? `\n**${tx.mapFieldRenderError}：** ${renderErrorText}` : '') +
       `\n**${tx.mapFieldLegend}：** ${tx.mapLegendText}` +
       `\n**${tx.mapFieldNearbyInteractive}：**` +
       `\n- ${tx.mapFieldNearbyScenes}：${nearbyPlaces}` +
