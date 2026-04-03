@@ -6129,7 +6129,7 @@ function getLanguageText(lang) {
   const texts = {
     'zh-TW': {
       welcome: '歡迎來到 Renaiss 星球！',
-      welcomeDesc: '在這個世界，你需要：\n• 選擇你的角色性別\n• 選擇夥伴寵物屬性（水/火/草）\n• 培養你的夥伴並探索事件、戰鬥與任務',
+      welcomeDesc: '在這個世界，你需要：\n• 選擇你的角色性別並先命名角色\n• 選擇夥伴寵物屬性（水/火/草）並命名寵物\n• 完成開局抽獎後開始探索事件、戰鬥與任務',
       chooseGenderHint: '請先選擇你的角色性別：',
       male: '男生角色',
       maleDesc: '主角為男性形象，劇情稱謂會對應調整',
@@ -6145,7 +6145,7 @@ function getLanguageText(lang) {
     },
     'zh-CN': {
       welcome: '欢迎来到 Renaiss 星球！',
-      welcomeDesc: '在这个世界，你需要：\n• 选择你的角色性别\n• 选择伙伴宠物属性（水/火/草）\n• 培养伙伴并探索事件、战斗与任务',
+      welcomeDesc: '在这个世界，你需要：\n• 选择你的角色性别并先命名角色\n• 选择伙伴宠物属性（水/火/草）并命名宠物\n• 完成开局抽奖后开始探索事件、战斗与任务',
       chooseGenderHint: '请先选择你的角色性别：',
       male: '男生角色',
       maleDesc: '主角为男性形象，剧情称谓会对应调整',
@@ -6161,7 +6161,7 @@ function getLanguageText(lang) {
     },
     'en': {
       welcome: 'Welcome to Renaiss Planet!',
-      welcomeDesc: 'In this world, you need to:\n• Choose your character gender\n• Choose your starter pet element (Water / Fire / Grass)\n• Raise your partner and explore events, battles, and quests',
+      welcomeDesc: 'In this world, you need to:\n• Choose character gender and name your character first\n• Choose starter pet element (Water / Fire / Grass) and name your pet\n• Finish the starter draw, then begin exploration, battles, and quests',
       chooseGenderHint: 'Choose your character gender first:',
       male: 'Male',
       maleDesc: 'Story pronouns and role narration follow male profile',
@@ -6260,6 +6260,35 @@ function pickDefaultPetNameByElement(element = '') {
   return list[Math.floor(Math.random() * list.length)];
 }
 
+function normalizeCharacterName(raw = '', fallback = '旅人') {
+  const text = String(raw || '').trim().slice(0, 20);
+  return text || String(fallback || '旅人').slice(0, 20);
+}
+
+function normalizePetName(raw = '', element = '水') {
+  const text = String(raw || '').trim().slice(0, 6);
+  return text || pickDefaultPetNameByElement(element);
+}
+
+function getMoveTierMeta(tier = 1) {
+  const safeTier = Math.max(1, Number(tier) || 1);
+  if (safeTier >= 3) return { emoji: '🔮', name: '史詩', color: 0x9932cc, rate: '5%' };
+  if (safeTier >= 2) return { emoji: '💠', name: '稀有', color: 0x1e90ff, rate: '15%' };
+  return { emoji: '⚪', name: '普通', color: 0x808080, rate: '80%' };
+}
+
+function rollStarterMoveForElement(element = '水') {
+  const allMoves = getPetMovePool(element);
+  if (!Array.isArray(allMoves) || allMoves.length <= 0) return null;
+  const shuffled = [...allMoves].sort(() => Math.random() - 0.5);
+  const choices = shuffled.slice(0, 3);
+  const roll = Math.random();
+  const tierIndex = roll < 0.80 ? 0 : roll < 0.95 ? 1 : 2;
+  const tierMoves = choices.filter((m) => Number(m?.tier || 1) === tierIndex + 1);
+  const selected = tierMoves.length > 0 ? tierMoves[0] : choices.find((m) => Number(m?.tier || 1) === 1) || choices[0] || null;
+  return selected || null;
+}
+
 function buildGenderSelectionPayload(lang = 'zh-TW', username = '') {
   const langText = getLanguageText(lang);
   const embed = new EmbedBuilder()
@@ -6271,7 +6300,7 @@ function buildGenderSelectionPayload(lang = 'zh-TW', username = '') {
       { name: `♀️ ${langText.female}`, value: langText.femaleDesc, inline: true }
     );
   if (username) {
-    embed.setFooter({ text: `${username}，完成性別與屬性選擇後即可命名並開局` });
+    embed.setFooter({ text: `${username}，選完性別先命名角色，再選寵物屬性與寵物名字即可開局` });
   }
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('choose_gender_male').setLabel(`♂️ ${langText.male}`).setStyle(ButtonStyle.Primary),
@@ -6300,6 +6329,43 @@ function buildElementSelectionPayload(lang = 'zh-TW', gender = '男') {
     new ButtonBuilder().setCustomId(`choose_element_${genderCode}_grass`).setLabel(`🌿 ${langText.grass}`).setStyle(ButtonStyle.Success)
   );
   return { embed, row };
+}
+
+async function showCharacterNameModal(interaction, gender = '男') {
+  const safeGender = normalizeCharacterGender(gender);
+  const genderCode = safeGender === '女' ? 'female' : 'male';
+  const modal = new ModalBuilder()
+    .setCustomId(`char_name_submit_${genderCode}`)
+    .setTitle('📛 為你的角色取個名字');
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId('player_name')
+    .setLabel('角色名字')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('輸入你在Renaiss星球的名字')
+    .setRequired(true)
+    .setMaxLength(20);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+  await interaction.showModal(modal);
+}
+
+async function showOnboardingPetNameModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('pet_onboard_name_submit')
+    .setTitle('🐾 為你的寵物取名');
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId('pet_name')
+    .setLabel('寵物名字')
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder('輸入名字（1-6個字）')
+    .setMinLength(1)
+    .setMaxLength(6)
+    .setRequired(true);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+  await interaction.showModal(modal);
 }
 
 function parseNameSubmitProfileFromCustomId(customId = '') {
@@ -7357,12 +7423,37 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
   
-  // ===== 名字輸入 Modal =====
+  // ===== 新手：角色命名 Modal（性別後）=====
+  if (customId.startsWith('char_name_submit_')) {
+    const selectedGender = customId.endsWith('_female') ? '女' : '男';
+    const playerNameInput = interaction.fields.getTextInputValue('player_name');
+    const finalName = normalizeCharacterName(playerNameInput, user.username);
+    const lang = getPlayerTempData(user.id, 'language') || 'zh-TW';
+    setPlayerTempData(user.id, 'gender', selectedGender);
+    setPlayerTempData(user.id, 'charName', finalName);
+    const payload = buildElementSelectionPayload(lang, selectedGender);
+    await interaction.reply({ embeds: [payload.embed], components: [payload.row] }).catch(async () => {
+      await interaction.channel.send({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
+    });
+    return;
+  }
+
+  // ===== 新手：寵物命名 Modal（屬性後）=====
+  if (customId === 'pet_onboard_name_submit') {
+    const gender = normalizeCharacterGender(getPlayerTempData(user.id, 'gender') || '男');
+    const element = normalizePetElementCode(getPlayerTempData(user.id, 'petElement') || '水');
+    const charName = normalizeCharacterName(getPlayerTempData(user.id, 'charName') || user.username, user.username);
+    const petName = normalizePetName(interaction.fields.getTextInputValue('pet_name'), element);
+    await createCharacterWithName(interaction, user, { gender, element, alignment: '正派' }, charName, { petName });
+    return;
+  }
+
+  // ===== 舊版相容：名字輸入 Modal =====
   if (customId.startsWith('name_submit_')) {
     const profile = parseNameSubmitProfileFromCustomId(customId);
     const charName = interaction.fields.getTextInputValue('player_name').trim();
     const finalName = charName || user.username;
-    await createCharacterWithName(interaction, user, profile, finalName);
+    await createCharacterWithName(interaction, user, profile, finalName, {});
     return;
   }
 
@@ -8539,8 +8630,11 @@ async function handleChooseGender(interaction, user, customId) {
 
   const lang = getPlayerTempData(user.id, 'language') || 'zh-TW';
   setPlayerTempData(user.id, 'gender', gender);
-  const payload = buildElementSelectionPayload(lang, gender);
-  await interaction.update({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
+  await interaction.message?.edit({ components: [] }).catch(() => {});
+  await showCharacterNameModal(interaction, gender).catch(async () => {
+    const payload = buildElementSelectionPayload(lang, gender);
+    await interaction.reply({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
+  });
 }
 
 async function handleChoosePetElement(interaction, user, customId) {
@@ -8560,29 +8654,16 @@ async function handleChoosePetElement(interaction, user, customId) {
   setPlayerTempData(user.id, 'gender', gender);
   setPlayerTempData(user.id, 'petElement', element);
   await interaction.message?.edit({ components: [] }).catch(() => {});
-
-  const modal = new ModalBuilder()
-    .setCustomId(`name_submit_profile_${match[1]}_${match[2]}`)
-    .setTitle('📛 為你的角色取個名字');
-
-  const nameInput = new TextInputBuilder()
-    .setCustomId('player_name')
-    .setLabel('角色名字')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('輸入你在Renaiss星球的名字')
-    .setRequired(true)
-    .setMaxLength(20);
-
-  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
-
-  await interaction.showModal(modal).catch(async () => {
-    await interaction.deferUpdate().catch(() => {});
-    await createCharacterWithName(interaction, user, { gender, element, alignment: '正派' }, user.username);
+  await showOnboardingPetNameModal(interaction).catch(async () => {
+    const charName = normalizeCharacterName(getPlayerTempData(user.id, 'charName') || user.username, user.username);
+    await createCharacterWithName(interaction, user, { gender, element, alignment: '正派' }, charName, {
+      petName: pickDefaultPetNameByElement(element)
+    });
   });
 }
 
 // 創建角色（名字輸入後調用）
-async function createCharacterWithName(interaction, user, profile, charName) {
+async function createCharacterWithName(interaction, user, profile, charName, options = {}) {
   const existingPlayer = CORE.loadPlayer(user.id);
   const existingPet = PET.loadPet(user.id);
   if (existingPlayer && existingPet) {
@@ -8599,8 +8680,10 @@ async function createCharacterWithName(interaction, user, profile, charName) {
   const selectedGender = normalizeCharacterGender(profile?.gender || getPlayerTempData(user.id, 'gender') || '男');
   const selectedElement = normalizePetElementCode(profile?.element || getPlayerTempData(user.id, 'petElement') || '水');
   const alignment = normalizePlayerAlignment(profile?.alignment || '正派');
+  const finalCharacterName = normalizeCharacterName(charName, user.username);
+  const finalPetName = normalizePetName(options?.petName || '', selectedElement);
 
-  const player = CORE.createPlayer(user.id, charName, selectedGender, '無門無派');
+  const player = CORE.createPlayer(user.id, finalCharacterName, selectedGender, '無門無派');
   const spawnProfile = getLocationProfile(player.location);
   player.alignment = alignment;
   player.petElement = selectedElement;
@@ -8619,24 +8702,89 @@ async function createCharacterWithName(interaction, user, profile, charName) {
   // 清除臨時資料
   clearPlayerTempData(user.id);
   
-  const egg = PET.createPetEgg(user.id, selectedElement);
-  PET.savePet(egg);
+  const selectedMove = rollStarterMoveForElement(selectedElement);
+  if (!selectedMove) {
+    const failEmbed = new EmbedBuilder()
+      .setTitle('❌ 開局初始化失敗')
+      .setColor(0xff4d4f)
+      .setDescription('找不到可用招式池，請重新 /start。');
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ embeds: [failEmbed], components: [] }).catch(() => {});
+    } else {
+      await interaction.reply({ embeds: [failEmbed], components: [] }).catch(() => {});
+    }
+    return;
+  }
+
+  const pet = PET.createPetEgg(user.id, selectedElement);
+  pet.hatched = true;
+  pet.status = '正常';
+  pet.waitingForName = false;
+  pet.name = finalPetName;
+  pet.reviveAt = null;
+  pet.reviveTurnsRemaining = 0;
+  pet.moves = [
+    { ...PET.INITIAL_MOVES[0], currentProficiency: 0 },
+    { ...PET.INITIAL_MOVES[1], currentProficiency: 0 },
+    {
+      id: selectedMove.id,
+      name: selectedMove.name,
+      element: selectedMove.element,
+      tier: selectedMove.tier,
+      type: 'elemental',
+      baseDamage: selectedMove.baseDamage,
+      effect: selectedMove.effect,
+      desc: selectedMove.desc,
+      currentProficiency: 0
+    }
+  ];
+  PET.updateAppearance(pet);
+  PET.savePet(pet);
+  const starterPack = grantStarterFivePullIfNeeded(user.id);
+  const tierMeta = getMoveTierMeta(selectedMove.tier);
+  const dmgInfo = pet.moves.map((m) => {
+    const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
+    return `• ${m.name} (${m.element}): ${d.total}dmg`;
+  }).join('\n');
   
   const embed = new EmbedBuilder()
-    .setTitle('🎉 角色建立完成！')
-    .setColor(getPetElementColor(selectedElement))
-    .setDescription(`**${player.name}**，你的Renaiss星球之旅開始了！\n\n🥚 寵物蛋已獲得！\n\n🔨 敲開寵物蛋，看看你的天賦！`)
+    .setTitle('🎉 角色建立完成｜開局抽獎完成')
+    .setColor(tierMeta.color)
+    .setDescription(
+      `**${player.name}**，你的 Renaiss 星球之旅開始了！\n\n` +
+      `👤 角色已命名：**${player.name}**\n` +
+      `🐾 寵物已命名：**${pet.name}**\n\n` +
+      `🎰 開局抽獎結果：${tierMeta.emoji} **${selectedMove.name}**（${tierMeta.name}）`
+    )
     .addFields(
       { name: '📍 位置', value: player.location, inline: true },
       { name: '🎚️ 出生難度', value: spawnProfile ? `D${spawnProfile.difficulty}` : 'D1', inline: true },
       { name: '👤 角色性別', value: selectedGender, inline: true },
-      { name: '🐾 寵物屬性', value: getPetElementDisplayName(selectedElement), inline: true },
+      { name: '🐾 寵物', value: `${pet.name}（${getPetElementDisplayName(selectedElement)}）`, inline: true },
       { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
       { name: t('gold', uiLang), value: String(player.stats.財富), inline: true }
+    )
+    .addFields(
+      { name: '✨ 開局天賦', value: `${tierMeta.emoji} ${selectedMove.name}｜${tierMeta.name}（機率 ${tierMeta.rate}）`, inline: false },
+      { name: '📜 寵物招式', value: dmgInfo, inline: false }
     );
+
+  if (starterPack) {
+    const learnedLine = starterPack.learnedMoves.length > 0
+      ? starterPack.learnedMoves
+        .slice(0, 5)
+        .map((m) => `${m.emoji} ${m.name}`)
+        .join('、')
+      : '本次抽到的招式已重複或欄位已滿，沒有新增。';
+    embed.addFields({
+      name: '🎁 開局贈禮：免費五連抽',
+      value: `已自動發放並嘗試學習。\n本次新增：${starterPack.learnedMoves.length} 招\n${learnedLine}`,
+      inline: false
+    });
+  }
   
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('hatch_egg').setLabel('🔨 敲開寵物蛋！').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 開始冒險').setStyle(ButtonStyle.Success)
   );
   
   if (interaction.deferred || interaction.replied) {
