@@ -260,6 +260,12 @@ function clearSelfCharacterData(userId) {
   return report;
 }
 
+function clearTargetPlayerAllData(userId) {
+  const id = String(userId || '').trim();
+  if (!id) throw new Error('missing user id');
+  return clearSelfCharacterData(id);
+}
+
 function clearWorldRuntimeData(mode = 'events') {
   const report = {
     mode: (String(mode || '').trim().toLowerCase() === 'all') ? 'all' : 'events',
@@ -5810,6 +5816,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     if (commandName === 'start') await handleStart(interaction, user);
     if (commandName === 'warstatus') await handleWarStatus(interaction);
     if (commandName === 'resetdata') await handleResetData(interaction, user);
+    if (commandName === 'resetplayerhistory') await handleResetPlayerHistory(interaction);
     if (commandName === 'resetworld') await handleResetWorld(interaction);
     if (commandName === 'backupworld') await handleBackupWorld(interaction, user);
     if (commandName === 'backupcheck') await handleBackupCheck(interaction);
@@ -5858,6 +5865,34 @@ async function handleResetData(interaction, user) {
   await interaction.reply({
     content:
       `✅ 已清空你自己的角色資料。\n` +
+      `- 玩家檔：${report.removedPlayerFile ? '已刪除' : '無'}\n` +
+      `- 寵物：${report.removedPet ? '已刪除' : '無'}\n` +
+      `- 討論串綁定：${report.removedThread ? '已清除' : '無'}\n` +
+      `- 錢包綁定：${report.removedWallet ? '已清除' : '無'}\n` +
+      `- 向量記憶刪除：${report.clearedSemanticMemory} 筆\n` +
+      `- NPC 引言記憶刪除：${report.clearedNpcQuotes} 筆`,
+    ephemeral: true
+  });
+}
+
+async function handleResetPlayerHistory(interaction) {
+  const playerId = String(interaction.options.getString('player_id') || '').trim();
+  const password = String(interaction.options.getString('password') || '').trim();
+
+  if (password !== RESETDATA_PASSWORD) {
+    await interaction.reply({ content: '❌ 密碼錯誤，無法清空玩家資料。', ephemeral: true });
+    return;
+  }
+
+  if (!playerId) {
+    await interaction.reply({ content: '❌ 請提供 player_id。', ephemeral: true });
+    return;
+  }
+
+  const report = clearTargetPlayerAllData(playerId);
+  await interaction.reply({
+    content:
+      `✅ 已清空指定玩家資料：${playerId}\n` +
       `- 玩家檔：${report.removedPlayerFile ? '已刪除' : '無'}\n` +
       `- 寵物：${report.removedPet ? '已刪除' : '無'}\n` +
       `- 討論串綁定：${report.removedThread ? '已清除' : '無'}\n` +
@@ -12850,6 +12885,24 @@ CLIENT.on('ready', async () => {
             { name: '自己', value: 'self' },
             { name: '所有人', value: 'all' }
           ]
+        },
+        {
+          type: 3,
+          name: 'password',
+          description: '安全密碼',
+          required: true
+        }
+      ]
+    },
+    {
+      name: 'resetplayerhistory',
+      description: '清空指定玩家全部角色資料（需密碼）',
+      options: [
+        {
+          type: 3,
+          name: 'player_id',
+          description: '要清空歷史的玩家 Discord ID',
+          required: true
         },
         {
           type: 3,
