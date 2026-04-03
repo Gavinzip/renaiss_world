@@ -130,10 +130,22 @@ def render_map_image(map_rows, labels=None, zone_name="", status="", output_path
             y = int(item.get("y", -1))
             name = str(item.get("name", "")).strip()
             marker = str(item.get("marker", "")).strip()
+            is_current = bool(item.get("is_current", False))
+            is_portal_hub = bool(item.get("is_portal_hub", False))
             if x < 0 or y < 0 or not name:
                 continue
             cx = PAD + x * CELL
             cy = map_top + y * CELL
+
+            # If the player is currently standing on a portal hub, draw an orange halo
+            # so both states are visible on the same tile.
+            if is_current and is_portal_hub:
+                draw.rectangle(
+                    [cx - 2, cy - 2, cx + CELL + 1, cy + CELL + 1],
+                    outline=(255, 170, 60),
+                    width=2
+                )
+
             text = f"{marker}{name}" if marker else name
 
             bbox, text = safe_textbbox(draw, (0, 0), text, font_meta)
