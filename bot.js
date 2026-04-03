@@ -3616,6 +3616,13 @@ function finalizeMentorSparVictory(player, pet, detailText = '') {
     sourceChoice,
     baseStory
   );
+  queuePendingStoryTrigger(player, {
+    name: '友誼賽結果',
+    choice: sourceChoice || `與${mentorName}友誼賽`,
+    desc: `${mentorName} 的試煉已告一段落`,
+    action: 'mentor_spar_result',
+    outcome: `${learnLine}\n${String(detailText || '').trim()}`
+  });
   player.battleState = null;
   player.eventChoices = [];
   CORE.savePlayer(player);
@@ -3655,6 +3662,13 @@ function finalizeMentorSparDefeat(player, pet, combatant, detailText = '') {
     sourceChoice,
     baseStory
   );
+  queuePendingStoryTrigger(player, {
+    name: '友誼賽結果',
+    choice: sourceChoice || `與${mentorName}友誼賽`,
+    desc: `${mentorName} 指導你調整戰術節奏`,
+    action: 'mentor_spar_result',
+    outcome: String(detailText || '').trim()
+  });
   player.battleState = null;
   player.eventChoices = [];
   CORE.savePlayer(player);
@@ -3672,6 +3686,62 @@ function formatDurationShort(ms = 0) {
   if (hours > 0) parts.push(`${hours}小時`);
   if (minutes > 0 || parts.length === 0) parts.push(`${minutes}分`);
   return parts.join('');
+}
+
+function normalizePendingStoryTrigger(raw = null) {
+  if (!raw || typeof raw !== 'object') return null;
+  const choice = String(raw.choice || '').trim().slice(0, 220);
+  const desc = String(raw.desc || '').trim().slice(0, 320);
+  const outcome = String(raw.outcome || '').trim().slice(0, 1200);
+  const name = String(raw.name || '').trim().slice(0, 120);
+  const action = String(raw.action || '').trim().slice(0, 80);
+  const source = String(raw.source || '').trim().slice(0, 80);
+  const forceFreshStory = Boolean(raw.forceFreshStory);
+  if (!choice && !desc && !outcome && !name && !action) return null;
+  return {
+    name: name || '後續推進',
+    choice,
+    desc,
+    action: action || 'followup',
+    outcome,
+    source: source || 'system',
+    forceFreshStory,
+    createdAt: Number(raw.createdAt || Date.now()) || Date.now()
+  };
+}
+
+function queuePendingStoryTrigger(player, trigger = {}) {
+  if (!player || typeof player !== 'object') return;
+  const normalized = normalizePendingStoryTrigger({
+    ...trigger,
+    forceFreshStory: true,
+    createdAt: Date.now()
+  });
+  if (!normalized) return;
+  player.pendingStoryTrigger = normalized;
+}
+
+function getPendingStoryTrigger(player) {
+  return normalizePendingStoryTrigger(player?.pendingStoryTrigger || null);
+}
+
+function clearPendingStoryTrigger(player) {
+  if (!player || typeof player !== 'object') return;
+  if (Object.prototype.hasOwnProperty.call(player, 'pendingStoryTrigger')) {
+    delete player.pendingStoryTrigger;
+  }
+}
+
+function formatPetHpWithRecovery(pet) {
+  const hp = `${Number(pet?.hp || 0)}/${Number(pet?.maxHp || 0)}`;
+  const remain = PET.getPetRecoveryRemainingMs(pet);
+  if (remain > 0) return `${hp}（復活倒數 ${formatDurationShort(remain)}）`;
+  return hp;
+}
+
+function buildMainStatusBar(player, pet) {
+  const hpText = formatPetHpWithRecovery(pet);
+  return `氣血 ${hpText} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
 }
 
 function normalizeWorldEventEntry(entry, source) {
@@ -6143,7 +6213,7 @@ async function handlePet(interaction, user) {
     .setColor(pet.type === '正派' ? 0x00ff00 : 0xff0000)
     .setDescription(pet.appearance)
     .addFields(
-      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: t('atk', uiLang), value: String(pet.attack), inline: true },
       { name: t('def', uiLang), value: String(pet.defense), inline: true },
       { name: '📊 等級', value: String(pet.level), inline: true },
@@ -6587,6 +6657,13 @@ CLIENT.on('interactionCreate', async (interaction) => {
           sourceChoice,
           preBattleStory
         );
+        queuePendingStoryTrigger(player, {
+          name: '撤離交戰',
+          choice: sourceChoice || `與${enemyName}交戰`,
+          desc: `你從 ${enemyName} 戰線暫退`,
+          action: 'battle_retreat',
+          outcome: '你先觀察局勢，再決定下一步。'
+        });
         player.eventChoices = [];
         rememberPlayer(player, {
           type: '戰鬥',
@@ -7883,7 +7960,7 @@ async function handleNameSubmit(interaction, user) {
     .addFields(
       { name: '🐾 名字', value: pet.name, inline: true },
       { name: '🏷️ 類型', value: pet.type, inline: true },
-      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: t('atk', uiLang), value: String(pet.attack), inline: true },
       { name: t('def', uiLang), value: String(pet.defense), inline: true },
       { name: '⚡ 速度', value: String(pet.speed), inline: true }
@@ -7946,7 +8023,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     .addFields(
       { name: '🐾 名字', value: pet.name, inline: true },
       { name: '🏷️ 類型', value: pet.type, inline: true },
-      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
       { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
     )
@@ -8013,12 +8090,13 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     ? `📬 **交易通知**\n${financeNotices.map((line) => `• ${line}`).join('\n')}\n\n`
     : '';
   const portalGuideBlock = player?.portalMenuOpen ? `\n\n${buildPortalUsageGuide(player)}` : '';
+  const forceFreshStory = Boolean(getPendingStoryTrigger(player)?.forceFreshStory);
 
   // 如果沒有暂存的事件選項，才生成新的（防止刷選項）
   // ============================================================
   //  continuity 維護：有 story+choices 就直接顯示，不重新生成
   // ============================================================
-  if (player.currentStory && player.eventChoices && player.eventChoices.length > 0) {
+  if (!forceFreshStory && player.currentStory && player.eventChoices && player.eventChoices.length > 0) {
     // 直接顯示上次的故事 + 選項（不做任何 AI 呼叫）
     let persisted = false;
     const choices = applyChoicePolicy(player, normalizeEventChoices(player, player.eventChoices));
@@ -8048,7 +8126,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     const storyText = player.currentStory;
     
     player.stats.飽腹度 = player.stats.飽腹度 || 100;
-    const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+    const statusBar = buildMainStatusBar(player, pet);
     
     const optionsText = buildChoiceOptionsText(choices, { player, pet });
     
@@ -8060,7 +8138,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       .setDescription(description)
       .addFields(
         { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
-        { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
+        { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
         { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
       )
       .addFields(
@@ -8104,14 +8182,23 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     player.eventChoices = [];
     CORE.savePlayer(player);
   }
+  if (forceFreshStory && Array.isArray(player.eventChoices) && player.eventChoices.length > 0) {
+    player.eventChoices = [];
+    CORE.savePlayer(player);
+  }
 
   const hasRecoverableStoryOnly =
+    !forceFreshStory &&
     String(player.currentStory || '').trim().length > 0 &&
     (!Array.isArray(player.eventChoices) || player.eventChoices.length === 0);
   startGenerationState(player, {
-    source: hasRecoverableStoryOnly ? 'main_menu_recover_choices' : 'main_menu',
+    source: hasRecoverableStoryOnly
+      ? 'main_menu_recover_choices'
+      : (forceFreshStory ? 'main_menu_force_fresh_story' : 'main_menu'),
     phase: 'loading',
-    sourceChoice: hasRecoverableStoryOnly ? '補齊上次中斷選項' : '主選單生成',
+    sourceChoice: hasRecoverableStoryOnly
+      ? '補齊上次中斷選項'
+      : (forceFreshStory ? '承接戰鬥結果生成新劇情' : '主選單生成'),
     storySnapshot: hasRecoverableStoryOnly ? player.currentStory : '',
     choicesSnapshot: []
   });
@@ -8119,12 +8206,12 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   
   // ===== 狀態列 =====
   player.stats.飽腹度 = player.stats.飽腹度 || 100;
-  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+  const statusBar = buildMainStatusBar(player, pet);
 
   // 先用 Loading 訊息回覆（先故事、後選項）
   const loadingHint = hasRecoverableStoryOnly
     ? 'AI 說書人正在補齊上次中斷的選項...'
-    : 'AI 說書人正在構思故事...';
+    : (forceFreshStory ? 'AI 說書人正在承接戰鬥結果重塑新篇章...' : 'AI 說書人正在構思故事...');
   const loadingDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
   
   const loadingEmbed = new EmbedBuilder()
@@ -8207,11 +8294,12 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         }
         return;
       }
+      const pendingStoryTrigger = forceFreshStory ? getPendingStoryTrigger(player) : null;
       let storyText = hasRecoverableStoryOnly ? String(player.currentStory || '').trim() : '';
       if (!hasRecoverableStoryOnly) {
         updateGenerationState(player, { phase: 'generating_story' });
         CORE.savePlayer(player);
-        storyText = await STORY.generateStory(null, player, pet, null, memoryContext);
+        storyText = await STORY.generateStory(null, player, pet, pendingStoryTrigger, memoryContext);
         if (!storyText) {
           stopLoadingAnimation();
           finishGenerationState(player, 'failed', {
@@ -8234,6 +8322,9 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
 
         player.currentStory = storyText;
         player.eventChoices = [];
+        if (pendingStoryTrigger) {
+          clearPendingStoryTrigger(player);
+        }
         const rememberStats = rememberStoryDialogues(player, storyText);
         if ((rememberStats?.quotes || 0) > 0 || (rememberStats?.mainline || 0) > 0) {
           console.log(
@@ -8810,7 +8901,7 @@ async function showCharacter(interaction, user) {
   if (pet) {
     embed.addFields(
       { name: '---寵物---', value: `**${pet.name}** (${pet.type})`, inline: false },
-      { name: t('hp', uiLang), value: `${pet.hp}/${pet.maxHp}`, inline: true },
+      { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
       { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
     );
@@ -11141,7 +11232,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   }
   
-  const statusBar = `氣血 ${pet.hp}/${pet.maxHp} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+  const statusBar = buildMainStatusBar(player, pet);
   
   // 立即確認按鈕（避免 Discord 顯示失敗）
   await interaction.deferUpdate().catch(() => {});
@@ -11259,7 +11350,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         .setDescription(storyOnlyDesc)
         .addFields(
           { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
-          { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
+          { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
           { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
         );
 
@@ -11329,7 +11420,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         .setDescription(description)
         .addFields(
           { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
-          { name: '⚔️ 氣血', value: `${pet.hp}/${pet.maxHp}`, inline: true },
+          { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
           { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
         );
 
@@ -11950,6 +12041,13 @@ async function startAutoBattle(interaction, user) {
       sourceChoice,
       preBattleStory
     );
+    queuePendingStoryTrigger(player, {
+      name: 'AI戰鬥勝利',
+      choice: sourceChoice || `與${enemy.name}交戰`,
+      desc: `你在 ${enemy.name} 一戰中獲勝`,
+      action: 'battle_result',
+      outcome: `戰鬥勝利｜獲得 ${finalResult.gold} Rns｜戰利品 ${battleLoot.name}`
+    });
     player.battleState = null;
     player.eventChoices = [];
     CORE.savePlayer(player);
@@ -12130,6 +12228,13 @@ async function handleUseMove(interaction, user, moveIndex) {
       sourceChoice,
       preBattleStory
     );
+    queuePendingStoryTrigger(player, {
+      name: '戰鬥勝利',
+      choice: sourceChoice || `與${enemy.name}交戰`,
+      desc: `你在 ${enemy.name} 一戰中獲勝`,
+      action: 'battle_result',
+      outcome: `戰鬥勝利｜獲得 ${playerPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+    });
     player.battleState = null;
     player.eventChoices = [];
     CORE.savePlayer(player);
@@ -12250,6 +12355,13 @@ async function handleUseMove(interaction, user, moveIndex) {
       sourceChoice,
       preBattleStory
     );
+    queuePendingStoryTrigger(player, {
+      name: '戰鬥勝利',
+      choice: sourceChoice || `與${enemy.name}交戰`,
+      desc: `你在 ${enemy.name} 一戰中獲勝`,
+      action: 'battle_result',
+      outcome: `戰鬥勝利｜獲得 ${enemyPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+    });
     player.battleState = null;
     player.eventChoices = [];
     CORE.savePlayer(player);
@@ -12382,6 +12494,13 @@ async function handleBattleWait(interaction, user) {
       sourceChoice,
       preBattleStory
     );
+    queuePendingStoryTrigger(player, {
+      name: '待機逆轉勝',
+      choice: sourceChoice || `與${enemy.name}交戰`,
+      desc: `你在蓄能後反殺 ${enemy.name}`,
+      action: 'battle_result',
+      outcome: `逆轉勝｜獲得 ${playerPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+    });
     player.battleState = null;
     CORE.savePlayer(player);
 
@@ -12501,6 +12620,13 @@ async function handleBattleWait(interaction, user) {
       sourceChoice,
       preBattleStory
     );
+    queuePendingStoryTrigger(player, {
+      name: '待機逆轉勝',
+      choice: sourceChoice || `與${enemy.name}交戰`,
+      desc: `你在蓄能後反殺 ${enemy.name}`,
+      action: 'battle_result',
+      outcome: `逆轉勝｜獲得 ${enemyPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+    });
     player.battleState = null;
     CORE.savePlayer(player);
 
@@ -12598,6 +12724,13 @@ async function handleFlee(interaction, user, attemptNum) {
       sourceChoice,
       preBattleStory
     );
+    queuePendingStoryTrigger(player, {
+      name: '逃離戰鬥',
+      choice: sourceChoice || `與${enemy.name}交戰`,
+      desc: `你成功脫離 ${enemy.name} 的追擊`,
+      action: 'battle_escape',
+      outcome: String(result.message || '').trim()
+    });
     player.battleState = null;
     rememberPlayer(player, {
       type: '戰鬥',
