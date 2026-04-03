@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.DS_Store
+bot.log
+logs
+data
+data_local_backup_*
+.renaiss_world_data_repo
+.env

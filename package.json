@@ -4,6 +4,7 @@
   "description": "",
   "main": "bot.js",
   "scripts": {
+    "start": "node bot.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "reindex:memory": "node tools/reindex-memory-index.js",
     "backup:world": "node tools/run-world-backup.js"
