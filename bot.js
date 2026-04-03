@@ -3744,6 +3744,32 @@ function buildMainStatusBar(player, pet) {
   return `氣血 ${hpText} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
 }
 
+function detectStitchedBattleStory(story = '') {
+  const text = String(story || '').trim();
+  if (!text) return false;
+  const patterns = [
+    /你先前的決定[:：]/u,
+    /你剛做出的行動[:：]/u,
+    /現場結果[:：]/u,
+    /戰況摘要[:：]/u,
+    /戰場餘波未散/u
+  ];
+  let hits = 0;
+  for (const pattern of patterns) {
+    if (pattern.test(text)) hits += 1;
+  }
+  return hits >= 3;
+}
+
+function extractBattleChoiceHintFromStory(story = '') {
+  const text = String(story || '');
+  const matched =
+    text.match(/你先前的決定[:：]\s*([^\n]{2,160})/u) ||
+    text.match(/你剛做出的行動[:：]\s*([^\n]{2,160})/u);
+  const choice = String(matched?.[1] || '').trim();
+  return choice.slice(0, 160);
+}
+
 function normalizeWorldEventEntry(entry, source) {
   if (!entry) return null;
   if (typeof entry === 'string') {
@@ -8090,7 +8116,25 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     ? `📬 **交易通知**\n${financeNotices.map((line) => `• ${line}`).join('\n')}\n\n`
     : '';
   const portalGuideBlock = player?.portalMenuOpen ? `\n\n${buildPortalUsageGuide(player)}` : '';
-  const forceFreshStory = Boolean(getPendingStoryTrigger(player)?.forceFreshStory);
+  let forceFreshStory = Boolean(getPendingStoryTrigger(player)?.forceFreshStory);
+  const stitchedBattleStoryDetected =
+    !forceFreshStory &&
+    detectStitchedBattleStory(player.currentStory) &&
+    Array.isArray(player.eventChoices) &&
+    player.eventChoices.length > 0;
+  if (stitchedBattleStoryDetected) {
+    const choiceHint = extractBattleChoiceHintFromStory(player.currentStory);
+    queuePendingStoryTrigger(player, {
+      name: '戰後自動續寫',
+      choice: choiceHint || '承接上一場戰鬥結果',
+      desc: '系統偵測到舊拼接戰後文，改為強制重生新篇章',
+      action: 'battle_result_autofix',
+      outcome: '請根據上一場戰鬥勝負與現場線索，延伸新的劇情正文與新選項'
+    });
+    player.eventChoices = [];
+    CORE.savePlayer(player);
+    forceFreshStory = true;
+  }
 
   // 如果沒有暂存的事件選項，才生成新的（防止刷選項）
   // ============================================================
