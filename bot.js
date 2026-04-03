@@ -2391,7 +2391,8 @@ function createSoftMainlineGuideChoice(player) {
     : null;
   const isCompleted = Boolean(islandState?.completed);
   const stage = Math.max(1, Number(islandState?.stage || 1));
-  const stageCount = Math.max(1, Number(islandState?.stageCount || 8));
+  // 舊存檔可能殘留 3 段，顯示層至少以 8 段呈現
+  const stageCount = Math.max(8, Number(islandState?.stageCount || 8));
   const nextPrimary = ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
     ? String(ISLAND_STORY.getNextPrimaryLocation(location) || '').trim()
     : '';
