@@ -4503,12 +4503,19 @@ function renderRegionMapImageBuffer(snapshot, statusText = '') {
     fs.writeFileSync(inPath, JSON.stringify(payload), 'utf8');
     const args = [scriptPath, '--input', inPath, '--output', outPath];
     if (fs.existsSync(fontPath)) args.push('--font', fontPath);
-    const run = spawnSync('python3', args, { cwd: __dirname, encoding: 'utf8', timeout: 4500 });
-    if (run.status !== 0) {
+    const runners = ['python3', 'python'];
+    let run = null;
+    for (const runner of runners) {
+      run = spawnSync(runner, args, { cwd: __dirname, encoding: 'utf8', timeout: 12000 });
+      if (run.status === 0) break;
+    }
+    if (!run || run.status !== 0) {
       console.log('[MapRender] python render failed:', {
-        status: run.status,
-        stdout: String(run.stdout || '').slice(0, 600),
-        stderr: String(run.stderr || '').slice(0, 600)
+        status: run?.status,
+        signal: run?.signal,
+        error: run?.error ? String(run.error.message || run.error) : '',
+        stdout: String(run?.stdout || '').slice(0, 600),
+        stderr: String(run?.stderr || '').slice(0, 600)
       });
       return null;
     }
@@ -8509,7 +8516,7 @@ async function showProfile(interaction, user) {
 }
 
 // ============== 扭蛋選單 ==============
-async function showGacha(interaction, user) {
+async function showGacha(interaction, user, notice = '') {
   const player = CORE.loadPlayer(user.id);
   
   if (!player) {
@@ -8519,25 +8526,27 @@ async function showGacha(interaction, user) {
   
   const config = GACHA.GACHA_CONFIG;
   const profile = GACHA.getPlayerProfile(player);
+  const currentRns = Math.max(0, Number(profile?.rns || player?.stats?.財富 || 0));
   
   const embed = new EmbedBuilder()
     .setTitle('🎰 招式扭蛋機')
     .setColor(0xffd700)
-    .setDescription('花費 Rns 代幣 抽招式！')
+    .setDescription(`${notice ? `⚠️ ${notice}\n\n` : ''}花費 Rns 代幣 抽招式！\n目前持有：**${currentRns} Rns**`)
     .addFields(
       { name: '💰 單抽', value: `${config.singleCost} Rns 代幣 (1包)`, inline: true },
       { name: '💰 十連', value: `${config.tenPullCost} Rns 代幣 (10包)`, inline: true },
-      { name: '⭐ 升級點數', value: `${profile.upgradePoints} 點`, inline: true }
+      { name: '💳 目前持有', value: `${currentRns} Rns`, inline: true }
     )
     .addFields(
+      { name: '⭐ 升級點數', value: `${profile.upgradePoints} 點`, inline: true },
       { name: '📊 已開包數', value: `${profile.totalDraws} 包`, inline: true },
       { name: '💡 每點可換', value: `${config.hpPerPoint} HP`, inline: true }
     )
     .addFields({ name: '💡 說明', value: '每開1包 = 1升級點數\n每點 = 0.2 HP（可分配給不同寵物）\n可分配給任何寵物，用完就沒了', inline: false });
   
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('gacha_single').setLabel(`單抽 (${config.singleCost} Rns 代幣)`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('gacha_ten').setLabel(`十連 (${config.tenPullCost} Rns 代幣)`).setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('gacha_single').setLabel(`單抽 ${config.singleCost}｜餘額 ${currentRns}`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('gacha_ten').setLabel(`十連 ${config.tenPullCost}｜餘額 ${currentRns}`).setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('main_menu').setLabel('返回').setStyle(ButtonStyle.Secondary)
   );
   
@@ -8596,7 +8605,7 @@ async function handleGachaResult(interaction, user, count) {
   const result = GACHA.drawMove(player, count);
   
   if (!result.success) {
-    await interaction.update({ content: `❌ ${result.reason}`, components: [] });
+    await showGacha(interaction, user, result.reason || '抽獎失敗');
     return;
   }
 

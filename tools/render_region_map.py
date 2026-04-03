@@ -47,6 +47,12 @@ def load_font(font_path: str, size: int):
         "/System/Library/Fonts/STHeiti Medium.ttc",
         "/System/Library/Fonts/Apple Symbols.ttf",
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     ])
     for candidate in candidates:
         if not candidate:
@@ -57,6 +63,34 @@ def load_font(font_path: str, size: int):
         except Exception:
             continue
     return ImageFont.load_default()
+
+
+def _safe_text(text: str):
+    src = str(text or "")
+    try:
+        src.encode("latin-1")
+        return src
+    except Exception:
+        return src.encode("ascii", errors="replace").decode("ascii")
+
+
+def safe_textbbox(draw, xy, text, font):
+    source = str(text or "")
+    try:
+        return draw.textbbox(xy, source, font=font), source
+    except Exception:
+        fallback = _safe_text(source)
+        return draw.textbbox(xy, fallback, font=font), fallback
+
+
+def safe_draw_text(draw, xy, text, font, fill):
+    source = str(text or "")
+    try:
+        draw.text(xy, source, font=font, fill=fill)
+        return
+    except Exception:
+        fallback = _safe_text(source)
+        draw.text(xy, fallback, font=font, fill=fill)
 
 
 def render_map_image(map_rows, labels=None, zone_name="", status="", output_path="", font_path=""):
@@ -76,7 +110,7 @@ def render_map_image(map_rows, labels=None, zone_name="", status="", output_path
     draw.rectangle([0, 0, w, HEADER_H], fill=(26, 28, 54))
     draw.line([0, HEADER_H, w, HEADER_H], fill=(80, 80, 120), width=1)
     if zone_name:
-        draw.text((PAD, 13), f"{zone_name}", font=font_head, fill=(214, 220, 255))
+        safe_draw_text(draw, (PAD, 13), f"{zone_name}", font_head, (214, 220, 255))
 
     map_top = HEADER_H + PAD
     for y, row in enumerate(map_rows):
@@ -86,7 +120,7 @@ def render_map_image(map_rows, labels=None, zone_name="", status="", output_path
             cy = map_top + y * CELL
             draw.rectangle([cx, cy, cx + CELL - 1, cy + CELL - 1], fill=bg)
             glyph = DISPLAY_GLYPH.get(char, char)
-            draw.text((cx + 6, cy + 3), glyph, font=font, fill=fg)
+            safe_draw_text(draw, (cx + 6, cy + 3), glyph, font, fg)
 
     label_items = labels if isinstance(labels, list) else []
     occupied = []
@@ -102,7 +136,7 @@ def render_map_image(map_rows, labels=None, zone_name="", status="", output_path
             cy = map_top + y * CELL
             text = f"{marker}{name}" if marker else name
 
-            bbox = draw.textbbox((0, 0), text, font=font_meta)
+            bbox, text = safe_textbbox(draw, (0, 0), text, font_meta)
             tw = max(1, bbox[2] - bbox[0])
             th = max(1, bbox[3] - bbox[1])
 
@@ -138,7 +172,7 @@ def render_map_image(map_rows, labels=None, zone_name="", status="", output_path
                 tx, ty, box = chosen
 
             draw.rectangle(box, fill=(10, 10, 16))
-            draw.text((tx, ty), text, font=font_meta, fill=(218, 218, 232))
+            safe_draw_text(draw, (tx, ty), text, font_meta, (218, 218, 232))
             occupied.append(box)
 
         except Exception:
@@ -156,12 +190,12 @@ def render_map_image(map_rows, labels=None, zone_name="", status="", output_path
     lx = PAD
     ly = footer_y + 10
     for symbol, color, text in legend_items:
-        draw.text((lx, ly), symbol, font=font_legend, fill=color)
+        safe_draw_text(draw, (lx, ly), symbol, font_legend, color)
         lx += 18
-        draw.text((lx, ly + 1), text, font=font_legend, fill=(206, 210, 230))
+        safe_draw_text(draw, (lx, ly + 1), text, font_legend, (206, 210, 230))
         lx += 78
     if status:
-        draw.text((PAD, footer_y + 34), status, font=font_legend, fill=(185, 185, 185))
+        safe_draw_text(draw, (PAD, footer_y + 34), status, font_legend, (185, 185, 185))
 
     img.save(output_path, format="PNG")
 
