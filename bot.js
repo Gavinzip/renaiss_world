@@ -4283,10 +4283,21 @@ function renderRegionMapImageBuffer(snapshot, statusText = '') {
     const args = [scriptPath, '--input', inPath, '--output', outPath];
     if (fs.existsSync(fontPath)) args.push('--font', fontPath);
     const run = spawnSync('python3', args, { cwd: __dirname, encoding: 'utf8', timeout: 4500 });
-    if (run.status !== 0) return null;
-    if (!fs.existsSync(outPath)) return null;
+    if (run.status !== 0) {
+      console.log('[MapRender] python render failed:', {
+        status: run.status,
+        stdout: String(run.stdout || '').slice(0, 600),
+        stderr: String(run.stderr || '').slice(0, 600)
+      });
+      return null;
+    }
+    if (!fs.existsSync(outPath)) {
+      console.log('[MapRender] output png missing after render');
+      return null;
+    }
     return fs.readFileSync(outPath);
-  } catch {
+  } catch (e) {
+    console.log('[MapRender] exception:', e?.message || e);
     return null;
   } finally {
     try { if (fs.existsSync(inPath)) fs.unlinkSync(inPath); } catch {}
@@ -4719,6 +4730,11 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     : compactMap;
   const mapImageStatus = `圖例：@你、◎主傳送門、●城市、▲森林（城市名前有◎代表該城可直接傳送）`;
   const renderedMapImage = regionSnapshot ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus) : null;
+  const hasRenderedMapImage = Boolean(renderedMapImage);
+  const visibleMapBlock = hasRenderedMapImage ? '' : mapBlock;
+  const mapDisplayLabel = hasRenderedMapImage
+    ? 'Pillow 圖像版'
+    : (useWideAnsiMap ? 'ASCII 版（圖像渲染失敗，回退）' : '文字版（圖像渲染失敗，回退）');
   const nearbyPlaces = Array.isArray(currentProfile?.nearby) && currentProfile.nearby.length > 0
     ? currentProfile.nearby.slice(0, 4).join('、')
     : '未知';
@@ -4731,29 +4747,45 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const nearbyPortalsText = Array.isArray(nearbyPortals) && nearbyPortals.length > 0
     ? nearbyPortals.slice(0, 6).join('、')
     : '附近無可用傳送門';
-  const mapDesc =
-    mapBlock +
-    `\n**目前位置：** ◉${player.location || '未知'}◉（地圖中已高亮）` +
-    `\n**地圖顯示：** ${useWideAnsiMap ? 'ASCII 版' : '文字版'}` +
-    `\n**當前分區：** ${regionSnapshot?.regionName || currentProfile?.region || '未知'}` +
-    `\n**區域難度：** ${currentProfile ? `D${currentProfile.difficulty}` : '未知'}` +
-    `\n**導航目標：** ${String(player.navigationTarget || '').trim() || '（未設定）'}` +
-    `\n**當前主傳送門：** ${typeof getLocationPortalHub === 'function' ? (getLocationPortalHub(player.location || '') || '未知') : '未知'}` +
-    `\n**六大區主傳送門：** ${(typeof getRegionPortalHubs === 'function' ? getRegionPortalHubs() : []).join('、') || '未知'}` +
-    `\n**自由探索：** ${islandCompleted ? '已開放（可用下拉選單設定區內目的地）' : '未開放（先完成本地劇情）'}` +
-    `\n**圖例：** @黃色=你｜◎橘色=主傳送門｜●紫色=城市｜▲綠色=森林` +
-    `\n**附近可互動內容：**` +
-    `\n- 周邊場景：${nearbyPlaces}` +
-    `\n- 地標：${nearbyLandmarks}` +
-    `\n- 資源/商機：${nearbyResources}` +
-    `\n- 傳送門可往：${nearbyPortalsText}` +
-    (locationContext ? `\n**當前地區情報：** ${locationContext}` : '') +
-    `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
-    (locationSummary ? `\n\n**分區城市**\n${locationSummary}` : '') +
-    (useWideAnsiMap && pageSummary ? `\n\n**本頁地區情報**\n${pageSummary}` : '') +
-    (canOpenPortal ? `\n\n${buildPortalUsageGuide(player)}` : '') +
-    '\n_區內移動請用下拉選單，跨區移動請用傳送門。_' +
-    (notice ? `\n${notice}` : '');
+  const mapDesc = hasRenderedMapImage
+    ? (
+      `**地圖顯示：** ${mapDisplayLabel}` +
+      `\n**導航目標：** ${String(player.navigationTarget || '').trim() || '（未設定）'}` +
+      `\n**自由探索：** ${islandCompleted ? '已開放（可用下拉選單設定區內目的地）' : '未開放（先完成本地劇情）'}` +
+      `\n**附近可互動內容：**` +
+      `\n- 周邊場景：${nearbyPlaces}` +
+      `\n- 地標：${nearbyLandmarks}` +
+      `\n- 資源/商機：${nearbyResources}` +
+      `\n- 傳送門可往：${nearbyPortalsText}` +
+      `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
+      (canOpenPortal ? `\n\n${buildPortalUsageGuide(player)}` : '') +
+      '\n_區內移動請用下拉選單，跨區移動請用傳送門。_' +
+      (notice ? `\n${notice}` : '')
+    )
+    : (
+      visibleMapBlock +
+      `\n**目前位置：** ◉${player.location || '未知'}◉（地圖中已高亮）` +
+      `\n**地圖顯示：** ${mapDisplayLabel}` +
+      `\n**當前分區：** ${regionSnapshot?.regionName || currentProfile?.region || '未知'}` +
+      `\n**區域難度：** ${currentProfile ? `D${currentProfile.difficulty}` : '未知'}` +
+      `\n**導航目標：** ${String(player.navigationTarget || '').trim() || '（未設定）'}` +
+      `\n**當前主傳送門：** ${typeof getLocationPortalHub === 'function' ? (getLocationPortalHub(player.location || '') || '未知') : '未知'}` +
+      `\n**六大區主傳送門：** ${(typeof getRegionPortalHubs === 'function' ? getRegionPortalHubs() : []).join('、') || '未知'}` +
+      `\n**自由探索：** ${islandCompleted ? '已開放（可用下拉選單設定區內目的地）' : '未開放（先完成本地劇情）'}` +
+      `\n**圖例：** @黃色=你｜◎橘色=主傳送門｜●紫色=城市｜▲綠色=森林` +
+      `\n**附近可互動內容：**` +
+      `\n- 周邊場景：${nearbyPlaces}` +
+      `\n- 地標：${nearbyLandmarks}` +
+      `\n- 資源/商機：${nearbyResources}` +
+      `\n- 傳送門可往：${nearbyPortalsText}` +
+      (locationContext ? `\n**當前地區情報：** ${locationContext}` : '') +
+      `\n**地圖頁數：** ${safePage + 1}/${maxPage + 1}` +
+      (locationSummary ? `\n\n**分區城市**\n${locationSummary}` : '') +
+      (!hasRenderedMapImage && useWideAnsiMap && pageSummary ? `\n\n**本頁地區情報**\n${pageSummary}` : '') +
+      (canOpenPortal ? `\n\n${buildPortalUsageGuide(player)}` : '') +
+      '\n_區內移動請用下拉選單，跨區移動請用傳送門。_' +
+      (notice ? `\n${notice}` : '')
+    );
 
   const embed = new EmbedBuilder()
     .setTitle('🗺️ Renaiss 群島海圖')
@@ -6692,7 +6724,9 @@ async function syncWalletAndApplyNow(discordUserId) {
     cardFMV: assets.assets.cardFMV,
     cardCount: assets.assets.cardCount,
     packTxCount: assets.assets.packTxCount,
-    packSpentUSDT: assets.assets.packSpentUSDT
+    packSpentUSDT: assets.assets.packSpentUSDT,
+    tradeSpentUSDT: assets.assets.tradeSpentUSDT,
+    totalSpentUSDT: assets.assets.totalSpentUSDT
   });
 
   const player = CORE.loadPlayer(discordUserId);
@@ -6729,6 +6763,7 @@ async function handleWalletBind(interaction, user) {
         `錢包地址：\`${result.address}\`\n\n` +
         `${cardInfo}` +
         `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
+        `💸 總花費(開包+市場買入): $${Number(assets.assets.totalSpentUSDT || 0).toFixed(2)} USDT\n` +
         `🎁 目前 Rns 代幣: ${assets.rns}\n` +
         `🐾 可擁有寵物: ${maxPets} 隻\n\n` +
         (hasPlayer ? '你可以直接回到主選單繼續冒險。' : '你可以繼續完成新手流程。')
@@ -6772,6 +6807,7 @@ async function handleWalletSyncNow(interaction, user) {
       .setDescription(
         `${cardInfo}` +
         `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
+        `💸 總花費(開包+市場買入): $${Number(assets.assets.totalSpentUSDT || 0).toFixed(2)} USDT\n` +
         `🎁 目前 Rns 代幣: ${assets.rns}\n` +
         `🐾 可擁有寵物: ${maxPets} 隻`
       );
@@ -7879,9 +7915,22 @@ function formatGachaSlotLine(draw, index) {
   return `${index + 1}. 🎰 [ ${reels[0]} | ${reels[1]} | ${reels[2]} ]${jackpotText}\n${draw.tierEmoji} **${draw.move.name}** (${draw.tierName}) - ${draw.move.desc}`;
 }
 
+function buildGachaReelLines(slotRows = [], revealCount = 0, showSkill = false) {
+  return slotRows.map((row, index) => {
+    const reels = Array.isArray(row?.reels) ? row.reels : ['❔', '❔', '❔'];
+    const a = revealCount >= 1 ? reels[0] : '❔';
+    const b = revealCount >= 2 ? reels[1] : '❔';
+    const c = revealCount >= 3 ? reels[2] : '❔';
+    const jackpotText = row?.draw?.tier === 3 && revealCount >= 3 ? ' → **JACKPOT!**' : '';
+    const skillText = showSkill
+      ? `${row.draw.tierEmoji} **${row.draw.move.name}** (${row.draw.tierName}) - ${row.draw.move.desc}`
+      : '🎁 技能揭曉中...';
+    return `${index + 1}. 🎰 [ ${a} | ${b} | ${c} ]${jackpotText}\n${skillText}`;
+  }).join('\n\n');
+}
+
 async function handleGachaResult(interaction, user, count) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
   
   if (!player) {
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
@@ -7903,73 +7952,120 @@ async function handleGachaResult(interaction, user, count) {
       marketType: 'renaiss'
     });
   }
-  
-  const resultsText = result.draws.map((r, i) => formatGachaSlotLine(r, i)).join('\n\n');
-  
-  const embed = new EmbedBuilder()
+
+  const slotRows = result.draws.map((draw) => ({
+    draw,
+    reels: buildSlotReels(draw.tier === 3)
+  }));
+  const resultsText = buildGachaReelLines(slotRows, 3, true);
+
+  // 本次抽到的招式先以「技能晶片」形式加入背包，之後可再學習上陣
+  const gainedChips = [];
+  for (const draw of result.draws) {
+    if (!draw?.move?.name) continue;
+    if (!Array.isArray(player.inventory)) player.inventory = [];
+    const chipName = `技能晶片：${draw.move.name}`;
+    player.inventory.unshift(chipName);
+    gainedChips.push(chipName);
+  }
+
+  const makeSpinEmbed = (revealCount, showSkill, phaseText) => new EmbedBuilder()
+    .setTitle(`🎰 開包中 x${count}`)
+    .setColor(0xffd700)
+    .setDescription(
+      `💰 花費 ${result.cost} Rns 代幣\n` +
+      `💡 拉霸規則：三格相同 = 5% 大獎（不改原本機率）\n\n` +
+      `**${phaseText}**\n` +
+      `${buildGachaReelLines(slotRows, revealCount, showSkill)}`
+    );
+
+  const chipSummary = gainedChips.length > 0
+    ? gainedChips.join('、')
+    : '（本次無新增）';
+
+  const finalEmbed = new EmbedBuilder()
     .setTitle(`🎰 開包結果 x${count}`)
     .setColor(0xffd700)
     .setDescription(`💰 花費 ${result.cost} Rns 代幣\n💡 拉霸規則：三格相同 = 5% 大獎（不改原本機率）\n\n**開到以下招式：**\n${resultsText}\n\n**總價值：${result.totalValue} Rns 代幣**\n**⭐ 獲得升級點數：+${result.earnedPoints} 點**\n**📊 已開包數：${result.totalDraws} 包**`)
-    .addFields({ name: '💡', value: '每點 = 0.2 HP，可在檔案分配給任意寵物！', inline: false });
-  
-  // 存放抽卡結果
+    .addFields(
+      { name: '📚 本次獲取技能晶片', value: `${gainedChips.length} 枚\n${String(chipSummary).slice(0, 1000)}`, inline: false },
+      { name: '📌 學習規則', value: '抽到的是技能晶片；點下方按鈕可「學習技能並上陣」。學習後也可到招式配置調整。', inline: false },
+      { name: '📦 販賣規則', value: '商店掛賣時，會以「技能晶片」名稱販賣。', inline: false }
+    );
+
+  // 保留本次抽卡結果，供「學習上陣」按鈕使用
   player.tempGachaResults = result.draws;
   CORE.savePlayer(player);
-  
-  // 招式選擇按鈕
-  const moveButtons = result.draws.slice(0, 3).map((r, i) => 
+
+  await interaction.update({ embeds: [makeSpinEmbed(0, false, '機台啟動中...')], components: [] });
+  const spinMsg = interaction.message;
+  const spinFrames = [
+    { reveal: 1, wait: 280, text: '第一格揭曉...' },
+    { reveal: 2, wait: 280, text: '第二格揭曉...' },
+    { reveal: 3, wait: 280, text: '第三格揭曉...' }
+  ];
+  for (const frame of spinFrames) {
+    await new Promise((resolve) => setTimeout(resolve, frame.wait));
+    if (spinMsg?.edit) {
+      await spinMsg.edit({ embeds: [makeSpinEmbed(frame.reveal, false, frame.text)], components: [] }).catch(() => {});
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  const learnButtons = result.draws.slice(0, 10).map((r, i) =>
     new ButtonBuilder()
       .setCustomId(`learn_move_${i}`)
-      .setLabel(`${r.tierEmoji} ${r.move.name}`)
+      .setLabel(`學習 ${r.tierEmoji} ${r.move.name}`.slice(0, 80))
       .setStyle(r.tier === 3 ? ButtonStyle.Danger : r.tier === 2 ? ButtonStyle.Primary : ButtonStyle.Secondary)
   );
-  
-  const row1 = new ActionRowBuilder().addComponents(moveButtons);
-  const row2 = new ActionRowBuilder().addComponents(
+  const learnRows = [];
+  for (let i = 0; i < learnButtons.length; i += 5) {
+    learnRows.push(new ActionRowBuilder().addComponents(learnButtons.slice(i, i + 5)));
+  }
+
+  const rowAction = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('open_gacha').setLabel('繼續抽').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_moves').setLabel('📜 去配置招式').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Primary)
   );
-  
-  await interaction.update({ embeds: [embed], components: [row1, row2] });
+  const finalRows = [...learnRows, rowAction];
+
+  if (spinMsg?.edit) {
+    await spinMsg.edit({ embeds: [finalEmbed], components: finalRows }).catch(async () => {
+      await interaction.followUp({ embeds: [finalEmbed], components: finalRows }).catch(() => {});
+    });
+    return;
+  }
+  await interaction.followUp({ embeds: [finalEmbed], components: finalRows }).catch(() => {});
 }
 
 // ============== 學習抽到的招式 ==============
 async function handleLearnMove(interaction, user, moveIndex) {
   const player = CORE.loadPlayer(user.id);
-  
-  if (!player || !player.tempGachaResults) {
-    await interaction.update({ content: '❌ 沒有可學習的招式！', components: [] });
+  if (!player || !Array.isArray(player.tempGachaResults) || player.tempGachaResults.length === 0) {
+    await interaction.reply({ content: '⚠️ 找不到可學習的技能晶片，請先抽獎。', ephemeral: true }).catch(() => {});
     return;
   }
-  
   const moveData = player.tempGachaResults[moveIndex];
-  if (!moveData) {
-    await interaction.update({ content: '❌ 無效的招式！', components: [] });
+  if (!moveData?.move) {
+    await interaction.reply({ content: '⚠️ 這枚技能晶片不存在或已過期。', ephemeral: true }).catch(() => {});
     return;
   }
-  
-  const result = GACHA.learnDrawnMove(user.id, moveData.move);
-  
-  if (!result.success) {
-    await interaction.update({ content: `❌ ${result.reason}`, components: [] });
+
+  const learned = GACHA.learnMoveForBattle(user.id, moveData.move);
+  if (!learned?.success) {
+    await interaction.reply({ content: `❌ ${learned?.reason || '學習失敗'}`, ephemeral: true }).catch(() => {});
     return;
   }
-  
-  // 清除暫存
-  delete player.tempGachaResults;
-  CORE.savePlayer(player);
-  
-  const embed = new EmbedBuilder()
-    .setTitle(`✅ 學習成功！`)
-    .setColor(0x00ff00)
-    .setDescription(`你的寵物學會了 **${moveData.tierEmoji} ${moveData.move.name}**！\n\n${moveData.move.desc}`);
-  
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('open_gacha').setLabel('繼續抽').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Primary)
-  );
-  
-  await interaction.update({ embeds: [embed], components: [row] });
+
+  const note = learned.replacedMoveName
+    ? `（上陣名額已滿，已替換「${learned.replacedMoveName}」）`
+    : '';
+  const status = learned.newlyLearned ? '📘 學會新技能並上陣' : '🧠 已學技能上陣';
+  await interaction.reply({
+    content: `${status}：**${moveData.move.name}** ${note}`.trim(),
+    ephemeral: true
+  }).catch(() => {});
 }
 
 // ============== 分配 HP ==============
@@ -8530,7 +8626,7 @@ function buildShopSellDraftOptions(player, ownerId) {
           moveName
         },
         label: `${pet.name}｜${moveName}`.slice(0, 100),
-        description: `技能掛賣｜${pet.type || '未知'}｜未上陣`
+        description: `技能晶片掛賣｜${pet.type || '未知'}｜未上陣`
       });
     }
   }

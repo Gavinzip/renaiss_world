@@ -33,10 +33,12 @@ const BSC_CONFIG = {
   chainId: 56,
   apiKey: process.env.BSCSCAN_API_KEY || '',
   
-  // 合約地址（從 TCG 專案來的）
+  // 合約地址（寫死，與 TCG Pro onchain_metrics 保持一致）
   usdtContract: '0x55d398326f99059ff775485246999027b3197955',
   packContracts: [
-    '0x...', // 需要從 TCG 專案的 .env 填入
+    '0xaab5f5fa75437a6e9e7004c12c9c56cda4b4885a',
+    '0x94e7732b0b2e7c51ffd0d56580067d9c2e2b7910',
+    '0xb2891022648c5fad3721c42c05d8d283d4d53080'
   ],
   marketplaceContract: '0xae3e7268ef5a062946216a44f58a8f685ffd11d0',
 };
@@ -334,63 +336,129 @@ async function fetchCardFMV(walletAddress) {
 }
 
 // ============== 從 BSCScan 讀取 USDT 交易歷史 ==============
+function classifyUSDTTransfer(from, to, wallet, packSet, marketplace) {
+  if (from === wallet && packSet.has(to)) return 'open_pack';
+  if (packSet.has(from) && to === wallet) return 'buyback';
+  if (from === wallet && to === marketplace) return 'mp_buy';
+  if (from === marketplace && to === wallet) return 'mp_sell';
+  return 'other';
+}
+
 async function fetchUSDTTransfers(walletAddress) {
   if (!BSC_CONFIG.apiKey) {
     console.log('[錢包] BSCSCAN_API_KEY 未設定');
-    return { packTxCount: 0, packSpentUSDT: 0 };
+    return {
+      packTxCount: 0,
+      packSpentUSDT: 0,
+      tradeSpentUSDT: 0,
+      tradeEarnedUSDT: 0,
+      buybackEarnedUSDT: 0,
+      totalSpentUSDT: 0,
+      totalEarnedUSDT: 0,
+      cashNetUSDT: 0,
+      tradeVolumeUSDT: 0
+    };
   }
   
   try {
-    // 讀取代幣轉帳記錄
-    const params = new URLSearchParams({
-      chainid: BSC_CONFIG.chainId,
-      module: 'account',
-      action: 'tokentx',
-      address: walletAddress.toLowerCase(),
-      contractaddress: BSC_CONFIG.usdtContract,
-      page: 1,
-      offset: 10000,
-      sort: 'desc',
-      apikey: BSC_CONFIG.apiKey
-    });
-    
-    const url = `${BSC_CONFIG.apiUrl}?${params}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (data.status !== '1' || !Array.isArray(data.result)) {
-      return { packTxCount: 0, packSpentUSDT: 0 };
+    const wallet = normalizeWalletAddress(walletAddress);
+    const offset = Math.max(1, Math.min(10000, Number(process.env.ONCHAIN_PAGE_SIZE || 10000)));
+    const packSet = new Set(BSC_CONFIG.packContracts.map((x) => String(x || '').toLowerCase()));
+    const marketplace = normalizeWalletAddress(BSC_CONFIG.marketplaceContract);
+
+    let page = 1;
+    const allRows = [];
+    while (true) {
+      const params = new URLSearchParams({
+        chainid: String(BSC_CONFIG.chainId),
+        module: 'account',
+        action: 'tokentx',
+        address: wallet,
+        contractaddress: BSC_CONFIG.usdtContract,
+        page: String(page),
+        offset: String(offset),
+        sort: 'asc',
+        apikey: BSC_CONFIG.apiKey
+      });
+
+      const url = `${BSC_CONFIG.apiUrl}?${params}`;
+      const response = await fetch(url);
+      const data = await response.json();
+      const message = String(data?.message || '');
+      const rows = Array.isArray(data?.result) ? data.result : [];
+
+      if (rows.length === 0) {
+        if (/No transactions found/i.test(message) || /No transactions found/i.test(String(data?.result || ''))) {
+          break;
+        }
+        // 非預期格式：當成無資料，避免中斷主流程
+        break;
+      }
+
+      allRows.push(...rows);
+      if (rows.length < offset) break;
+      page += 1;
     }
-    
-    // 計算開包數量和花費
+
+    // 計算開包 / 市場買入 / buyback / 市場賣出
     let packTxCount = 0;
     let packSpentUSDT = 0;
-    
-    const validPackContracts = BSC_CONFIG.packContracts
-      .filter(addr => /^0x[a-fA-F0-9]{40}$/.test(addr))
-      .map(addr => addr.toLowerCase());
-    const marketplace = (BSC_CONFIG.marketplaceContract || '').toLowerCase();
-    const userWallet = walletAddress.toLowerCase();
+    let tradeSpentUSDT = 0;
+    let tradeEarnedUSDT = 0;
+    let buybackEarnedUSDT = 0;
 
-    for (const tx of data.result) {
-      const from = tx.from?.toLowerCase();
-      const to = tx.to?.toLowerCase();
-      const value = parseFloat(tx.value) / 1e18; // USDT 18 位小數
-      
-      // 往 pack 合約或 marketplace 的轉出，都視為消費/開包相關行為
-      const isOutgoing = from === userWallet;
-      const isPackSpend = validPackContracts.includes(to);
-      const isMarketplaceSpend = marketplace && to === marketplace;
-      if (isOutgoing && (isPackSpend || isMarketplaceSpend)) {
+    for (const tx of allRows) {
+      const from = normalizeWalletAddress(tx?.from);
+      const to = normalizeWalletAddress(tx?.to);
+      const decimals = Number(tx?.tokenDecimal ?? 18);
+      const raw = Number(tx?.value ?? 0);
+      if (!Number.isFinite(raw) || raw <= 0) continue;
+      const divisor = 10 ** (Number.isFinite(decimals) && decimals > 0 ? decimals : 18);
+      const amount = raw / divisor;
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+
+      const kind = classifyUSDTTransfer(from, to, wallet, packSet, marketplace);
+      if (kind === 'open_pack') {
         packTxCount++;
-        packSpentUSDT += value;
+        packSpentUSDT += amount;
+      } else if (kind === 'mp_buy') {
+        tradeSpentUSDT += amount;
+      } else if (kind === 'buyback') {
+        buybackEarnedUSDT += amount;
+      } else if (kind === 'mp_sell') {
+        tradeEarnedUSDT += amount;
       }
     }
-    
-    return { packTxCount, packSpentUSDT };
+
+    const totalSpentUSDT = packSpentUSDT + tradeSpentUSDT;
+    const totalEarnedUSDT = buybackEarnedUSDT + tradeEarnedUSDT;
+    const cashNetUSDT = totalEarnedUSDT - totalSpentUSDT;
+    const tradeVolumeUSDT = tradeSpentUSDT + tradeEarnedUSDT;
+
+    return {
+      packTxCount,
+      packSpentUSDT: Number(packSpentUSDT.toFixed(2)),
+      tradeSpentUSDT: Number(tradeSpentUSDT.toFixed(2)),
+      tradeEarnedUSDT: Number(tradeEarnedUSDT.toFixed(2)),
+      buybackEarnedUSDT: Number(buybackEarnedUSDT.toFixed(2)),
+      totalSpentUSDT: Number(totalSpentUSDT.toFixed(2)),
+      totalEarnedUSDT: Number(totalEarnedUSDT.toFixed(2)),
+      cashNetUSDT: Number(cashNetUSDT.toFixed(2)),
+      tradeVolumeUSDT: Number(tradeVolumeUSDT.toFixed(2))
+    };
   } catch (e) {
     console.error('[錢包] 讀取 USDT 交易失敗:', e.message);
-    return { packTxCount: 0, packSpentUSDT: 0 };
+    return {
+      packTxCount: 0,
+      packSpentUSDT: 0,
+      tradeSpentUSDT: 0,
+      tradeEarnedUSDT: 0,
+      buybackEarnedUSDT: 0,
+      totalSpentUSDT: 0,
+      totalEarnedUSDT: 0,
+      cashNetUSDT: 0,
+      tradeVolumeUSDT: 0
+    };
   }
 }
 
@@ -410,11 +478,15 @@ async function calculateTotalAssets(walletAddress) {
     // 開包數量（用於升級點數）
     packTxCount: onchainData.packTxCount,
     
-    // 總花費（用於初始 RNS）
+    // 開包花費
     packSpentUSDT: onchainData.packSpentUSDT,
+    // 市場買入花費
+    tradeSpentUSDT: onchainData.tradeSpentUSDT,
+    // 真正總花費（開包 + 市場買入，對齊 TCG Pro 海報第 3 欄）
+    totalSpentUSDT: onchainData.totalSpentUSDT,
     
-    // 計算後的 RNS
-    initialRNS: Math.floor(onchainData.packSpentUSDT)
+    // 計算後的 RNS：總花費（USDT）* 0.5
+    initialRNS: Math.floor(onchainData.totalSpentUSDT * 0.5)
   };
 }
 
@@ -486,6 +558,8 @@ function updateWalletData(discordUserId, data) {
     settings[discordUserId].cardCount = data.cardCount;
     settings[discordUserId].packTxCount = data.packTxCount;
     settings[discordUserId].packSpentUSDT = data.packSpentUSDT;
+    settings[discordUserId].tradeSpentUSDT = data.tradeSpentUSDT;
+    settings[discordUserId].totalSpentUSDT = data.totalSpentUSDT;
     saveWalletSettings(settings);
   }
 }

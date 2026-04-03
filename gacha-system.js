@@ -255,10 +255,6 @@ function learnDrawnMove(playerId, moveData) {
     return { success: false, reason: '沒有寵物！' };
   }
   
-  if (pet.moves.length >= 10) {
-    return { success: false, reason: '招式已滿！需要忘記一個招式才能學習新招' };
-  }
-  
   if (pet.moves.find(m => m.id === moveData.id)) {
     return { success: false, reason: '已經學過這個招式了！' };
   }
@@ -267,11 +263,83 @@ function learnDrawnMove(playerId, moveData) {
     ...moveData,
     currentProficiency: 0
   });
-  ensureAutoEquipOnLearn(pet, moveData.id);
   
   PET.savePet(pet);
   
   return { success: true, move: moveData };
+}
+
+// ============== 學習技能（並上陣）=============
+function learnMoveForBattle(playerId, moveData) {
+  const pet = PET.loadPet(playerId);
+  if (!pet) {
+    return { success: false, reason: '沒有寵物！' };
+  }
+  if (!moveData || typeof moveData !== 'object') {
+    return { success: false, reason: '技能晶片資料錯誤！' };
+  }
+
+  const moveId = String(moveData.id || '').trim();
+  if (!moveId) return { success: false, reason: '技能晶片缺少技能 ID。' };
+  if (!Array.isArray(pet.moves)) pet.moves = [];
+
+  let knownMove = pet.moves.find((m) => String(m?.id || '').trim() === moveId) || null;
+  let newlyLearned = false;
+  if (!knownMove) {
+    knownMove = {
+      ...moveData,
+      currentProficiency: 0
+    };
+    pet.moves.push(knownMove);
+    newlyLearned = true;
+  }
+
+  const attackIds = pet.moves
+    .filter((m) => !(m?.effect && m.effect.flee))
+    .map((m) => String(m?.id || '').trim())
+    .filter(Boolean);
+  const attackIdSet = new Set(attackIds);
+  if (!attackIdSet.has(moveId)) {
+    PET.savePet(pet);
+    return {
+      success: true,
+      move: knownMove,
+      newlyLearned,
+      equipped: false,
+      reason: '此技能無法上陣（可能為特殊技能）。'
+    };
+  }
+
+  const current = Array.isArray(pet.activeMoveIds) ? pet.activeMoveIds : [];
+  const selected = [];
+  for (const rawId of current) {
+    const id = String(rawId || '').trim();
+    if (!id || selected.includes(id) || !attackIdSet.has(id)) continue;
+    selected.push(id);
+    if (selected.length >= PET_MOVE_LOADOUT_LIMIT) break;
+  }
+
+  let replacedMoveName = '';
+  if (!selected.includes(moveId)) {
+    if (selected.length < PET_MOVE_LOADOUT_LIMIT) {
+      selected.push(moveId);
+    } else {
+      const replacedId = String(selected[0] || '').trim();
+      selected[0] = moveId;
+      const replacedMove = pet.moves.find((m) => String(m?.id || '').trim() === replacedId);
+      replacedMoveName = String(replacedMove?.name || '').trim();
+    }
+  }
+
+  pet.activeMoveIds = selected.slice(0, PET_MOVE_LOADOUT_LIMIT);
+  PET.savePet(pet);
+  return {
+    success: true,
+    move: knownMove,
+    newlyLearned,
+    equipped: true,
+    replacedMoveName
+  };
 }
 
 // ============== 忘記招式 ==============
@@ -323,6 +391,7 @@ module.exports = {
   calculateTotalAssets,
   getPlayerProfile,
   learnDrawnMove,
+  learnMoveForBattle,
   forgetMove,
   convertUSDToRNS
 };

@@ -211,11 +211,11 @@ function reservePetMoveForListing(player, itemRef = {}, itemName = '') {
   const moveId = normalizeText(itemRef.moveId || '', 64);
   const moveNameHint = normalizeText(itemRef.moveName || itemName || '', 80);
   if (!ownerId) return { success: false, reason: '找不到玩家資訊。' };
-  if (!petId || !moveId) return { success: false, reason: '技能掛賣資料不完整。' };
+  if (!petId || !moveId) return { success: false, reason: '技能晶片掛賣資料不完整。' };
 
   const pet = typeof PET.getPetById === 'function' ? PET.getPetById(petId) : null;
   if (!pet || String(pet.ownerId || '') !== ownerId) {
-    return { success: false, reason: '找不到可掛賣的寵物技能。' };
+    return { success: false, reason: '找不到可掛賣的技能晶片來源。' };
   }
   if (!Array.isArray(pet.moves)) pet.moves = [];
 
