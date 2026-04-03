@@ -7,8 +7,9 @@ const fs = require('fs');
 const path = require('path');
 
 const PET_FILE = path.join(__dirname, 'data', 'pets.json');
-const PET_RECOVER_MS = 48 * 60 * 60 * 1000; // 2天
+const PET_RECOVER_TURNS = 2; // 戰敗後 2 回合復活
 const PET_MOVE_LOADOUT_LIMIT = 5;
+const PET_ELEMENTS = Object.freeze(['水', '火', '草']);
 
 // ============== 聯盟系招式池（原創） ==============
 const POSITIVE_MOVES = [
@@ -30,18 +31,69 @@ const POSITIVE_MOVES = [
   { id: 'golden_bell', name: '堡壘力場', element: '光譜', type: 'positive', tier: 2, baseDamage: 15, effect: { shield: 2 }, desc: '生成雙層防護力場穩住前線' },
   { id: 'heavenly_flowers', name: '孢子刃雨', element: '生質', type: 'positive', tier: 2, baseDamage: 20, effect: { poison: 1 }, desc: '灑出微型孢子刃，造成中毒與切割' },
   { id: 'ice_palm', name: '低溫衝擊', element: '液態', type: 'positive', tier: 2, baseDamage: 20, effect: { freeze: 1 }, desc: '瞬降溫度凍結目標關節' },
-  { id: 'blaze_sky', name: '電漿盛放', element: '熱能', type: 'positive', tier: 2, baseDamage: 25, effect: { burn: 1 }, desc: '點燃電漿雲團，造成灼燒' },
+  { id: 'blaze_sky', name: '電漿盛放', element: '熱能', type: 'positive', tier: 1, baseDamage: 25, effect: { burn: 1 }, desc: '點燃電漿雲團，造成灼燒' },
   { id: 'flame_armor', name: '熱盾回路', element: '熱能', type: 'positive', tier: 2, baseDamage: 12, effect: { reflect: 1 }, desc: '外層熱盾回彈部分攻擊傷害' },
   { id: 'rejuvenation', name: '再生矩陣', element: '生質', type: 'positive', tier: 2, baseDamage: 0, effect: { heal: 30 }, desc: '啟動深層修復矩陣恢復大量生命' },
   { id: 'rock_trap', name: '隕塊墜落', element: '地脈', type: 'positive', tier: 2, baseDamage: 22, effect: { missNext: 1 }, desc: '牽引隕塊砸落，打亂敵方節奏' },
   { id: 'quicksand', name: '漂砂陷落', element: '地脈', type: 'positive', tier: 2, baseDamage: 18, effect: { slow: 2 }, desc: '製造局部陷落區域持續牽制' },
+  { id: 'tide_barrier', name: '潮幕護壁', element: '液態', type: 'positive', tier: 1, baseDamage: 8, effect: { shield: 2, heal: 10 }, desc: '召喚潮幕吸收衝擊並修復受損結構' },
+  { id: 'frost_lance', name: '霜稜突刺', element: '液態', type: 'positive', tier: 2, baseDamage: 24, effect: { freeze: 1 }, desc: '凝結霜稜長槍刺穿前線並凍結關節' },
+  { id: 'steam_screen', name: '蒸汽迷障', element: '液態', type: 'positive', tier: 2, baseDamage: 12, effect: { blind: 1 }, desc: '高溫蒸汽瞬間擴散，遮蔽目標視野' },
+  { id: 'wildfire_chain', name: '野火連鎖', element: '熱能', type: 'positive', tier: 2, baseDamage: 27, effect: { burn: 2 }, desc: '火線沿地表跳躍擴散，造成連續灼燒' },
+  { id: 'cinder_smoke', name: '燼霧擾流', element: '熱能', type: 'positive', tier: 2, baseDamage: 18, effect: { blind: 1, burn: 1 }, desc: '灰燼與熱流纏繞，降低命中並附帶灼痕' },
+  { id: 'flare_snare', name: '焰鎖牽制', element: '熱能', type: 'positive', tier: 2, baseDamage: 22, effect: { bind: 1, burn: 1 }, desc: '熾焰鎖鏈纏住目標，限制行動並灼燒' },
+  { id: 'thorn_bind', name: '棘藤封步', element: '生質', type: 'positive', tier: 2, baseDamage: 18, effect: { bind: 2, thorns: 1 }, desc: '棘藤纏繞封鎖步伐，反制近身攻擊' },
+  { id: 'spore_haze', name: '孢霧惑心', element: '生質', type: 'positive', tier: 2, baseDamage: 16, effect: { confuse: 1, poison: 1 }, desc: '致幻孢霧擾亂判讀並緩慢侵蝕核心' },
+  { id: 'forest_mend', name: '森息回春', element: '生質', type: 'positive', tier: 1, baseDamage: 0, effect: { heal: 26 }, desc: '調動林息循環，快速回補生命值' },
+  { id: 'vine_bastion', name: '藤甲堡壘', element: '生質', type: 'positive', tier: 2, baseDamage: 10, effect: { shield: 2 }, desc: '纏繞藤甲形成雙層防壁，穩住陣線' },
+  { id: 'rip_current', name: '裂流切線', element: '液態', type: 'positive', tier: 1, baseDamage: 13, effect: {}, desc: '以高壓水流切開防線' },
+  { id: 'bubble_guard', name: '泡沫護甲', element: '液態', type: 'positive', tier: 1, baseDamage: 6, effect: { shield: 1 }, desc: '展開彈性泡膜減輕衝擊' },
+  { id: 'echo_wave', name: '回音水波', element: '液態', type: 'positive', tier: 1, baseDamage: 12, effect: {}, desc: '波紋共振造成連續打擊' },
+  { id: 'spring_pulse', name: '泉心脈衝', element: '液態', type: 'positive', tier: 1, baseDamage: 0, effect: { heal: 14 }, desc: '引導泉流能量回補生命' },
+  { id: 'foam_dart', name: '沫刃突刺', element: '液態', type: 'positive', tier: 1, baseDamage: 12, effect: {}, desc: '壓縮泡流形成高速突刺' },
+  { id: 'stream_guard', name: '流盾護持', element: '液態', type: 'positive', tier: 1, baseDamage: 7, effect: { shield: 1 }, desc: '以循環水流削弱正面衝擊' },
+  { id: 'rain_edge', name: '驟雨刃', element: '液態', type: 'positive', tier: 2, baseDamage: 23, effect: { bleed: 1 }, desc: '密雨凝刃，造成割裂出血' },
+  { id: 'mirror_tide', name: '鏡潮反域', element: '液態', type: 'positive', tier: 2, baseDamage: 12, effect: { reflect: 1 }, desc: '反射潮面回彈部分傷害' },
+  { id: 'deep_pressure', name: '深海壓潰', element: '液態', type: 'positive', tier: 2, baseDamage: 24, effect: { defenseDown: 1 }, desc: '深層水壓壓碎護甲結構' },
+  { id: 'clear_mind_tide', name: '清心潮息', element: '液態', type: 'positive', tier: 2, baseDamage: 8, effect: { cleanse: true, heal: 16 }, desc: '潮息洗淨異常並穩定節奏' },
+  { id: 'current_chain', name: '流鎖纏潮', element: '液態', type: 'positive', tier: 2, baseDamage: 20, effect: { bind: 1 }, desc: '潮流化鎖纏住目標關節' },
+  { id: 'ember_step', name: '餘燼步', element: '熱能', type: 'positive', tier: 1, baseDamage: 11, effect: {}, desc: '以連踏爆點快速貼近目標' },
+  { id: 'ash_guard', name: '灰燼護幕', element: '熱能', type: 'positive', tier: 1, baseDamage: 7, effect: { shield: 1 }, desc: '灰燼氣流形成薄型防護' },
+  { id: 'flare_jab', name: '炫光突刺', element: '熱能', type: 'positive', tier: 1, baseDamage: 14, effect: {}, desc: '火花聚焦成短距離突刺' },
+  { id: 'magma_bite', name: '熔牙咬擊', element: '熱能', type: 'positive', tier: 1, baseDamage: 13, effect: { burn: 1 }, desc: '灼熱撕咬附帶燃燒效果' },
+  { id: 'sunforge', name: '日鍛迴路', element: '熱能', type: 'positive', tier: 1, baseDamage: 0, effect: { heal: 12 }, desc: '短暫升溫修補受損結構' },
+  { id: 'spark_claw', name: '火花爪裂', element: '熱能', type: 'positive', tier: 1, baseDamage: 12, effect: {}, desc: '以高溫爪擊撕裂裝甲接縫' },
+  { id: 'char_pulse', name: '焦痕脈衝', element: '熱能', type: 'positive', tier: 1, baseDamage: 11, effect: { burn: 1 }, desc: '脈衝熱浪留下延燒焦痕' },
+  { id: 'lava_step', name: '熔步突進', element: '熱能', type: 'positive', tier: 1, baseDamage: 13, effect: {}, desc: '以熔岩步伐短距離爆發突進' },
+  { id: 'firebrand_strike', name: '炎印重擊', element: '熱能', type: 'positive', tier: 1, baseDamage: 14, effect: {}, desc: '烙下炎印後重擊目標核心' },
+  { id: 'volcanic_burst', name: '熔岩爆湧', element: '熱能', type: 'positive', tier: 2, baseDamage: 28, effect: { burn: 1 }, desc: '熔岩熱浪爆發造成壓制' },
+  { id: 'smoke_screen', name: '煙幕火牆', element: '熱能', type: 'positive', tier: 2, baseDamage: 18, effect: { blind: 1 }, desc: '煙與火交織阻斷視線' },
+  { id: 'burning_edge', name: '灼鋒連斬', element: '熱能', type: 'positive', tier: 2, baseDamage: 26, effect: { burn: 1 }, desc: '高溫刃壓連斬前線' },
+  { id: 'heat_sink', name: '熾核護盾', element: '熱能', type: 'positive', tier: 2, baseDamage: 10, effect: { shield: 2 }, desc: '以熱核匯流吸收傷害' },
+  { id: 'seed_shot', name: '種子速射', element: '生質', type: 'positive', tier: 1, baseDamage: 12, effect: {}, desc: '高速發射硬殼種子打擊目標' },
+  { id: 'leaf_step', name: '葉影步', element: '生質', type: 'positive', tier: 1, baseDamage: 8, effect: { dodge: 1 }, desc: '借葉影移位提高閃避率' },
+  { id: 'bark_skin', name: '樹皮硬化', element: '生質', type: 'positive', tier: 1, baseDamage: 6, effect: { shield: 1 }, desc: '樹皮纖維硬化形成護層' },
+  { id: 'dew_heal', name: '晨露療息', element: '生質', type: 'positive', tier: 1, baseDamage: 0, effect: { heal: 12 }, desc: '晨露滲透修補微創傷口' },
+  { id: 'thorn_whip', name: '荊棘鞭擊', element: '生質', type: 'positive', tier: 1, baseDamage: 14, effect: {}, desc: '以荊棘長鞭進行快速抽擊' },
+  { id: 'bud_guard', name: '芽盾護生', element: '生質', type: 'positive', tier: 1, baseDamage: 6, effect: { shield: 1 }, desc: '芽盾張開形成柔性保護層' },
+  { id: 'sap_strike', name: '樹液擊', element: '生質', type: 'positive', tier: 1, baseDamage: 12, effect: {}, desc: '黏稠樹液壓擊阻斷節奏' },
+  { id: 'petal_dance', name: '花瓣舞步', element: '生質', type: 'positive', tier: 1, baseDamage: 10, effect: { dodge: 1 }, desc: '花瓣環繞提高閃避節奏' },
+  { id: 'pollen_shock', name: '花粉震盪', element: '生質', type: 'positive', tier: 2, baseDamage: 18, effect: { blind: 1 }, desc: '高濃度花粉短暫擾亂感知' },
+  { id: 'root_spike', name: '根槍穿刺', element: '生質', type: 'positive', tier: 2, baseDamage: 24, effect: { armorBreak: true }, desc: '根槍突刺削弱護甲結構' },
+  { id: 'nature_cycle', name: '循環新生', element: '生質', type: 'positive', tier: 2, baseDamage: 8, effect: { heal: 18, shield: 1 }, desc: '引導自然循環同步回復與防禦' },
+  { id: 'ancient_canopy', name: '遠古樹冠', element: '生質', type: 'positive', tier: 3, baseDamage: 22, effect: { shield: 3, heal: 20 }, desc: '召喚古樹冠幕，建立長效優勢' },
 
   // ===== Tier 3 =====
   { id: 'flood_torrent', name: '潮汐奇點', element: '液態', type: 'positive', tier: 3, baseDamage: 35, effect: { splash: true }, desc: '引爆潮汐奇點，形成範圍壓制' },
   { id: 'fire_lotus', name: '日核裂解', element: '熱能', type: 'positive', tier: 3, baseDamage: 40, effect: { selfDamage: 10 }, desc: '超載核心換取高爆發輸出' },
   { id: 'arhat_kick', name: '地脈衝撞', element: '地脈', type: 'positive', tier: 3, baseDamage: 38, effect: { armorBreak: true }, desc: '共振地脈形成重擊並破甲' },
   { id: 'wind_fire_blade', name: '風暴聚變', element: '混相', type: 'positive', tier: 3, baseDamage: 45, effect: { burn: 2, stun: 1 }, desc: '高壓氣流與熱能聚變，兼具灼燒與震盪' },
-  { id: 'thunder_crash', name: '雷矢超載', element: '混相', type: 'positive', tier: 3, baseDamage: 48, effect: { stun: 1, armorBreak: true }, desc: '雷矢束流貫穿護甲並造成失衡' }
+  { id: 'thunder_crash', name: '雷矢超載', element: '混相', type: 'positive', tier: 3, baseDamage: 48, effect: { stun: 1, armorBreak: true }, desc: '雷矢束流貫穿護甲並造成失衡' },
+  { id: 'maelstrom_prison', name: '渦牢封界', element: '液態', type: 'positive', tier: 3, baseDamage: 30, effect: { bind: 2, slow: 2 }, desc: '高壓渦流形成封界，限制行動與節奏' },
+  { id: 'ocean_renewal', name: '海核復甦', element: '液態', type: 'positive', tier: 3, baseDamage: 0, effect: { heal: 38, cleanse: true }, desc: '深海能量回灌，全域淨化並大幅恢復' },
+  { id: 'inferno_drive', name: '煉獄推進', element: '熱能', type: 'positive', tier: 3, baseDamage: 46, effect: { burn: 2, selfDamage: 8 }, desc: '點燃推進核心，爆發輸出並承擔反噬' },
+  { id: 'phoenix_guard', name: '鳳燼守輪', element: '熱能', type: 'positive', tier: 3, baseDamage: 16, effect: { reflect: 2, heal: 14 }, desc: '鳳燼護輪旋轉，反彈攻擊並回補能量' },
+  { id: 'bloom_overgrowth', name: '繁花覆域', element: '生質', type: 'positive', tier: 3, baseDamage: 34, effect: { trap: 2, poison: 2 }, desc: '植生區域暴走蔓延，持續束縛與侵蝕' }
 ];
 
 // ============== 協定系招式池（原創） ==============
@@ -67,7 +119,7 @@ const NEGATIVE_MOVES = [
   // ===== Tier 3 =====
   { id: 'hell_fire', name: '煉域協議', element: '熱毒', type: 'negative', tier: 3, baseDamage: 32, effect: { burn: 2, poison: 1 }, desc: '啟動高危協議，輸出灼燒與毒侵' },
   { id: 'explosive_pill', name: '連鎖爆訊', element: '熱毒', type: 'negative', tier: 3, baseDamage: 38, effect: { selfDamage: 10 }, desc: '以自損換取鏈式爆震' },
-  { id: 'ghost_fire', name: '幽格炙流', element: '暗熱', type: 'negative', tier: 3, baseDamage: 35, effect: { ignoreResistance: true }, desc: '炙流穿透護甲與抗性直接灼傷' },
+  { id: 'ghost_fire', name: '幽格炙流', element: '暗熱', type: 'negative', tier: 3, baseDamage: 35, effect: { ignoreResistance: true, heal: 12 }, desc: '炙流穿透護甲與抗性，並回收殘餘能量' },
   { id: 'silver_snake', name: '銀鏈束陣', element: '暗金', type: 'negative', tier: 3, baseDamage: 28, effect: { bind: 2, dot: 3 }, desc: '展開銀鏈束陣並持續放電' },
   { id: 'ice_toxin', name: '冰毒脈衝', element: '凍毒', type: 'negative', tier: 3, baseDamage: 26, effect: { freeze: 1, poison: 2 }, desc: '低溫毒流同步凍結與侵蝕' },
   { id: 'mud_fire_lotus', name: '泥焰遮幕', element: '混毒熱', type: 'negative', tier: 3, baseDamage: 30, effect: { blind: 1, burn: 2 }, desc: '泥焰遮幕降低視野並持續焚灼' },
@@ -104,6 +156,83 @@ const INITIAL_MOVES = [
 
 const ALL_MOVES = [...POSITIVE_MOVES, ...NEGATIVE_MOVES, ...INITIAL_MOVES];
 const MOVE_BY_ID = new Map(ALL_MOVES.map((m) => [m.id, m]));
+
+const PET_ELEMENT_ALIAS = Object.freeze({
+  water: '水',
+  fire: '火',
+  grass: '草',
+  水: '水',
+  水屬性: '水',
+  火: '火',
+  火屬性: '火',
+  草: '草',
+  草屬性: '草',
+  positive: '水',
+  negative: '火',
+  正派: '水',
+  機變派: '火'
+});
+
+const ELEMENT_MOVE_IDS = Object.freeze({
+  水: [
+    'willow_water', 'water_splash', 'mist_step', 'tide_barrier',
+    'rip_current', 'bubble_guard', 'echo_wave', 'spring_pulse',
+    'foam_dart', 'stream_guard',
+    'ice_palm', 'frost_lance', 'steam_screen', 'rain_edge',
+    'mirror_tide', 'deep_pressure', 'clear_mind_tide', 'current_chain',
+    'flood_torrent', 'ocean_renewal'
+  ],
+  火: [
+    'blaze_sky', 'ember_step', 'ash_guard', 'flare_jab',
+    'magma_bite', 'sunforge', 'spark_claw', 'char_pulse',
+    'lava_step', 'firebrand_strike',
+    'flame_armor', 'wildfire_chain', 'cinder_smoke', 'flare_snare',
+    'volcanic_burst', 'smoke_screen', 'burning_edge', 'heat_sink',
+    'inferno_drive', 'fire_lotus'
+  ],
+  草: [
+    'grass_cloak', 'forest_mend', 'seed_shot', 'leaf_step',
+    'bark_skin', 'dew_heal', 'thorn_whip', 'bud_guard',
+    'sap_strike', 'petal_dance',
+    'spider_net', 'root_trap', 'heavenly_flowers', 'thorn_bind',
+    'spore_haze', 'vine_bastion', 'pollen_shock', 'root_spike',
+    'bloom_overgrowth', 'ancient_canopy'
+  ]
+});
+
+function normalizePetElement(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '水';
+  if (PET_ELEMENT_ALIAS[text]) return PET_ELEMENT_ALIAS[text];
+  return PET_ELEMENTS.includes(text) ? text : '水';
+}
+
+function getMovesByElement(element = '') {
+  const normalized = normalizePetElement(element);
+  const ids = Array.isArray(ELEMENT_MOVE_IDS[normalized]) ? ELEMENT_MOVE_IDS[normalized] : [];
+  const out = [];
+  const seen = new Set();
+  for (const id of ids) {
+    const move = MOVE_BY_ID.get(String(id || '').trim());
+    if (!move || seen.has(move.id)) continue;
+    seen.add(move.id);
+    out.push(move);
+  }
+  return out;
+}
+
+function getMoveRarityByTier(tier = 1) {
+  const safeTier = Math.max(1, Math.min(3, Number(tier || 1)));
+  if (safeTier >= 3) return '史詩';
+  if (safeTier === 2) return '稀有';
+  return '普通';
+}
+
+const ELEMENT_MOVE_POOLS = Object.freeze({
+  水: getMovesByElement('水'),
+  火: getMovesByElement('火'),
+  草: getMovesByElement('草')
+});
 const LEGACY_MOVE_NAME_TO_ID = {
   '金針刺穴': 'golden_needle',
   '暴雨梨花': 'needle_rain',
@@ -167,11 +296,34 @@ function normalizeLoadedMove(move) {
 function normalizePetMoves(pet) {
   if (!pet || !Array.isArray(pet.moves)) return false;
   let changed = false;
+  const normalizedElement = normalizePetElement(pet.type || pet.element);
+  pet.type = normalizedElement;
+  pet.element = normalizedElement;
+  const allowedIds = new Set([
+    ...getMovesByElement(normalizedElement).map((m) => String(m?.id || '').trim()).filter(Boolean),
+    ...INITIAL_MOVES.map((m) => String(m?.id || '').trim()).filter(Boolean)
+  ]);
+
   pet.moves = pet.moves.map((m) => {
     const result = normalizeLoadedMove(m);
     if (result.changed) changed = true;
     return result.move;
+  }).filter((m) => {
+    const id = String(m?.id || '').trim();
+    if (!id || !allowedIds.has(id)) {
+      changed = true;
+      return false;
+    }
+    return true;
   });
+
+  if (pet.moves.length === 0) {
+    const starter = cloneMoveTemplate(getMovesByElement(normalizedElement)[0] || INITIAL_MOVES[0]);
+    if (starter) {
+      pet.moves.push({ ...starter, currentProficiency: 0 });
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -238,11 +390,18 @@ function calculateMoveDamage(move, level, attack) {
 
 // ============== 創建寵物蛋 ==============
 function createPetEgg(playerId, type) {
+  const element = normalizePetElement(type);
+  const eggNameMap = {
+    水: '潮汐夥伴蛋',
+    火: '熾焰夥伴蛋',
+    草: '森語夥伴蛋'
+  };
   return {
     id: `pet_${playerId}_${Date.now()}`,
     ownerId: playerId,
-    name: type === '正派' ? '聯盟夥伴蛋' : '協定夥伴蛋',
-    type: type,
+    name: eggNameMap[element] || '潮汐夥伴蛋',
+    type: element,
+    element,
     level: 1,
     exp: 0,
     expToLevel: 100,
@@ -266,14 +425,26 @@ function hatchEgg(pet) {
   pet.hatched = true;
   pet.status = '正常';
   pet.reviveAt = null;
+  pet.reviveTurnsRemaining = 0;
   pet.lastDownAt = null;
-  
-  const names = pet.type === '正派'
-    ? ['Nova', 'Luma', 'Aria', 'Pico', 'Melo', 'Kite']
-    : ['Vex', 'Nyx', 'Rift', 'Echo', 'Gloom', 'Raze'];
-  
+
+  const element = normalizePetElement(pet.type || pet.element);
+  pet.type = element;
+  pet.element = element;
+  const namesByElement = {
+    水: ['Aqua', 'Mist', 'Ripple', 'Nami', 'Tide', 'Nero'],
+    火: ['Blaze', 'Ember', 'Pyro', 'Ignis', 'Flare', 'Nova'],
+    草: ['Moss', 'Leaf', 'Bram', 'Fern', 'Verd', 'Sprout']
+  };
+  const traitByElement = {
+    水: '沉穩冷靜',
+    火: '熾熱果決',
+    草: '靈巧機敏'
+  };
+  const names = namesByElement[element] || namesByElement['水'];
+
   pet.name = names[Math.floor(Math.random() * names.length)];
-  pet.appearance = `一隻剛孵化的${pet.type}夥伴，外殼仍帶著微光紋路，眼神${pet.type === '正派' ? '穩定專注' : '敏銳機警'}`;
+  pet.appearance = `一隻剛孵化的${element}屬性夥伴，外殼仍帶著微光紋路，眼神${traitByElement[element] || '沉穩冷靜'}`;
   
   // 初始招式：頭槌 + 逃跑
   pet.moves = [
@@ -283,7 +454,7 @@ function hatchEgg(pet) {
   
   // 根據等級權重隨機獲得初始技能
   // 60% Tier 1, 30% Tier 2, 10% Tier 3
-  const starterPool = pet.type === '正派' ? POSITIVE_MOVES : NEGATIVE_MOVES;
+  const starterPool = getMovesByElement(element);
   const tier1 = starterPool.filter(m => m.tier === 1);
   const tier2 = starterPool.filter(m => m.tier === 2);
   const tier3 = starterPool.filter(m => m.tier === 3);
@@ -304,13 +475,39 @@ function hatchEgg(pet) {
   return pet;
 }
 
+function ensureRecoveryTurnCounter(pet) {
+  if (!pet || typeof pet !== 'object') return 0;
+  if (String(pet.status || '').trim() !== '死亡') {
+    pet.reviveTurnsRemaining = 0;
+    pet.reviveAt = null;
+    return 0;
+  }
+
+  let turns = Number(pet.reviveTurnsRemaining || 0);
+  if (!Number.isFinite(turns) || turns <= 0) {
+    // 舊版本相容：若還有 reviveAt（舊時間制），轉成回合制倒數
+    if (pet.reviveAt) {
+      const remainMs = Math.max(0, Number(pet.reviveAt || 0) - Date.now());
+      const mapped = remainMs > 0
+        ? Math.max(1, Math.ceil(remainMs / (24 * 60 * 60 * 1000)))
+        : 0;
+      turns = mapped;
+    }
+    if (!Number.isFinite(turns) || turns <= 0) turns = PET_RECOVER_TURNS;
+  }
+  pet.reviveTurnsRemaining = Math.max(0, Math.floor(turns));
+  pet.reviveAt = null;
+  return pet.reviveTurnsRemaining;
+}
+
 function markPetDefeated(pet, reason = '戰鬥失敗') {
   if (!pet) return pet;
   pet.hp = 0;
   pet.status = '死亡';
   pet.lastDownReason = reason;
   pet.lastDownAt = Date.now();
-  pet.reviveAt = Date.now() + PET_RECOVER_MS;
+  pet.reviveAt = null;
+  pet.reviveTurnsRemaining = PET_RECOVER_TURNS;
   return pet;
 }
 
@@ -320,21 +517,74 @@ function syncPetRecovery(pet) {
   let changed = false;
   let revived = false;
 
-  if (pet.status === '死亡' && pet.reviveAt && Date.now() >= pet.reviveAt) {
-    pet.status = '正常';
-    pet.hp = pet.maxHp || 100;
-    pet.lastRevivedAt = Date.now();
+  if (String(pet.status || '').trim() === '死亡') {
+    const before = Number(pet.reviveTurnsRemaining || 0);
+    const now = ensureRecoveryTurnCounter(pet);
+    if (before !== now) changed = true;
+  } else if (pet.reviveAt || Number(pet.reviveTurnsRemaining || 0) > 0) {
     pet.reviveAt = null;
+    pet.reviveTurnsRemaining = 0;
     changed = true;
-    revived = true;
   }
 
   return { pet, revived, changed };
 }
 
+function advancePetRecoveryTurns(pet, turns = 1) {
+  if (!pet) return { pet, revived: false, changed: false, remainingTurns: 0 };
+  const tick = Math.max(0, Math.floor(Number(turns || 0)));
+  if (tick <= 0) {
+    return {
+      pet,
+      revived: false,
+      changed: false,
+      remainingTurns: getPetRecoveryRemainingTurns(pet)
+    };
+  }
+  if (String(pet.status || '').trim() !== '死亡') {
+    if (pet.reviveAt || Number(pet.reviveTurnsRemaining || 0) > 0) {
+      pet.reviveAt = null;
+      pet.reviveTurnsRemaining = 0;
+      return { pet, revived: false, changed: true, remainingTurns: 0 };
+    }
+    return { pet, revived: false, changed: false, remainingTurns: 0 };
+  }
+
+  const before = ensureRecoveryTurnCounter(pet);
+  const next = Math.max(0, before - tick);
+  let revived = false;
+  pet.reviveTurnsRemaining = next;
+  pet.reviveAt = null;
+  if (next <= 0) {
+    pet.status = '正常';
+    pet.hp = pet.maxHp || 100;
+    pet.lastRevivedAt = Date.now();
+    pet.reviveTurnsRemaining = 0;
+    revived = true;
+  }
+  return {
+    pet,
+    revived,
+    changed: revived || next !== before,
+    remainingTurns: Math.max(0, Number(pet.reviveTurnsRemaining || 0))
+  };
+}
+
+function getPetRecoveryRemainingTurns(pet) {
+  if (!pet || String(pet.status || '').trim() !== '死亡') return 0;
+  const turns = Number(pet.reviveTurnsRemaining || 0);
+  if (Number.isFinite(turns) && turns > 0) return Math.max(0, Math.floor(turns));
+  if (pet.reviveAt) {
+    const remainMs = Math.max(0, Number(pet.reviveAt || 0) - Date.now());
+    if (remainMs <= 0) return 0;
+    return Math.max(1, Math.ceil(remainMs / (24 * 60 * 60 * 1000)));
+  }
+  return PET_RECOVER_TURNS;
+}
+
 function getPetRecoveryRemainingMs(pet) {
-  if (!pet || pet.status !== '死亡' || !pet.reviveAt) return 0;
-  return Math.max(0, pet.reviveAt - Date.now());
+  // 保留舊函式介面供相容使用；新版本以「回合」為主
+  return getPetRecoveryRemainingTurns(pet) * 60 * 1000;
 }
 
 // ============== 學習招式 ==============
@@ -342,8 +592,8 @@ function learnMove(pet, moveId) {
   if (pet.moves.length >= pet.maxMoves) {
     return { success: false, reason: '招式已達上限！需要忘記一個招式才能學習新招' };
   }
-  
-  const allMoves = pet.type === '正派' ? POSITIVE_MOVES : NEGATIVE_MOVES;
+
+  const allMoves = getMovesByElement(pet?.type || pet?.element);
   const move = allMoves.find(m => m.id === moveId);
   
   if (!move) return { success: false, reason: '找不到這個招式' };
@@ -444,9 +694,15 @@ function loadAllPets() {
 }
 
 module.exports = {
+  PET_ELEMENTS,
+  ELEMENT_MOVE_POOLS,
   POSITIVE_MOVES,
   NEGATIVE_MOVES,
   INITIAL_MOVES,
+  normalizePetElement,
+  getMovesByElement,
+  getMoveRarityByTier,
+  getMoveById: (id) => MOVE_BY_ID.get(String(id || '').trim()) || null,
   createPetEgg,
   hatchEgg,
   learnMove,
@@ -455,6 +711,8 @@ module.exports = {
   calculateMoveDamage,
   markPetDefeated,
   syncPetRecovery,
+  advancePetRecoveryTurns,
+  getPetRecoveryRemainingTurns,
   getPetRecoveryRemainingMs,
   savePet,
   loadPet,

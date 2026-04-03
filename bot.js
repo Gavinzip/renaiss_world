@@ -546,11 +546,13 @@ const SHOP_HAGGLE_BULK_SELECT_LIMIT = 20;
 const SHOP_HAGGLE_OFFER_TTL_MS = 10 * 60 * 1000;
 const SHOP_HAGGLE_BLOCKED_ITEMS = new Set(['乾糧一包', '水囊']);
 const NPC_DIALOGUE_LOG_LIMIT = Math.max(20, Math.min(200, Number(process.env.NPC_DIALOGUE_LOG_LIMIT || 80)));
+const PLAYER_CODEX_NPC_LIMIT = Math.max(50, Math.min(1000, Number(process.env.PLAYER_CODEX_NPC_LIMIT || 500)));
+const PLAYER_CODEX_DRAW_LIMIT = Math.max(50, Math.min(2000, Number(process.env.PLAYER_CODEX_DRAW_LIMIT || 800)));
 const STARTER_FIVE_PULL_COUNT = 5;
 const GENERATION_HISTORY_LIMIT = Math.max(5, Math.min(100, Number(process.env.GENERATION_HISTORY_LIMIT || 20)));
 const MAP_ENABLE_WIDE_ANSI = String(process.env.MAP_ENABLE_WIDE_ANSI || '0') === '1';
 const MARKET_GUARANTEE_GAP_TURNS = Math.max(1, Math.min(8, Number(process.env.MARKET_GUARANTEE_GAP_TURNS || 3)));
-const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
+const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(16, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 10)));
 const LOCATION_STORY_BATTLE_MIN_TURNS = Math.max(0, Math.min(6, Number(process.env.LOCATION_STORY_BATTLE_MIN_TURNS || 1)));
 const PORTAL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(process.env.PORTAL_GUIDE_MIN_TURNS || 1)));
 const PORTAL_RESHOW_COOLDOWN_TURNS = Math.max(1, Math.min(10, Number(process.env.PORTAL_RESHOW_COOLDOWN_TURNS || 2)));
@@ -578,6 +580,11 @@ const MAINLINE_CUE_PATTERN = /(可疑|供應隊|帳本|來源|流向|封存艙|�
 const LOCATION_ENTRY_GATE_ENABLED = String(process.env.LOCATION_ENTRY_GATE_ENABLED || '1') !== '0';
 const LOCATION_ENTRY_MIN_WINRATE = Math.max(1, Math.min(99, Number(process.env.LOCATION_ENTRY_MIN_WINRATE || 50)));
 const AGGRESSIVE_CHOICE_TARGET_RATE = Math.max(0, Math.min(1, Number(process.env.AGGRESSIVE_CHOICE_TARGET_RATE || 0.9)));
+const SHOP_HEAL_CRYSTAL_COST = 200;
+const SHOP_HEAL_CRYSTAL_RECOVER = Math.max(10, Number(process.env.SHOP_HEAL_CRYSTAL_RECOVER || 30));
+const SHOP_ENERGY_CRYSTAL_COST = 2000;
+const SHOP_ENERGY_CRYSTAL_RECOVER = Math.max(20, Number(process.env.SHOP_ENERGY_CRYSTAL_RECOVER || 100));
+const DIGITAL_CRYSTAL_EFFECT_FAIL_RATE = Math.max(0, Math.min(1, Number(process.env.DIGITAL_CRYSTAL_EFFECT_FAIL_RATE || 0.5)));
 
 function tryAcquireStoryLock(userId, reason = 'story') {
   if (!userId) return true;
@@ -900,6 +907,7 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       moves: '📜 招式',
       character: '👤 個人',
       profile: '💳 檔案',
+      codex: '📚 圖鑑',
       memoryCheck: '🧠 記憶檢查',
       gacha: '🎰 抽獎',
       map: '🗺️ 地圖',
@@ -911,6 +919,7 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       moves: '📜 招式',
       character: '👤 个人',
       profile: '💳 档案',
+      codex: '📚 图鉴',
       memoryCheck: '🧠 记忆检查',
       gacha: '🎰 抽奖',
       map: '🗺️ 地图',
@@ -922,6 +931,7 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
       moves: '📜 Moves',
       character: '👤 Character',
       profile: '💳 Profile',
+      codex: '📚 Codex',
       memoryCheck: '🧠 Memory',
       gacha: '🎰 Draw',
       map: '🗺️ Map',
@@ -941,6 +951,7 @@ function appendMainMenuUtilityButtons(buttons = [], player = null) {
     new ButtonBuilder().setCustomId('show_moves').setLabel(labels.moves).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_character').setLabel(labels.character).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_profile').setLabel(labels.profile).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_codex').setLabel(labels.codex).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('show_memory_audit').setLabel(labels.memoryCheck).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_gacha').setLabel(labels.gacha).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_map').setLabel(labels.map).setStyle(ButtonStyle.Secondary),
@@ -1429,6 +1440,36 @@ function ensureLocationArcState(player) {
   return player.locationArcState;
 }
 
+function ensureRegionFreeRoamState(player) {
+  if (!player || typeof player !== 'object') return {};
+  if (!player.regionFreeRoam || typeof player.regionFreeRoam !== 'object' || Array.isArray(player.regionFreeRoam)) {
+    player.regionFreeRoam = {};
+  }
+  return player.regionFreeRoam;
+}
+
+function unlockRegionFreeRoamByLocation(player, location = '') {
+  if (!player) return '';
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(String(location || player.location || '').trim()) : null;
+  const regionName = String(profile?.region || '').trim();
+  if (!regionName) return '';
+  const state = ensureRegionFreeRoamState(player);
+  state[regionName] = {
+    unlockedAt: Date.now(),
+    byLocation: String(location || player.location || '').trim()
+  };
+  return regionName;
+}
+
+function canFreeRoamCurrentRegion(player) {
+  if (!player) return false;
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(String(player.location || '').trim()) : null;
+  const regionName = String(profile?.region || '').trim();
+  if (!regionName) return false;
+  const state = ensureRegionFreeRoamState(player);
+  return Boolean(state[regionName]);
+}
+
 function ensureLocationStoryProgressEntry(state, location = '') {
   if (!state || typeof state !== 'object') return null;
   const loc = String(location || '').trim();
@@ -1846,6 +1887,22 @@ function hasMentorSparCompleted(player, mentorId = '') {
 }
 
 function chooseMentorTeachTemplatesFromSeed(seed = '') {
+  const seedText = String(seed || '').trim();
+  if (/^mentor_/u.test(seedText)) {
+    const pool = getAllPetSkillMoves()
+      .filter((move) => Number(move?.tier || 1) >= 3)
+      .sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
+    const picked = [];
+    let idx = pool.length > 0 ? stableHashCode(seedText) % pool.length : 0;
+    while (pool.length > 0 && picked.length < 3) {
+      const move = pool[idx % pool.length];
+      if (move?.name && !picked.includes(move.name)) picked.push(move.name);
+      idx += 1;
+      if (idx > pool.length * 3) break;
+    }
+    if (picked.length >= 3) return picked.slice(0, 3);
+  }
+
   const masterPool = Array.isArray(EVENTS?.MASTERS) ? EVENTS.MASTERS : [];
   const chosenMaster = masterPool.length > 0
     ? masterPool[stableHashCode(seed) % masterPool.length]
@@ -1853,9 +1910,9 @@ function chooseMentorTeachTemplatesFromSeed(seed = '') {
   const masterTeaches = Array.isArray(chosenMaster?.teaches) ? chosenMaster.teaches : [];
   if (masterTeaches.length > 0) return masterTeaches.slice(0, 3);
 
-  const positiveMoves = Array.isArray(PET.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : [];
-  if (positiveMoves.length === 0) return ['堡壘力場', '電漿盛放', '再生矩陣'];
-  const sorted = [...positiveMoves].sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
+  const candidateMoves = getAllPetSkillMoves();
+  if (candidateMoves.length === 0) return ['堡壘力場', '電漿盛放', '再生矩陣'];
+  const sorted = [...candidateMoves].sort((a, b) => String(a?.id || '').localeCompare(String(b?.id || '')));
   const picked = [];
   const seen = new Set();
   let idx = stableHashCode(seed || 'mentor_seed') % sorted.length;
@@ -1912,11 +1969,15 @@ function getNearbyMentorCandidatesForPlayer(player) {
       title: String(info.title || '在地導師').trim(),
       loc: String(info.loc || location).trim(),
       teaches: chooseMentorTeachTemplatesFromSeed(mentorId),
-      power: Number(info?.stats?.戰力 || 0)
+      mentorMaster: Boolean(info?.mentorMaster),
+      power: Number(info?.stats?.戰力 || 0) + (info?.mentorMaster ? 120 : 0)
     });
   }
 
   return list.sort((a, b) => {
+    if (Boolean(b.mentorMaster) !== Boolean(a.mentorMaster)) {
+      return Boolean(b.mentorMaster) ? 1 : -1;
+    }
     const p = Number(b.power || 0) - Number(a.power || 0);
     if (p !== 0) return p;
     return String(a.id || '').localeCompare(String(b.id || ''));
@@ -2009,14 +2070,41 @@ function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
   const battle = Math.max(12, Number(npc?.stats?.戰力 || 24));
   const hpBase = Math.max(72, Number(npc?.stats?.生命 || 86));
   const energy = Math.max(10, Number(npc?.stats?.能量 || 24));
-  const hp = Math.max(72, Math.min(420, Math.floor(hpBase * 1.2 + difficulty * 14)));
-  const attack = Math.max(14, Math.min(95, Math.floor(battle * 0.5 + difficulty * 4)));
-  const defense = Math.max(6, Math.min(52, Math.floor(battle * 0.24 + energy * 0.16)));
-  const skillNames = Object.keys(npc?.skills || {}).filter(Boolean).slice(0, 4);
+  const baselineByDifficulty = {
+    1: { hp: 96, attack: 17, defense: 7 },
+    2: { hp: 132, attack: 23, defense: 10 },
+    3: { hp: 186, attack: 30, defense: 14 },
+    4: { hp: 248, attack: 39, defense: 19 },
+    5: { hp: 324, attack: 48, defense: 24 }
+  };
+  const curve = baselineByDifficulty[difficulty] || baselineByDifficulty[3];
+  const hpDelta = Math.max(-18, Math.min(34, Math.floor((hpBase - 90) * 0.26)));
+  const atkDelta = Math.max(-4, Math.min(10, Math.floor((battle - 26) * 0.12)));
+  const defDelta = Math.max(-3, Math.min(8, Math.floor((energy - 26) * 0.1)));
+  const hp = Math.max(72, Math.min(420, curve.hp + hpDelta));
+  const attack = Math.max(14, Math.min(95, curve.attack + atkDelta));
+  const defense = Math.max(6, Math.min(52, curve.defense + defDelta));
+  const moveIds = Array.isArray(npc?.battleMoveIds) ? npc.battleMoveIds : [];
+  const moveNamesFromIds = moveIds
+    .map((id) => (PET && typeof PET.getMoveById === 'function' ? PET.getMoveById(id) : null))
+    .map((tpl) => String(tpl?.name || '').trim())
+    .filter(Boolean);
+  const skillNames = moveNamesFromIds.length > 0
+    ? moveNamesFromIds.slice(0, 4)
+    : Object.keys(npc?.skills || {}).filter(Boolean).slice(0, 4);
+  const npcPet = npc?.petTemplate && typeof npc.petTemplate === 'object'
+    ? {
+        name: String(npc.petTemplate.name || `${npc.name || '在地勢力'}伴寵`),
+        element: normalizePetElementCode(npc.petTemplate.element || npc.petElement || '水'),
+        attack: Math.max(8, Number(npc.petTemplate.attack || 16)),
+        hp: Math.max(24, Number(npc.petTemplate.hp || npc.petTemplate.maxHp || 58)),
+        maxHp: Math.max(24, Number(npc.petTemplate.maxHp || npc.petTemplate.hp || 58))
+      }
+    : false;
   const align = String(npc?.align || 'neutral').trim().toLowerCase();
   const sectText = [npc?.sect || '', npc?.title || '', npc?.name || ''].join(' ');
   const villain = align === 'evil' || /(digital|暗潮|黑市|滲透|叛徒|賊|匪|殺手|刺客|掠奪)/iu.test(sectText);
-  const rewardMin = Math.max(36, 22 + difficulty * 18 + Math.floor(battle * 0.35));
+  const rewardMin = Math.max(36, 22 + difficulty * 18 + Math.floor((curve.attack + attack) * 1.4));
   const rewardMax = rewardMin + 80 + difficulty * 8;
   return {
     id: String(npc.id || npc.name || 'local_story_enemy').trim(),
@@ -2030,7 +2118,7 @@ function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
     faction: villain ? 'digital' : 'neutral',
     villain,
     isMonster: false,
-    companionPet: false
+    companionPet: npcPet
   };
 }
 
@@ -2069,20 +2157,98 @@ function scoreStoryBattleNpcCandidate(npc = null) {
   return score;
 }
 
-function hasRoamingInfiltrationSignals(story = '') {
-  const text = extractStoryEndingFocus(story);
-  if (!text) return false;
-  return /(digital|滲透|匿名|可疑|追蹤|鎖定|機械鎖定|異常|逼近|接近|敲擊聲|毒霧|威脅)/iu.test(text);
+function collectRecentStorySpeakerHints(player = null, storyText = '') {
+  const hints = new Set();
+  const dialogues = extractStoryDialogues(storyText);
+  for (const row of dialogues) {
+    const speaker = String(row?.speaker || '').trim();
+    if (speaker) hints.add(speaker);
+  }
+
+  const pins = Array.isArray(player?.storyDialoguePins) ? player.storyDialoguePins : [];
+  pins
+    .slice(-8)
+    .forEach((row) => {
+      const speaker = String(row?.speaker || '').trim();
+      if (speaker) hints.add(speaker);
+    });
+
+  const npcLog = Array.isArray(player?.npcDialogueLog) ? player.npcDialogueLog : [];
+  npcLog
+    .slice(-8)
+    .forEach((row) => {
+      const speaker = String(row?.speaker || row?.npcName || '').trim();
+      if (speaker) hints.add(speaker);
+    });
+
+  return hints;
 }
 
-function resolveLocationStoryBattleTarget(player, storyText = '') {
+function scoreStoryBindingForNpc(npc = null, storyText = '', speakerHints = new Set()) {
+  if (!npc || typeof npc !== 'object') return 0;
+  const fullText = String(storyText || '').trim();
+  if (!fullText) return 0;
+  const focus = `${extractStoryEndingFocus(fullText)}\n${fullText.slice(-900)}`;
+  const name = String(npc.name || '').trim();
+  const title = String(npc.title || '').trim();
+  const sect = String(npc.sect || '').trim();
+  const identityText = [name, title, sect].filter(Boolean).join(' ');
+  let score = 0;
+
+  if (name && fullText.includes(name)) score += 240;
+  if (title && fullText.includes(title)) score += 140;
+  if (sect && fullText.includes(sect)) score += 90;
+  if (name && focus.includes(name)) score += 80;
+  if (title && focus.includes(title)) score += 50;
+
+  if (speakerHints instanceof Set && speakerHints.size > 0) {
+    if (name && speakerHints.has(name)) score += 180;
+    if (title && speakerHints.has(title)) score += 90;
+  }
+
+  if (/新手友善供應|友善供應|供應隊/u.test(fullText) && /(供應|商隊|議價|暗潮|digital|滲透)/iu.test(identityText)) {
+    score += 110;
+  }
+  if (/情報販子|黑影|披風商人/u.test(fullText) && /(商人|販子|情報|中介)/u.test(identityText)) {
+    score += 85;
+  }
+  if (/茶師|工坊|修復臺|檢測/u.test(fullText) && /(茶|工坊|修復|工程|機械)/u.test(identityText)) {
+    score += 65;
+  }
+
+  return score;
+}
+
+function resolveLocationStoryBattleTarget(player, storyText = '', options = {}) {
+  const allowLooseSelection = options?.allowLooseSelection === true;
+  const speakerHints = collectRecentStorySpeakerHints(player, storyText);
   const candidates = getNearbyStoryBattleNpcCandidates(player)
+    .map((npc) => {
+      const baseScore = scoreStoryBattleNpcCandidate(npc);
+      const bindScore = scoreStoryBindingForNpc(npc, storyText, speakerHints);
+      return { npc, baseScore, bindScore, total: baseScore + bindScore };
+    })
     .sort((a, b) => {
-      const scoreGap = scoreStoryBattleNpcCandidate(b) - scoreStoryBattleNpcCandidate(a);
-      if (scoreGap !== 0) return scoreGap;
-      return String(a?.id || '').localeCompare(String(b?.id || ''));
+      const bindGap = Number(b.bindScore || 0) - Number(a.bindScore || 0);
+      if (bindGap !== 0) return bindGap;
+      const totalGap = Number(b.total || 0) - Number(a.total || 0);
+      if (totalGap !== 0) return totalGap;
+      return String(a?.npc?.id || '').localeCompare(String(b?.npc?.id || ''));
     });
-  const picked = candidates[0];
+  const pickedRow = candidates[0];
+  if (!pickedRow) return null;
+
+  const hasBoundCandidate = candidates.some((row) => Number(row.bindScore || 0) > 0);
+  const threatScore = computeStoryThreatScore(storyText);
+  const allowThreatDrivenSelection = threatScore >= Math.max(18, STORY_THREAT_SCORE_THRESHOLD - 8);
+  if (!hasBoundCandidate && !allowLooseSelection && !allowThreatDrivenSelection) {
+    return null;
+  }
+
+  const picked = hasBoundCandidate
+    ? pickedRow.npc
+    : (candidates.find((row) => !row?.npc?.roaming)?.npc || pickedRow.npc);
+
   if (picked) {
     return {
       npcId: String(picked.id || '').trim(),
@@ -2091,39 +2257,18 @@ function resolveLocationStoryBattleTarget(player, storyText = '') {
       enemy: buildStoryBattleEnemyFromNpc(picked, player)
     };
   }
-
-  const threatScore = computeStoryThreatScore(storyText);
-  const allowRoamingFallback = hasRoamingInfiltrationSignals(storyText) && threatScore >= Math.max(18, STORY_THREAT_SCORE_THRESHOLD - 8);
-  if (!allowRoamingFallback) return null;
-
-  const location = String(player?.location || '').trim();
-  const roaming = typeof CORE.buildRoamingDigitalEncounterEnemy === 'function'
-    ? CORE.buildRoamingDigitalEncounterEnemy(location, { limit: 2, forceRelocate: false, persist: false })
-    : null;
-  if (roaming?.enemy) {
-    return {
-      npcId: String(roaming.npcId || roaming.enemy?.id || 'digital_roamer').trim(),
-      npcName: String(roaming.enemy?.name || '匿名滲透者').trim(),
-      npcTitle: 'Digital 滲透者',
-      enemy: {
-        ...roaming.enemy,
-        companionPet: false
-      }
-    };
-  }
   return null;
 }
 
 function createGuaranteedLocationStoryBattleChoice(player, storyText = '') {
-  const target = resolveLocationStoryBattleTarget(player, storyText);
+  const target = resolveLocationStoryBattleTarget(player, storyText, { allowLooseSelection: false });
   if (!target?.enemy) return null;
   const location = String(player?.location || '附近據點').trim();
-  const titleSuffix = target.npcTitle ? `（${target.npcTitle}）` : '';
   return {
     action: 'location_story_battle',
     tag: '[⚔️會戰鬥]',
     name: `攔截 ${target.npcName}`,
-    choice: `察覺${location}氣氛不對勁，鎖定${target.npcName}${titleSuffix}先發制人（會進入戰鬥）`,
+    choice: `察覺${location}氣氛不對勁，鎖定${target.npcName}動向先發制人（會進入戰鬥）`,
     desc: `地區篇章關鍵戰：對手來自${location}在地勢力`,
     npcId: target.npcId,
     npcName: target.npcName,
@@ -2143,6 +2288,8 @@ function ensureLocationStoryBattleChoiceAvailability(player, choices = []) {
   if (list.some((choice) => String(choice?.action || '').trim() === 'location_story_battle')) return list;
 
   const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const threatScore = computeStoryThreatScore(storyText);
+  if (threatScore < Math.max(14, STORY_THREAT_SCORE_THRESHOLD - 12)) return list;
   const injected = createGuaranteedLocationStoryBattleChoice(player, storyText);
   if (!injected) return list;
 
@@ -2182,6 +2329,9 @@ function ensureAggressiveChoiceAvailability(player, choices = []) {
   const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
   if (list.some(isAggressiveChoice)) return list;
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const threatScore = computeStoryThreatScore(storyText);
+  if (threatScore < Math.max(16, STORY_THREAT_SCORE_THRESHOLD - 10)) return list;
   if (Math.random() > AGGRESSIVE_CHOICE_TARGET_RATE) return list;
 
   const injected = createGuaranteedAggressiveChoice(player);
@@ -2226,6 +2376,122 @@ function ensureEarlyGameIncomeChoice(player, choices = []) {
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
 
+function isMainlineGuideChoice(choice) {
+  if (!choice || typeof choice !== 'object') return false;
+  const action = String(choice.action || '').trim();
+  if (['main_story', 'portal_intent', 'location_story_battle', 'mentor_spar'].includes(action)) return true;
+  const text = [choice.tag || '', choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+  return /(主線|收尾|下一區|跨區|傳送門|回到線索|沿線追查)/u.test(text);
+}
+
+function createSoftMainlineGuideChoice(player) {
+  const location = String(player?.location || '附近據點').trim() || '附近據點';
+  const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, location)
+    : null;
+  const isCompleted = Boolean(islandState?.completed);
+  const stage = Math.max(1, Number(islandState?.stage || 1));
+  const stageCount = Math.max(1, Number(islandState?.stageCount || 8));
+  const nextPrimary = ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
+    ? String(ISLAND_STORY.getNextPrimaryLocation(location) || '').trim()
+    : '';
+
+  if (isCompleted && nextPrimary) {
+    return {
+      action: 'portal_intent',
+      tag: '[📖主線導引]',
+      name: '沿主線前往下一區',
+      choice: `回到${location}主傳送門，準備前往${nextPrimary}繼續追查`,
+      desc: '你也可以先留在本區自由探索，稍後再傳送'
+    };
+  }
+
+  return {
+    action: 'main_story',
+    tag: '[📖主線導引]',
+    name: '回到核心線索',
+    choice: `沿著${location}的主線線索繼續追查來源與流向（地區進度 ${stage}/${stageCount}）`,
+    desc: '保留主線節奏，不影響你同時做支線或自由探索'
+  };
+}
+
+function createScatterChoice(player, salt = 0) {
+  const location = String(player?.location || '附近').trim() || '附近';
+  const templates = [
+    {
+      action: 'explore',
+      tag: '[🔍需探索]',
+      name: '四處走走觀察',
+      choice: `沿著${location}周邊繞行，記錄新出現的人事物`,
+      desc: '偏離主線的自由探索，可能觸發新支線'
+    },
+    {
+      action: 'social',
+      tag: '[🤝需社交]',
+      name: '和路人交換情報',
+      choice: `在${location}找攤商與巡邏員閒聊，蒐集當地傳聞`,
+      desc: '不直接推主線，但可能補齊背景細節'
+    },
+    {
+      action: 'forage',
+      tag: '[🎁高回報]',
+      name: '收集可交易素材',
+      choice: `先在${location}附近採集可交易素材，補充資源再說`,
+      desc: '偏經濟玩法，主線可稍後再推進'
+    },
+    {
+      action: 'custom_input',
+      tag: '[❓有驚喜]',
+      name: '自訂接下來行動',
+      choice: '先不跟系統建議，改由你決定下一步要做什麼',
+      desc: '允許你主動偏離劇情，系統下一回合仍會給你回主線入口'
+    }
+  ];
+  const idx = Math.abs(Number(salt || 0)) % templates.length;
+  return { ...templates[idx] };
+}
+
+function ensureSingleMainlineGuideChoice(player, choices = []) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
+  if (!player || list.length === 0) return list;
+
+  const guideIndices = [];
+  for (let i = 0; i < list.length; i++) {
+    if (isMainlineGuideChoice(list[i])) guideIndices.push(i);
+  }
+
+  if (guideIndices.length === 0) {
+    const injected = createSoftMainlineGuideChoice(player);
+    const protectedActions = new Set(['wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery']);
+    let replaceIdx = list.length - 1;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!protectedActions.has(String(list[i]?.action || '').trim())) {
+        replaceIdx = i;
+        break;
+      }
+    }
+    list[replaceIdx] = injected;
+    return list.slice(0, CHOICE_DISPLAY_COUNT);
+  }
+
+  // 不要太強硬：最多保留 1 條主線導引，其餘讓玩法發散
+  let keepIdx = guideIndices[0];
+  if (Boolean(player?.forcePortalChoice)) {
+    const portalIdx = guideIndices.find((idx) => String(list[idx]?.action || '').trim() === 'portal_intent');
+    if (Number.isFinite(Number(portalIdx))) keepIdx = portalIdx;
+  } else {
+    const mainStoryIdx = guideIndices.find((idx) => String(list[idx]?.action || '').trim() === 'main_story');
+    if (Number.isFinite(Number(mainStoryIdx))) keepIdx = mainStoryIdx;
+  }
+
+  let scatterSalt = getPlayerStoryTurns(player);
+  for (const idx of guideIndices) {
+    if (idx === keepIdx) continue;
+    list[idx] = createScatterChoice(player, scatterSalt++);
+  }
+  return list.slice(0, CHOICE_DISPLAY_COUNT);
+}
+
 function applyChoicePolicy(player, choices = []) {
   let list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
@@ -2237,6 +2503,7 @@ function applyChoicePolicy(player, choices = []) {
   list = ensureLocationStoryBattleChoiceAvailability(player, list);
   list = ensureAggressiveChoiceAvailability(player, list);
   list = ensureEarlyGameIncomeChoice(player, list);
+  list = ensureSingleMainlineGuideChoice(player, list);
   markSystemChoiceExposure(player, list);
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
@@ -2351,6 +2618,160 @@ function appendNpcDialogueLog(player, payload = {}) {
     at: Date.now()
   });
   player.npcDialogueLog = normalizeNpcDialogueLog(logs);
+}
+
+function ensurePlayerCodexSchema(player) {
+  if (!player || typeof player !== 'object') return false;
+  let mutated = false;
+  if (!player.codex || typeof player.codex !== 'object') {
+    player.codex = {};
+    mutated = true;
+  }
+  if (!player.codex.npcEncountered || typeof player.codex.npcEncountered !== 'object') {
+    player.codex.npcEncountered = {};
+    mutated = true;
+  }
+  if (!player.codex.drawnMoves || typeof player.codex.drawnMoves !== 'object') {
+    player.codex.drawnMoves = {};
+    mutated = true;
+  }
+  if (!Number.isFinite(Number(player.codex.npcEncounterTotal))) {
+    player.codex.npcEncounterTotal = 0;
+    mutated = true;
+  }
+  if (!Number.isFinite(Number(player.codex.drawTotalCount))) {
+    player.codex.drawTotalCount = 0;
+    mutated = true;
+  }
+  if (!Number.isFinite(Number(player.codex.lastNpcEncounterAt))) {
+    player.codex.lastNpcEncounterAt = 0;
+    mutated = true;
+  }
+  if (!Number.isFinite(Number(player.codex.lastDrawAt))) {
+    player.codex.lastDrawAt = 0;
+    mutated = true;
+  }
+
+  const sanitizeEntries = (obj = {}, kind = 'npc') => {
+    const rows = [];
+    for (const [rawId, rawEntry] of Object.entries(obj || {})) {
+      const id = String(rawId || '').trim();
+      if (!id || !rawEntry || typeof rawEntry !== 'object') continue;
+      const base = {
+        id,
+        name: String(rawEntry.name || id).trim().slice(0, 40),
+        count: Math.max(1, Number(rawEntry.count || 1)),
+        firstAt: Number(rawEntry.firstAt || rawEntry.lastAt || Date.now()),
+        lastAt: Number(rawEntry.lastAt || rawEntry.firstAt || Date.now())
+      };
+      if (kind === 'npc') {
+        rows.push({
+          ...base,
+          title: String(rawEntry.title || '').trim().slice(0, 24),
+          firstLocation: String(rawEntry.firstLocation || '').trim().slice(0, 24),
+          lastLocation: String(rawEntry.lastLocation || '').trim().slice(0, 24),
+          lastSeenTurn: Math.max(0, Number(rawEntry.lastSeenTurn || 0))
+        });
+      } else {
+        rows.push({
+          ...base,
+          tier: Math.max(1, Math.min(3, Number(rawEntry.tier || 1))),
+          element: String(rawEntry.element || '未知').trim().slice(0, 16)
+        });
+      }
+    }
+    rows.sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
+    const cap = kind === 'npc' ? PLAYER_CODEX_NPC_LIMIT : PLAYER_CODEX_DRAW_LIMIT;
+    return rows.slice(0, cap);
+  };
+
+  const normalizedNpcEntries = sanitizeEntries(player.codex.npcEncountered, 'npc');
+  const normalizedNpcMap = Object.fromEntries(normalizedNpcEntries.map((entry) => [entry.id, entry]));
+  if (JSON.stringify(player.codex.npcEncountered || {}) !== JSON.stringify(normalizedNpcMap)) {
+    player.codex.npcEncountered = normalizedNpcMap;
+    mutated = true;
+  }
+
+  const normalizedDrawEntries = sanitizeEntries(player.codex.drawnMoves, 'draw');
+  const normalizedDrawMap = Object.fromEntries(normalizedDrawEntries.map((entry) => [entry.id, entry]));
+  if (JSON.stringify(player.codex.drawnMoves || {}) !== JSON.stringify(normalizedDrawMap)) {
+    player.codex.drawnMoves = normalizedDrawMap;
+    mutated = true;
+  }
+
+  const drawTotalFromEntries = normalizedDrawEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.count || 0)), 0);
+  if (Number(player.codex.drawTotalCount || 0) < drawTotalFromEntries) {
+    player.codex.drawTotalCount = drawTotalFromEntries;
+    mutated = true;
+  }
+
+  return mutated;
+}
+
+function recordNpcEncounter(player, npc = null, location = '') {
+  if (!player || !npc || typeof npc !== 'object') return false;
+  ensurePlayerCodexSchema(player);
+  const npcId = String(npc.id || '').trim();
+  if (!npcId) return false;
+  const now = Date.now();
+  const turn = Math.max(0, Number(player.storyTurns || 0));
+  const loc = String(location || player.location || npc.loc || '').trim();
+  const bucket = player.codex.npcEncountered;
+  const prev = bucket[npcId] && typeof bucket[npcId] === 'object' ? bucket[npcId] : null;
+  if (prev && Number(prev.lastSeenTurn || 0) === turn && String(prev.lastLocation || '') === loc) {
+    return false;
+  }
+
+  const nextCount = Math.max(0, Number(prev?.count || 0)) + 1;
+  bucket[npcId] = {
+    id: npcId,
+    name: String(npc.name || prev?.name || npcId).trim().slice(0, 40),
+    title: String(npc.title || prev?.title || '').trim().slice(0, 24),
+    count: nextCount,
+    firstAt: prev ? Number(prev.firstAt || now) : now,
+    lastAt: now,
+    firstLocation: prev ? String(prev.firstLocation || loc).trim().slice(0, 24) : loc.slice(0, 24),
+    lastLocation: loc.slice(0, 24),
+    lastSeenTurn: turn
+  };
+  player.codex.npcEncounterTotal = Math.max(0, Number(player.codex.npcEncounterTotal || 0)) + 1;
+  player.codex.lastNpcEncounterAt = now;
+  return true;
+}
+
+function recordNearbyNpcEncounters(player, limit = 8) {
+  if (!player) return false;
+  ensurePlayerCodexSchema(player);
+  const location = String(player.location || '').trim();
+  if (!location) return false;
+  const nearbyIds = typeof CORE.getNearbyNpcIds === 'function'
+    ? CORE.getNearbyNpcIds(location, Math.max(1, Number(limit || 8)))
+    : [];
+  let mutated = false;
+  for (const npcId of Array.isArray(nearbyIds) ? nearbyIds : []) {
+    if (typeof CORE.isNPCAlive === 'function' && !CORE.isNPCAlive(npcId)) continue;
+    const npc = typeof CORE.getAgentFullInfo === 'function'
+      ? CORE.getAgentFullInfo(npcId)
+      : (Array.isArray(CORE.getAgents?.()) ? CORE.getAgents().find((a) => String(a?.id || '') === String(npcId)) : null);
+    if (!npc) continue;
+    if (recordNpcEncounter(player, npc, location)) mutated = true;
+  }
+  return mutated;
+}
+
+function formatCodexLines(lines = [], maxLen = 1000, emptyText = '（尚無）') {
+  if (!Array.isArray(lines) || lines.length === 0) return emptyText;
+  const picked = [];
+  let size = 0;
+  for (const raw of lines) {
+    const line = String(raw || '').trim();
+    if (!line) continue;
+    const next = size + line.length + 1;
+    if (next > maxLen) break;
+    picked.push(line);
+    size = next;
+  }
+  return picked.length > 0 ? picked.join('\n') : emptyText;
 }
 
 function normalizeStorySpeakerText(raw = '') {
@@ -2727,6 +3148,10 @@ function ensurePlayerGenerationSchema(player) {
   if (!player || typeof player !== 'object') return false;
   let mutated = false;
 
+  if (ensurePlayerCodexSchema(player)) {
+    mutated = true;
+  }
+
   if (typeof player.currentStory !== 'string') {
     player.currentStory = player.currentStory ? String(player.currentStory) : '';
     mutated = true;
@@ -3049,6 +3474,29 @@ function applyPassivePetRecovery(pet, amount = PET_PASSIVE_HEAL_PER_STORY_TURN) 
   return gained;
 }
 
+function applyPetRecoveryTurnTick(pet, turns = 1) {
+  if (!pet || typeof pet !== 'object') {
+    return { revived: false, changed: false, remainingTurns: 0 };
+  }
+  if (typeof PET.advancePetRecoveryTurns === 'function') {
+    const result = PET.advancePetRecoveryTurns(pet, turns) || {};
+    return {
+      revived: Boolean(result.revived),
+      changed: Boolean(result.changed),
+      remainingTurns: Math.max(0, Number(result.remainingTurns || 0))
+    };
+  }
+  if (typeof PET.syncPetRecovery === 'function') {
+    const synced = PET.syncPetRecovery(pet) || {};
+    return {
+      revived: Boolean(synced.revived),
+      changed: Boolean(synced.changed),
+      remainingTurns: 0
+    };
+  }
+  return { revived: false, changed: false, remainingTurns: 0 };
+}
+
 function getLocationDifficultyForPlayer(player) {
   const profile = typeof getLocationProfile === 'function'
     ? getLocationProfile(player?.location)
@@ -3093,6 +3541,7 @@ function buildNpcCompanionPet(enemy, player) {
 
   return {
     name: String(existing?.name || fallbackName),
+    element: normalizePetElementCode(existing?.element || '水'),
     attack: petAttack,
     hp: petHp,
     maxHp: petHp,
@@ -3323,8 +3772,7 @@ function cloneMoveTemplateForBattle(move = {}) {
 
 function buildMoveTemplateByNameMap() {
   const list = [
-    ...(Array.isArray(PET.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : []),
-    ...(Array.isArray(PET.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : []),
+    ...getAllPetSkillMoves(),
     ...(Array.isArray(PET.INITIAL_MOVES) ? PET.INITIAL_MOVES : [])
   ];
   const map = new Map();
@@ -3381,7 +3829,7 @@ function chooseMentorTeachMoves(mentor, pet) {
     .filter(Boolean)
     .map((move) => cloneMoveTemplateForBattle(move));
   if (templates.length === 0) {
-    const fallbackPool = (Array.isArray(PET.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : [])
+    const fallbackPool = getAllPetSkillMoves()
       .filter((m) => Number(m?.tier || 1) >= 2);
     const picked = chooseRandomUnique(fallbackPool, 3).map((m) => cloneMoveTemplateForBattle(m));
     return picked;
@@ -3643,6 +4091,7 @@ function finalizeMentorSparDefeat(player, pet, combatant, detailText = '') {
     pet.hp = pet.maxHp || 100;
     pet.status = '正常';
     pet.reviveAt = null;
+    pet.reviveTurnsRemaining = 0;
     pet.lastDownReason = '友誼賽落敗後由導師治療';
     pet.lastRevivedAt = Date.now();
     PET.savePet(pet);
@@ -3681,17 +4130,9 @@ function finalizeMentorSparDefeat(player, pet, combatant, detailText = '') {
   return { mentorName };
 }
 
-function formatDurationShort(ms = 0) {
-  const safe = Math.max(0, Number(ms) || 0);
-  const totalMinutes = Math.ceil(safe / 60000);
-  const days = Math.floor(totalMinutes / (60 * 24));
-  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
-  const minutes = totalMinutes % 60;
-  const parts = [];
-  if (days > 0) parts.push(`${days}天`);
-  if (hours > 0) parts.push(`${hours}小時`);
-  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}分`);
-  return parts.join('');
+function formatRecoveryTurnsShort(turns = 0) {
+  const safe = Math.max(0, Math.floor(Number(turns) || 0));
+  return `${safe}回合`;
 }
 
 function normalizePendingStoryTrigger(raw = null) {
@@ -3740,8 +4181,10 @@ function clearPendingStoryTrigger(player) {
 
 function formatPetHpWithRecovery(pet) {
   const hp = `${Number(pet?.hp || 0)}/${Number(pet?.maxHp || 0)}`;
-  const remain = PET.getPetRecoveryRemainingMs(pet);
-  if (remain > 0) return `${hp}（復活倒數 ${formatDurationShort(remain)}）`;
+  const remain = typeof PET.getPetRecoveryRemainingTurns === 'function'
+    ? Number(PET.getPetRecoveryRemainingTurns(pet) || 0)
+    : 0;
+  if (remain > 0) return `${hp}（復活倒數 ${formatRecoveryTurnsShort(remain)}）`;
   return hp;
 }
 
@@ -3816,6 +4259,50 @@ function getMergedWorldEvents(limit = 5) {
     if (uniq.length >= targetLimit) break;
   }
   return uniq;
+}
+
+function publishWorldEvent(message, type = 'player_action', extra = null) {
+  const text = String(message || '').trim();
+  if (!text) return;
+  try {
+    if (typeof CORE.recordWorldEvent === 'function') {
+      CORE.recordWorldEvent(text, type, extra || {});
+    }
+  } catch (e) {
+    console.log('[WorldEvent] core publish failed:', e?.message || e);
+  }
+  try {
+    if (typeof EVENTS.addWorldEvent === 'function') {
+      EVENTS.addWorldEvent(text, type);
+    }
+  } catch (e) {
+    console.log('[WorldEvent] board publish failed:', e?.message || e);
+  }
+}
+
+function publishBattleWorldEvent(player, enemyName, kind = 'battle', impact = '') {
+  const actor = String(player?.name || '冒險者').trim() || '冒險者';
+  const location = String(player?.location || '未知地點').trim() || '未知地點';
+  const target = String(enemyName || '未知敵人').trim() || '未知敵人';
+  const impactText = String(impact || '').trim();
+  let message = '';
+  if (kind === 'battle_start') {
+    message = `⚔️ ${actor} 在${location}與 ${target} 爆發交鋒。`;
+  } else if (kind === 'battle_win') {
+    message = `🏆 ${actor} 在${location}擊敗了 ${target}。`;
+  } else if (kind === 'battle_flee') {
+    message = `🏃 ${actor} 在${location}成功脫離 ${target} 的追擊。`;
+  } else if (kind === 'battle_flee_fail') {
+    message = `🩸 ${actor} 在${location}嘗試逃離 ${target} 失敗，局勢惡化。`;
+  } else if (kind === 'pet_down') {
+    message = `💥 ${actor} 的夥伴在${location}被 ${target} 重創倒下。`;
+  } else if (kind === 'player_down') {
+    message = `☠️ ${actor} 在${location}與 ${target} 一戰中敗亡。`;
+  } else {
+    message = `⚔️ ${actor} 在${location}與 ${target} 的衝突升級。`;
+  }
+  if (impactText) message += ` ${impactText.slice(0, 80)}`;
+  publishWorldEvent(message, kind, { actor, target, location, impact: impactText });
 }
 
 function getFactionPresenceHintForPlayer(player) {
@@ -3905,10 +4392,37 @@ const PROTECTED_MOVE_IDS = new Set(
     .filter(Boolean)
 );
 
+function getAllPetSkillMoves() {
+  const merged = [];
+  const seen = new Set();
+  const pools = PET?.ELEMENT_MOVE_POOLS && typeof PET.ELEMENT_MOVE_POOLS === 'object'
+    ? Object.values(PET.ELEMENT_MOVE_POOLS)
+    : [];
+  for (const pool of pools) {
+    for (const move of Array.isArray(pool) ? pool : []) {
+      const id = String(move?.id || '').trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(move);
+    }
+  }
+  if (merged.length > 0) return merged;
+
+  return [
+    ...(Array.isArray(PET?.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : []),
+    ...(Array.isArray(PET?.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : [])
+  ];
+}
+
 function getPetMovePool(petType = '') {
-  return petType === '正派'
-    ? (Array.isArray(PET?.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : [])
-    : (Array.isArray(PET?.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : []);
+  if (PET && typeof PET.getMovesByElement === 'function') {
+    const pool = PET.getMovesByElement(petType);
+    if (Array.isArray(pool) && pool.length > 0) return pool;
+  }
+  const normalized = normalizePetElementCode(petType);
+  if (normalized === '火') return getAllPetSkillMoves().filter((m) => /火|焰|雷|熱|爆|熾|灼|炎/.test(String(m?.name || '')));
+  if (normalized === '草') return getAllPetSkillMoves().filter((m) => /草|藤|孢|毒|根|棘|網|森/.test(String(m?.name || '')));
+  return getAllPetSkillMoves().filter((m) => /水|潮|霧|冰|淨|流|凍|波/.test(String(m?.name || '')));
 }
 
 function extractSkillChipMoveName(rawItem = null) {
@@ -3938,10 +4452,7 @@ function consumeSkillChipFromInventory(player, moveName = '') {
 }
 
 function getLearnableSkillChipEntries(player, pet) {
-  const allPool = [
-    ...(Array.isArray(PET?.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : []),
-    ...(Array.isArray(PET?.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : [])
-  ];
+  const allPool = getAllPetSkillMoves();
   const byName = new Map(allPool.map((m) => [String(m?.name || '').trim(), m]));
   const petPoolIds = new Set(getPetMovePool(pet?.type).map((m) => String(m?.id || '').trim()).filter(Boolean));
   const learnedIds = new Set((Array.isArray(pet?.moves) ? pet.moves : []).map((m) => String(m?.id || '').trim()));
@@ -3969,7 +4480,7 @@ function getLearnableSkillChipEntries(player, pet) {
         prev.learned = true;
       } else if (!sameFaction) {
         prev.canLearn = false;
-        prev.reason = '門派不符';
+        prev.reason = '屬性不符';
         prev.learned = false;
       } else {
         prev.canLearn = true;
@@ -4673,6 +5184,8 @@ function buildRegionMoveSelectRow(player, snapshot, islandCompleted, lang = 'zh-
   const tx = getMapText(lang);
   const locations = Array.isArray(snapshot?.locations) ? snapshot.locations : [];
   const current = String(player?.location || '').trim();
+  const freeRoamUnlocked = canFreeRoamCurrentRegion(player);
+  const canMoveInRegion = Boolean(islandCompleted || freeRoamUnlocked);
   const options = locations
     .filter((row) => String(row?.location || '').trim() && String(row.location) !== current)
     .slice(0, 25)
@@ -4682,7 +5195,7 @@ function buildRegionMoveSelectRow(player, snapshot, islandCompleted, lang = 'zh-
       value: String(row.location)
     }));
 
-  const placeholder = islandCompleted
+  const placeholder = canMoveInRegion
     ? (options.length > 0 ? tx.regionMovePlaceholderOpen : tx.regionMovePlaceholderEmpty)
     : tx.regionMovePlaceholderLocked;
 
@@ -4691,7 +5204,7 @@ function buildRegionMoveSelectRow(player, snapshot, islandCompleted, lang = 'zh-
     .setPlaceholder(placeholder)
     .setMinValues(1)
     .setMaxValues(1)
-    .setDisabled(!islandCompleted || options.length === 0)
+    .setDisabled(!canMoveInRegion || options.length === 0)
     .addOptions(options.length > 0 ? options : [{
       label: tx.regionMoveLockedLabel,
       description: tx.regionMoveLockedDesc,
@@ -5173,7 +5686,7 @@ function maybeApplyRoamMovement(player, event, result, queueMemory) {
     ? ISLAND_STORY.getIslandStoryState(player, fromLocation)
     : null;
   const islandCompleted = Boolean(islandState?.completed);
-  if (!islandCompleted) {
+  if (!islandCompleted && !canFreeRoamCurrentRegion(player)) {
     player.navigationTarget = '';
     const lockedLine = tx.mapAutoTravelLocked(manualTarget);
     result.message = `${String(result.message || '').trim()}\n\n${lockedLine}`.trim();
@@ -5247,7 +5760,7 @@ function appendUniqueItem(arr, item, limit = 120) {
   if (arr.length > limit) arr.length = limit;
 }
 
-function maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice) {
+async function maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice) {
   if (!player || !event || !result || result.success === false) return null;
   const text = [
     event.tag || '',
@@ -5266,24 +5779,24 @@ function maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice)
 
   if (action === 'forage' || herbHint) {
     if (Math.random() < (action === 'forage' ? 0.92 : 0.68)) {
-      return ECON.createForageLoot(location, luck);
+      return ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' });
     }
   }
   if (action === 'hunt' || huntHint) {
     if (Math.random() < (action === 'hunt' ? 0.9 : 0.66)) {
       const animalName = result?.item || event?.animal?.name || '獵物';
-      return ECON.createHuntLoot(animalName, location, luck);
+      return ECON.createHuntLoot(animalName, location, luck, { lang: player?.language || 'zh-TW' });
     }
   }
   if (action === 'treasure' || treasureHint) {
     if (Math.random() < (action === 'treasure' ? 0.78 : 0.45)) {
-      return ECON.createTreasureLoot(location, luck);
+      return ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' });
     }
   }
   if (action === 'explore' && Math.random() < 0.18) {
     return Math.random() < 0.7
-      ? ECON.createForageLoot(location, luck)
-      : ECON.createTreasureLoot(location, luck);
+      ? ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' })
+      : ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' });
   }
   return null;
 }
@@ -5616,30 +6129,51 @@ function getLanguageText(lang) {
   const texts = {
     'zh-TW': {
       welcome: '歡迎來到 Renaiss 星球！',
-      welcomeDesc: '在這個世界，你需要：\n• 選擇你的陣營（信標聯盟/灰域協定）\n• 培養你的夥伴\n• 探索區域事件、戰鬥與任務',
-      choosePathHint: '請選擇你的流派：',
-      positive: '信標聯盟',
-      positiveDesc: '重視秩序、透明與區域穩定\n特色：防護、修復、控場',
-      negative: '灰域協定',
-      negativeDesc: '偏向高風險高回報的策略路線\n特色：干擾、侵蝕、爆發'
+      welcomeDesc: '在這個世界，你需要：\n• 選擇你的角色性別\n• 選擇夥伴寵物屬性（水/火/草）\n• 培養你的夥伴並探索事件、戰鬥與任務',
+      chooseGenderHint: '請先選擇你的角色性別：',
+      male: '男生角色',
+      maleDesc: '主角為男性形象，劇情稱謂會對應調整',
+      female: '女生角色',
+      femaleDesc: '主角為女性形象，劇情稱謂會對應調整',
+      chooseElementHint: '請選擇你的起始寵物屬性：',
+      water: '水屬性',
+      waterDesc: '控制 + 回復 + 持續干擾，節奏穩健',
+      fire: '火屬性',
+      fireDesc: '爆發 + 壓制 + 反制，節奏強攻',
+      grass: '草屬性',
+      grassDesc: '防禦 + 毒蝕 + 回復，續戰能力強'
     },
     'zh-CN': {
       welcome: '欢迎来到 Renaiss 星球！',
-      welcomeDesc: '在这个世界，你需要：\n• 选择你的阵营（信标联盟/灰域协定）\n• 培养你的伙伴\n• 探索区域事件、战斗与任务',
-      choosePathHint: '请选择你的流派：',
-      positive: '信标联盟',
-      positiveDesc: '重视秩序、透明与区域稳定\n特色：防护、修复、控场',
-      negative: '灰域协定',
-      negativeDesc: '偏向高风险高回报的策略路线\n特色：干扰、侵蚀、爆发'
+      welcomeDesc: '在这个世界，你需要：\n• 选择你的角色性别\n• 选择伙伴宠物属性（水/火/草）\n• 培养伙伴并探索事件、战斗与任务',
+      chooseGenderHint: '请先选择你的角色性别：',
+      male: '男生角色',
+      maleDesc: '主角为男性形象，剧情称谓会对应调整',
+      female: '女生角色',
+      femaleDesc: '主角为女性形象，剧情称谓会对应调整',
+      chooseElementHint: '请选择你的起始宠物属性：',
+      water: '水属性',
+      waterDesc: '控制 + 回复 + 持续干扰，节奏稳健',
+      fire: '火属性',
+      fireDesc: '爆发 + 压制 + 反制，节奏强攻',
+      grass: '草属性',
+      grassDesc: '防御 + 毒蚀 + 回复，续战能力强'
     },
     'en': {
       welcome: 'Welcome to Renaiss Planet!',
-      welcomeDesc: 'In this world, you need to:\n• Choose your faction (Beacon Union / Gray Accord)\n• Raise your partner\n• Explore regional events, battle, and complete quests',
-      choosePathHint: 'Please choose your style:',
-      positive: 'Beacon Union',
-      positiveDesc: 'Order-first route focused on stability and trust\nSpecialty: shields, sustain, control',
-      negative: 'Gray Accord',
-      negativeDesc: 'High-risk route focused on disruption and burst\nSpecialty: sabotage, pressure, payoff'
+      welcomeDesc: 'In this world, you need to:\n• Choose your character gender\n• Choose your starter pet element (Water / Fire / Grass)\n• Raise your partner and explore events, battles, and quests',
+      chooseGenderHint: 'Choose your character gender first:',
+      male: 'Male',
+      maleDesc: 'Story pronouns and role narration follow male profile',
+      female: 'Female',
+      femaleDesc: 'Story pronouns and role narration follow female profile',
+      chooseElementHint: 'Choose your starter pet element:',
+      water: 'Water',
+      waterDesc: 'Control + sustain + chip damage',
+      fire: 'Fire',
+      fireDesc: 'Burst + pressure + counterattack',
+      grass: 'Grass',
+      grassDesc: 'Defense + poison + recovery'
     }
   };
   return texts[lang] || texts['zh-TW'];
@@ -5681,6 +6215,108 @@ function consumeWorldIntroOnce(player) {
   player.worldIntroShown = true;
   CORE.savePlayer(player);
   return getWorldIntroTemplate(player.language || 'zh-TW');
+}
+
+function normalizeCharacterGender(raw = '') {
+  const text = String(raw || '').trim().toLowerCase();
+  if (text === 'male' || text === 'm' || text === '男') return '男';
+  if (text === 'female' || text === 'f' || text === '女') return '女';
+  return '男';
+}
+
+function normalizePetElementCode(raw = '') {
+  if (PET && typeof PET.normalizePetElement === 'function') {
+    return PET.normalizePetElement(raw);
+  }
+  const text = String(raw || '').trim();
+  if (text === '水' || text === 'water') return '水';
+  if (text === '火' || text === 'fire') return '火';
+  if (text === '草' || text === 'grass') return '草';
+  return '水';
+}
+
+function getPetElementColor(element = '') {
+  const normalized = normalizePetElementCode(element);
+  if (normalized === '火') return 0xef4444;
+  if (normalized === '草') return 0x22c55e;
+  return 0x0ea5e9;
+}
+
+function getPetElementDisplayName(element = '') {
+  const normalized = normalizePetElementCode(element);
+  if (normalized === '火') return '火屬性';
+  if (normalized === '草') return '草屬性';
+  return '水屬性';
+}
+
+function pickDefaultPetNameByElement(element = '') {
+  const normalized = normalizePetElementCode(element);
+  const pools = {
+    水: ['小潮', '霧霧', '波波', '阿泉', '海璃'],
+    火: ['焰焰', '赤星', '小炎', '烬羽', '火仔'],
+    草: ['芽芽', '藤藤', '青苔', '小森', '葉寶']
+  };
+  const list = pools[normalized] || pools['水'];
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function buildGenderSelectionPayload(lang = 'zh-TW', username = '') {
+  const langText = getLanguageText(lang);
+  const embed = new EmbedBuilder()
+    .setTitle(`🌟 ${langText.welcome}`)
+    .setColor(0x00ff00)
+    .setDescription(`${langText.welcomeDesc}\n\n${langText.chooseGenderHint}`)
+    .addFields(
+      { name: `♂️ ${langText.male}`, value: langText.maleDesc, inline: true },
+      { name: `♀️ ${langText.female}`, value: langText.femaleDesc, inline: true }
+    );
+  if (username) {
+    embed.setFooter({ text: `${username}，完成性別與屬性選擇後即可命名並開局` });
+  }
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('choose_gender_male').setLabel(`♂️ ${langText.male}`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('choose_gender_female').setLabel(`♀️ ${langText.female}`).setStyle(ButtonStyle.Secondary)
+  );
+  return { embed, row };
+}
+
+function buildElementSelectionPayload(lang = 'zh-TW', gender = '男') {
+  const langText = getLanguageText(lang);
+  const safeGender = normalizeCharacterGender(gender);
+  const roleText = safeGender === '女' ? langText.female : langText.male;
+  const embed = new EmbedBuilder()
+    .setTitle(`🐾 ${langText.welcome}`)
+    .setColor(0x38bdf8)
+    .setDescription(`${roleText}\n\n${langText.chooseElementHint}`)
+    .addFields(
+      { name: `💧 ${langText.water}`, value: langText.waterDesc, inline: true },
+      { name: `🔥 ${langText.fire}`, value: langText.fireDesc, inline: true },
+      { name: `🌿 ${langText.grass}`, value: langText.grassDesc, inline: true }
+    );
+  const genderCode = safeGender === '女' ? 'female' : 'male';
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`choose_element_${genderCode}_water`).setLabel(`💧 ${langText.water}`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`choose_element_${genderCode}_fire`).setLabel(`🔥 ${langText.fire}`).setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`choose_element_${genderCode}_grass`).setLabel(`🌿 ${langText.grass}`).setStyle(ButtonStyle.Success)
+  );
+  return { embed, row };
+}
+
+function parseNameSubmitProfileFromCustomId(customId = '') {
+  const text = String(customId || '').trim();
+  const match = text.match(/^name_submit_profile_(male|female)_(water|fire|grass)$/);
+  if (match) {
+    const gender = match[1] === 'female' ? '女' : '男';
+    const element = match[2] === 'fire' ? '火' : match[2] === 'grass' ? '草' : '水';
+    return { gender, element, alignment: '正派' };
+  }
+
+  const legacyAlignment = normalizePlayerAlignment(text.replace('name_submit_', ''));
+  return {
+    gender: '男',
+    element: '水',
+    alignment: legacyAlignment
+  };
 }
 
 function normalizePlayerAlignment(alignment) {
@@ -6271,14 +6907,14 @@ async function handlePet(interaction, user) {
   
   const embed = new EmbedBuilder()
     .setTitle(`🐾 ${pet.name || '寵物'}`)
-    .setColor(pet.type === '正派' ? 0x00ff00 : 0xff0000)
+    .setColor(getPetElementColor(pet.type))
     .setDescription(pet.appearance)
     .addFields(
       { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: t('atk', uiLang), value: String(pet.attack), inline: true },
       { name: t('def', uiLang), value: String(pet.defense), inline: true },
       { name: '📊 等級', value: String(pet.level), inline: true },
-      { name: '🏷️ 類型', value: pet.type, inline: true }
+      { name: '🏷️ 屬性', value: getPetElementDisplayName(pet.type), inline: true }
     )
     .addFields({ name: '📜 招式', value: dmgInfo, inline: false });
   
@@ -6350,7 +6986,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
         ? ISLAND_STORY.getIslandStoryState(player, player.location)
         : null;
-      if (!islandState?.completed) {
+      if (!islandState?.completed && !canFreeRoamCurrentRegion(player)) {
         await interaction.reply({
           content: tx.mapExploreLockedNotice,
           ephemeral: true
@@ -6524,6 +7160,76 @@ CLIENT.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (customId.startsWith('pmkt_buy_select_')) {
+      const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+      const raw = String(interaction.values?.[0] || '').trim();
+      const listingId = raw.startsWith('pmktbuy_') ? raw.slice('pmktbuy_'.length) : raw;
+      if (!listingId) {
+        await interaction.reply({ content: '⚠️ 請先選擇要購買的商品。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const buyer = CORE.loadPlayer(user.id);
+      if (!buyer) {
+        await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+        return;
+      }
+      ECON.ensurePlayerEconomy(buyer);
+      const outcome = ECON.buyFromSellListing(buyer, listingId, {
+        loadPlayerById: (id) => CORE.loadPlayer(id),
+        savePlayerById: (p) => CORE.savePlayer(p)
+      });
+      if (!outcome?.success) {
+        await interaction.reply({ content: `❌ 成交失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+        return;
+      }
+      CORE.savePlayer(buyer);
+      const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
+        ? `｜${outcome.deliveryNotes.join('；')}`
+        : '';
+      await showPlayerMarketMenu(
+        interaction,
+        user,
+        outcome.marketType || marketType || 'renaiss',
+        `成交成功：買入 ${outcome.itemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}`
+      );
+      return;
+    }
+
+    if (customId.startsWith('shop_buy_select_')) {
+      const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+      const raw = String(interaction.values?.[0] || '').trim();
+      const listingId = raw.startsWith('shopbuy_') ? raw.slice('shopbuy_'.length) : raw;
+      if (!listingId) {
+        await interaction.reply({ content: '⚠️ 請先選擇要購買的商品。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      const buyer = CORE.loadPlayer(user.id);
+      if (!buyer) {
+        await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+        return;
+      }
+      ECON.ensurePlayerEconomy(buyer);
+      const outcome = ECON.buyFromSellListing(buyer, listingId, {
+        loadPlayerById: (id) => CORE.loadPlayer(id),
+        savePlayerById: (p) => CORE.savePlayer(p)
+      });
+      if (!outcome?.success) {
+        await interaction.reply({ content: `❌ 購買失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+        return;
+      }
+      CORE.savePlayer(buyer);
+      const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
+        ? `｜${outcome.deliveryNotes.join('；')}`
+        : '';
+      await showWorldShopBuyPanel(
+        interaction,
+        user,
+        outcome.marketType || marketType || 'renaiss',
+        `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}`
+      );
+      return;
+    }
+
     if (customId.startsWith('shop_sell_select_')) {
       const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
       const player = CORE.loadPlayer(user.id);
@@ -6653,10 +7359,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 名字輸入 Modal =====
   if (customId.startsWith('name_submit_')) {
-    const alignment = normalizePlayerAlignment(customId.replace('name_submit_', ''));
+    const profile = parseNameSubmitProfileFromCustomId(customId);
     const charName = interaction.fields.getTextInputValue('player_name').trim();
     const finalName = charName || user.username;
-    await createCharacterWithName(interaction, user, alignment, finalName);
+    await createCharacterWithName(interaction, user, profile, finalName);
     return;
   }
 
@@ -6683,9 +7389,26 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
   
-  // ===== 選擇正派/機變派 =====
+  // ===== 新手建立：性別 =====
+  if (customId === 'choose_gender_male' || customId === 'choose_gender_female') {
+    await handleChooseGender(interaction, user, customId);
+    return;
+  }
+
+  // ===== 新手建立：寵物屬性 =====
+  if (customId.startsWith('choose_element_')) {
+    await handleChoosePetElement(interaction, user, customId);
+    return;
+  }
+
+  // ===== 舊版相容：正派/機變派按鈕 =====
   if (customId === 'choose_positive' || customId === 'choose_negative') {
-    await handleChooseAlignment(interaction, user, customId);
+    await handleLegacyAlignmentChoice(interaction, user, customId);
+    return;
+  }
+
+  if (customId === 'restart_onboarding') {
+    await sendOnboardingLanguageSelection(interaction, user, { replaceCurrent: true });
     return;
   }
   
@@ -6733,6 +7456,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
           importance: 2,
           tags: ['battle', 'retreat']
         });
+        publishBattleWorldEvent(player, enemyName, 'battle_flee', '主動脫離當前戰線');
         player.battleState = null;
         CORE.savePlayer(player);
       }
@@ -6797,23 +7521,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
       await interaction.deferUpdate().catch(() => {});
     });
     
-    // 發送陣營選擇（使用選定語言）
-    const langText = getLanguageText(lang);
-    const embed = new EmbedBuilder()
-      .setTitle(`🌟 ${langText.welcome}`)
-      .setColor(0x00ff00)
-      .setDescription(`${langText.welcomeDesc}\n\n${langText.choosePathHint}`)
-      .addFields(
-        { name: langText.positive, value: langText.positiveDesc, inline: true },
-        { name: langText.negative, value: langText.negativeDesc, inline: true }
-      );
-    
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('choose_positive').setLabel('☀️ ' + langText.positive).setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('choose_negative').setLabel('🌙 ' + langText.negative).setStyle(ButtonStyle.Danger)
-    );
-    
-    await interaction.channel.send({ embeds: [embed], components: [row] });
+    const payload = buildGenderSelectionPayload(lang, user.username);
+    await interaction.channel.send({ embeds: [payload.embed], components: [payload.row] });
     return;
   }
   
@@ -7064,6 +7773,19 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // ===== 顯示行囊 =====
   if (customId === 'show_inventory') {
     await showInventory(interaction, user);
+    return;
+  }
+
+  if (customId === 'show_codex') {
+    await showPlayerCodex(interaction, user);
+    return;
+  }
+  if (customId === 'show_codex_npc') {
+    await showNpcCodex(interaction, user);
+    return;
+  }
+  if (customId === 'show_codex_skill') {
+    await showSkillCodex(interaction, user);
     return;
   }
 
@@ -7479,6 +8201,56 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId.startsWith('shop_buy_heal_crystal_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    const pet = PET.loadPet(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(player);
+    const result = buyShopCrystal(player, pet, marketType, 'heal');
+    if (!result.success) {
+      await interaction.reply({ content: result.reason || '❌ 購買失敗。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (pet) PET.savePet(pet);
+    CORE.savePlayer(player);
+    await showWorldShopBuyPanel(
+      interaction,
+      user,
+      marketType,
+      `${result.message}（花費 ${result.cost} Rns）`
+    );
+    return;
+  }
+
+  if (customId.startsWith('shop_buy_energy_crystal_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    const pet = PET.loadPet(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(player);
+    const result = buyShopCrystal(player, pet, marketType, 'energy');
+    if (!result.success) {
+      await interaction.reply({ content: result.reason || '❌ 購買失敗。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (pet) PET.savePet(pet);
+    CORE.savePlayer(player);
+    await showWorldShopBuyPanel(
+      interaction,
+      user,
+      marketType,
+      `${result.message}（花費 ${result.cost} Rns）`
+    );
+    return;
+  }
+
   if (customId.startsWith('shop_buy_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
     await showWorldShopBuyPanel(interaction, user, marketType);
@@ -7583,6 +8355,28 @@ async function syncWalletAndApplyNow(discordUserId) {
   return assets;
 }
 
+function syncWalletInBackground(interaction, user, bindAddress = '') {
+  const userId = String(user?.id || '').trim();
+  if (!userId) return;
+
+  Promise.resolve()
+    .then(async () => {
+      const assets = await syncWalletAndApplyNow(userId);
+      const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
+      const notice =
+        `✅ 錢包資料背景同步完成\n` +
+        `錢包：\`${bindAddress || WALLET.getWalletAddress(userId) || 'unknown'}\`\n` +
+        `🎁 目前 Rns 代幣：${assets.rns}\n` +
+        `🐾 可擁有寵物：${maxPets} 隻`;
+      if (interaction && typeof interaction.followUp === 'function') {
+        await interaction.followUp({ content: notice, ephemeral: true }).catch(() => {});
+      }
+    })
+    .catch((e) => {
+      console.error(`[錢包] 背景同步失敗 user=${userId}:`, e?.message || e);
+    });
+}
+
 async function handleWalletBind(interaction, user) {
   const walletAddress = interaction.fields.getTextInputValue('wallet_address').trim();
   
@@ -7593,49 +8387,27 @@ async function handleWalletBind(interaction, user) {
     return;
   }
 
-  try {
-    const assets = await syncWalletAndApplyNow(user.id);
-    const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
-    const hasPlayer = Boolean(CORE.loadPlayer(user.id));
-    const cardInfo = assets.assets.cardCount > 0
-      ? `📦 卡片 FMV: $${assets.assets.cardFMV.toFixed(2)} USD (${assets.assets.cardCount} 張)\n`
-      : '📦 卡片 FMV: $0.00 USD (0 張)\n';
+  const hasPlayer = Boolean(CORE.loadPlayer(user.id));
+  const embed = new EmbedBuilder()
+    .setTitle('✅ 已接收錢包綁定請求')
+    .setColor(0x00ff00)
+    .setDescription(
+      `錢包地址：\`${result.address}\`\n\n` +
+      `鏈上資料正在背景同步中，完成後會自動入帳到你的 Rns。\n` +
+      `如果你正在遊玩，可先繼續流程，不用停在這裡等待。`
+    );
 
-    const embed = new EmbedBuilder()
-      .setTitle('✅ 錢包綁定完成，資產已即時入帳')
-      .setColor(0x00ff00)
-      .setDescription(
-        `錢包地址：\`${result.address}\`\n\n` +
-        `${cardInfo}` +
-        `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
-        `💸 總花費(開包+市場買入): $${Number(assets.assets.totalSpentUSDT || 0).toFixed(2)} USDT\n` +
-        `🎁 目前 Rns 代幣: ${assets.rns}\n` +
-        `🐾 可擁有寵物: ${maxPets} 隻\n\n` +
-        (hasPlayer ? '你可以直接回到主選單繼續冒險。' : '你可以繼續完成新手流程。')
+  const buttons = hasPlayer
+    ? new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('open_profile').setLabel('💳 查看檔案').setStyle(ButtonStyle.Secondary)
+      )
+    : new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('continue_with_wallet').setLabel('🚀 繼續新手流程').setStyle(ButtonStyle.Primary)
       );
 
-    const buttons = hasPlayer
-      ? new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId('open_profile').setLabel('💳 查看檔案').setStyle(ButtonStyle.Secondary)
-        )
-      : new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('continue_with_wallet').setLabel('🚀 繼續新手流程').setStyle(ButtonStyle.Primary)
-        );
-
-    await interaction.update({ embeds: [embed], components: [buttons] });
-  } catch (e) {
-    console.error(`[錢包] 綁定後同步失敗: ${e.message}`);
-    await interaction.update({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('⚠️ 錢包已綁定，但同步失敗')
-          .setColor(0xffa500)
-          .setDescription(`錢包地址：\`${result.address}\`\n\n錯誤：${e.message}\n請稍後再試，或聯絡管理員。`)
-      ],
-      components: []
-    });
-  }
+  await interaction.update({ embeds: [embed], components: [buttons] });
+  syncWalletInBackground(interaction, user, result.address);
 }
 
 async function handleWalletSyncNow(interaction, user) {
@@ -7680,6 +8452,37 @@ async function handleWalletSyncNow(interaction, user) {
   }
 }
 
+async function sendOnboardingLanguageSelection(interaction, user, options = {}) {
+  const walletBound = WALLET.isWalletBound(user.id);
+  const walletNote = walletBound
+    ? '✅ 已綁定錢包：建立角色時會帶入目前錢包資產。'
+    : 'ℹ️ 尚未綁定錢包：你可以先玩，之後到設定綁定並即時入帳。';
+
+  const langEmbed = new EmbedBuilder()
+    .setTitle('🌍 選擇你的語言 / Choose Your Language')
+    .setColor(0xffd700)
+    .setDescription(`**${user.username}**，歡迎來到 Renaiss 星球！\n\nPlease select your language first / 請先選擇語言：\n\n支援的語言：`)
+    .addFields(
+      { name: '🇹🇼 繁體中文', value: '繁體中文（台灣、香港）', inline: true },
+      { name: '🇨🇳 簡體中文', value: '简体中文（中国）', inline: true },
+      { name: '🇺🇸 English', value: 'English (US/EU)', inline: true },
+      { name: '💳 錢包狀態', value: walletNote, inline: false }
+    );
+  const langRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('select_lang_zh-TW').setLabel('🇹🇼 繁體中文').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('select_lang_zh-CN').setLabel('🇨🇳 簡體中文').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('select_lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary)
+  );
+
+  if (options.replaceCurrent) {
+    await interaction.update({ embeds: [langEmbed], components: [langRow] }).catch(async () => {
+      await interaction.reply({ embeds: [langEmbed], components: [langRow], ephemeral: true }).catch(() => {});
+    });
+    return;
+  }
+  await interaction.channel.send({ embeds: [langEmbed], components: [langRow] }).catch(() => {});
+}
+
 // ============== 繼續錢包流程 ==============
 CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
@@ -7702,52 +8505,66 @@ CLIENT.on('interactionCreate', async (interaction) => {
   await interaction.deferUpdate().catch(() => {});
   
   try {
-    // 綁定時已即時同步，這裡直接讀 pendingRNS（避免重抓造成等待）
     const initialRns = WALLET.getPendingRNS(user.id);
-    
-    const embed = new EmbedBuilder()
-      .setTitle(`🌟 歡迎來到 Renaiss 星球！`)
-      .setColor(0x00ff00)
-      .setDescription(`**${user.username}**，你的初始資產已確認！\n\n💰 **初始 Rns 代幣：${initialRns}**\n\n在這個世界，你需要：\n• 選擇你的流派（正派/機變派）\n• 培養你的寵物\n• 探索世界、戰鬥、任務\n\n**請選擇你的流派：**`)
-      .addFields(
-        { name: '☀️ 正派', value: '光明正面，守秩序與公信\n招式：治療、護盾、正義之擊', inline: true },
-        { name: '🌙 機變派', value: '同屬正義，但更擅策略與博弈\n風格：灰階手段，不主動作惡', inline: true }
-      );
-    
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('choose_positive').setLabel('☀️ 選擇正派').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('choose_negative').setLabel('🌙 選擇機變派').setStyle(ButtonStyle.Danger)
-    );
+    const selectedLang = getPlayerTempData(user.id, 'language') || 'zh-TW';
+    const payload = buildGenderSelectionPayload(selectedLang, user.username);
+    payload.embed.addFields({ name: '💰 初始 Rns', value: String(initialRns), inline: true });
     
     // 發送到當前 thread
     await threadChannel.send({ 
-      embeds: [embed], 
-      components: [row] 
+      embeds: [payload.embed],
+      components: [payload.row]
     });
   } catch (err) {
     console.error('[錯誤] 創建角色失敗:', err.message);
   }
 });
 
-// ============== 選擇陣營 ==============
-async function handleChooseAlignment(interaction, user, customId) {
-  const alignment = customId === 'choose_positive' ? '正派' : '機變派';
+async function handleLegacyAlignmentChoice(interaction, user, customId) {
+  const forcedGender = customId === 'choose_positive' ? '男' : '女';
+  const lang = getPlayerTempData(user.id, 'language') || 'zh-TW';
+  const payload = buildElementSelectionPayload(lang, forcedGender);
+  setPlayerTempData(user.id, 'gender', forcedGender);
+  await interaction.update({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
+}
 
-  // 已建立角色時，不允許重複選陣營，直接導回目前進度
+async function handleChooseGender(interaction, user, customId) {
+  const gender = customId === 'choose_gender_female' ? '女' : '男';
+
   const resumed = await resumeExistingOnboardingOrGame(interaction, user);
   if (resumed) {
     await interaction.message?.edit({ components: [] }).catch(() => {});
     return;
   }
 
-  // 先鎖住當前陣營按鈕，確保只能點一次
+  const lang = getPlayerTempData(user.id, 'language') || 'zh-TW';
+  setPlayerTempData(user.id, 'gender', gender);
+  const payload = buildElementSelectionPayload(lang, gender);
+  await interaction.update({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
+}
+
+async function handleChoosePetElement(interaction, user, customId) {
+  const resumed = await resumeExistingOnboardingOrGame(interaction, user);
+  if (resumed) {
+    await interaction.message?.edit({ components: [] }).catch(() => {});
+    return;
+  }
+
+  const match = String(customId || '').match(/^choose_element_(male|female)_(water|fire|grass)$/);
+  if (!match) {
+    await interaction.reply({ content: '⚠️ 屬性選擇資料錯誤，請重新操作。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const gender = match[1] === 'female' ? '女' : '男';
+  const element = match[2] === 'fire' ? '火' : match[2] === 'grass' ? '草' : '水';
+  setPlayerTempData(user.id, 'gender', gender);
+  setPlayerTempData(user.id, 'petElement', element);
   await interaction.message?.edit({ components: [] }).catch(() => {});
-  
-  // 顯示名字輸入 Modal
+
   const modal = new ModalBuilder()
-    .setCustomId(`name_submit_${alignment}`)
+    .setCustomId(`name_submit_profile_${match[1]}_${match[2]}`)
     .setTitle('📛 為你的角色取個名字');
-  
+
   const nameInput = new TextInputBuilder()
     .setCustomId('player_name')
     .setLabel('角色名字')
@@ -7755,19 +8572,17 @@ async function handleChooseAlignment(interaction, user, customId) {
     .setPlaceholder('輸入你在Renaiss星球的名字')
     .setRequired(true)
     .setMaxLength(20);
-  
-  const row = new ActionRowBuilder().addComponents(nameInput);
-  modal.addComponents(row);
-  
+
+  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+
   await interaction.showModal(modal).catch(async () => {
-    // 如果 Modal 失敗，直接用 DC 名稱
     await interaction.deferUpdate().catch(() => {});
-    await createCharacterWithName(interaction, user, alignment, user.username);
+    await createCharacterWithName(interaction, user, { gender, element, alignment: '正派' }, user.username);
   });
 }
 
 // 創建角色（名字輸入後調用）
-async function createCharacterWithName(interaction, user, alignment, charName) {
+async function createCharacterWithName(interaction, user, profile, charName) {
   const existingPlayer = CORE.loadPlayer(user.id);
   const existingPet = PET.loadPet(user.id);
   if (existingPlayer && existingPet) {
@@ -7781,10 +8596,14 @@ async function createCharacterWithName(interaction, user, alignment, charName) {
 
   // 使用暫時 RNS（背景掃描完成後會更新）
   const pendingRNS = WALLET.getPendingRNS(user.id);
-  
-  const player = CORE.createPlayer(user.id, charName, '男', '無門無派');
+  const selectedGender = normalizeCharacterGender(profile?.gender || getPlayerTempData(user.id, 'gender') || '男');
+  const selectedElement = normalizePetElementCode(profile?.element || getPlayerTempData(user.id, 'petElement') || '水');
+  const alignment = normalizePlayerAlignment(profile?.alignment || '正派');
+
+  const player = CORE.createPlayer(user.id, charName, selectedGender, '無門無派');
   const spawnProfile = getLocationProfile(player.location);
-  player.alignment = normalizePlayerAlignment(alignment);
+  player.alignment = alignment;
+  player.petElement = selectedElement;
   player.wanted = 0;
   player.stats.財富 = pendingRNS; // 使用暫時 RNS（0 或上次保存的值）
   ECON.ensurePlayerEconomy(player);
@@ -7800,16 +8619,18 @@ async function createCharacterWithName(interaction, user, alignment, charName) {
   // 清除臨時資料
   clearPlayerTempData(user.id);
   
-  const egg = PET.createPetEgg(user.id, player.alignment);
+  const egg = PET.createPetEgg(user.id, selectedElement);
   PET.savePet(egg);
   
   const embed = new EmbedBuilder()
-    .setTitle(`🎉 歡迎 ${formatAlignmentLabel(player.alignment)}！`)
-    .setColor(getAlignmentColor(player.alignment))
+    .setTitle('🎉 角色建立完成！')
+    .setColor(getPetElementColor(selectedElement))
     .setDescription(`**${player.name}**，你的Renaiss星球之旅開始了！\n\n🥚 寵物蛋已獲得！\n\n🔨 敲開寵物蛋，看看你的天賦！`)
     .addFields(
       { name: '📍 位置', value: player.location, inline: true },
       { name: '🎚️ 出生難度', value: spawnProfile ? `D${spawnProfile.difficulty}` : 'D1', inline: true },
+      { name: '👤 角色性別', value: selectedGender, inline: true },
+      { name: '🐾 寵物屬性', value: getPetElementDisplayName(selectedElement), inline: true },
       { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
       { name: t('gold', uiLang), value: String(player.stats.財富), inline: true }
     );
@@ -7875,8 +8696,12 @@ async function handleHatchEgg(interaction, user) {
   await new Promise(resolve => setTimeout(resolve, 1000));
   
   // ===== 階段3：隨機選擇招式池（電腦選3個）=====
-  const allMoves = egg.type === '正派' ? PET.POSITIVE_MOVES : PET.NEGATIVE_MOVES;
-  const shuffled = allMoves.sort(() => Math.random() - 0.5);
+  const allMoves = getPetMovePool(egg.type);
+  if (!Array.isArray(allMoves) || allMoves.length <= 0) {
+    await interaction.editReply({ content: '❌ 找不到可用招式池，請重新孵化。', embeds: [], components: [] }).catch(() => {});
+    return;
+  }
+  const shuffled = [...allMoves].sort(() => Math.random() - 0.5);
   const choices = shuffled.slice(0, 3);
   
   // 電腦最終選擇（80%普通/15%稀有/5%史詩，但玩家不知道）
@@ -7921,7 +8746,7 @@ async function handleHatchEgg(interaction, user) {
       name: selectedMove.name,
       element: selectedMove.element,
       tier: selectedMove.tier,
-      type: egg.type === '正派' ? 'positive' : 'negative',
+      type: 'elemental',
       baseDamage: selectedMove.baseDamage,
       effect: selectedMove.effect,
       desc: selectedMove.desc,
@@ -7999,9 +8824,7 @@ async function handleNameSubmit(interaction, user) {
   
   // 如果名字太長或太短，隨機給一個
   if (!name || name.length < 1 || name.length > 6) {
-    name = pet.type === '正派' 
-      ? ['小白', '小青', '阿拓', '靈兒', '阿正'][Math.floor(Math.random() * 5)]
-      : ['小黑', '邪仔', '夜影', '惡獸', '阿修'][Math.floor(Math.random() * 5)];
+    name = pickDefaultPetNameByElement(pet.type);
   }
   
   pet.name = name;
@@ -8016,11 +8839,11 @@ async function handleNameSubmit(interaction, user) {
   
   const embed = new EmbedBuilder()
     .setTitle(`🐾 ${pet.name} 命名成功！`)
-    .setColor(pet.type === '正派' ? 0x00ff00 : 0xff0000)
+    .setColor(getPetElementColor(pet.type))
     .setDescription(pet.appearance)
     .addFields(
       { name: '🐾 名字', value: pet.name, inline: true },
-      { name: '🏷️ 類型', value: pet.type, inline: true },
+      { name: '🏷️ 屬性', value: getPetElementDisplayName(pet.type), inline: true },
       { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: t('atk', uiLang), value: String(pet.attack), inline: true },
       { name: t('def', uiLang), value: String(pet.defense), inline: true },
@@ -8063,9 +8886,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   if (!pet || !pet.waitingForName) return;
   
-  const name = pet.type === '正派' 
-    ? ['小白', '小青', '阿拓', '靈兒', '阿正'][Math.floor(Math.random() * 5)]
-    : ['小黑', '邪仔', '夜影', '惡獸', '阿修'][Math.floor(Math.random() * 5)];
+  const name = pickDefaultPetNameByElement(pet.type);
   
   pet.name = name;
   pet.waitingForName = false;
@@ -8079,11 +8900,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   const embed = new EmbedBuilder()
     .setTitle(`🐾 寵物命名：${pet.name}`)
-    .setColor(pet.type === '正派' ? 0x00ff00 : 0xff0000)
+    .setColor(getPetElementColor(pet.type))
     .setDescription(pet.appearance)
     .addFields(
       { name: '🐾 名字', value: pet.name, inline: true },
-      { name: '🏷️ 類型', value: pet.type, inline: true },
+      { name: '🏷️ 屬性', value: getPetElementDisplayName(pet.type), inline: true },
       { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
       { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
@@ -8118,6 +8939,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   }
 
   let stateMutated = ensurePlayerGenerationSchema(player);
+  if (recordNearbyNpcEncounters(player, 8)) stateMutated = true;
   syncLocationArcLocation(player);
   if (restoreStoryFromGenerationState(player)) stateMutated = true;
   if (restoreChoicesFromGenerationState(player)) stateMutated = true;
@@ -8216,7 +9038,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       .setColor(getAlignmentColor(player.alignment))
       .setDescription(description)
       .addFields(
-        { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
+        { name: '🐾 寵物', value: `${pet.name} (${getPetElementDisplayName(pet.type)})`, inline: true },
         { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
         { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
       )
@@ -8962,10 +9784,11 @@ async function showCharacter(interaction, user) {
 
   const embed = new EmbedBuilder()
     .setTitle(`👤 ${player.name}`)
-    .setColor(getAlignmentColor(player.alignment))
+    .setColor(getPetElementColor(player.petElement || pet?.type || '水'))
     .setDescription(`**${player.title}**`)
     .addFields(
-      { name: '🏷️ 陣營', value: formatAlignmentLabel(player.alignment), inline: true },
+      { name: '👤 性別', value: String(player.gender || '男'), inline: true },
+      { name: '🐾 夥伴屬性', value: getPetElementDisplayName(player.petElement || pet?.type || '水'), inline: true },
       { name: '📍 位置', value: player.location, inline: true }
     )
     .addFields(
@@ -8979,7 +9802,7 @@ async function showCharacter(interaction, user) {
   
   if (pet) {
     embed.addFields(
-      { name: '---寵物---', value: `**${pet.name}** (${pet.type})`, inline: false },
+      { name: '---寵物---', value: `**${pet.name}** (${getPetElementDisplayName(pet.type)})`, inline: false },
       { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
       { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
       { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
@@ -9107,7 +9930,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
 
   const description = [
     notice ? `✅ ${notice}` : '',
-    `**目前管理：${selectedPet.name}**（${selectedPet.type}）`,
+    `**目前管理：${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）`,
     `學習入口：請用下拉選單「學習技能晶片」`,
     `取消學習：會退回技能晶片到背包，可拿去賣`,
     `可攜帶上陣招式：**${PET_MOVE_LOADOUT_LIMIT}**（逃跑技能固定，不占名額）`,
@@ -9117,7 +9940,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
 
   const embed = new EmbedBuilder()
     .setTitle(`📜 寵物招式配置`)
-    .setColor(selectedPet.type === '正派' ? 0x00ff00 : 0xff0000)
+    .setColor(getPetElementColor(selectedPet.type))
     .setDescription(description)
     .addFields(
       { name: `🧭 ${selectedPet.name} 招式清單`, value: unlockedMoves.slice(0, 1024), inline: false },
@@ -9330,6 +10153,109 @@ function parseMarketTypeFromCustomId(customId = '', fallback = 'renaiss') {
   return fallback === 'digital' ? 'digital' : 'renaiss';
 }
 
+function buyShopCrystal(player, pet, marketType = 'renaiss', crystalType = 'heal') {
+  const safeType = crystalType === 'energy' ? 'energy' : 'heal';
+  const isDigital = marketType === 'digital';
+  const cost = safeType === 'energy' ? SHOP_ENERGY_CRYSTAL_COST : SHOP_HEAL_CRYSTAL_COST;
+  const currentGold = Math.max(0, Number(player?.stats?.財富 || 0));
+  if (currentGold < cost) {
+    return {
+      success: false,
+      reason: `❌ Rns 不足，購買${safeType === 'energy' ? '回能水晶' : '回血水晶'}需要 ${cost} Rns。`
+    };
+  }
+
+  player.stats.財富 = Math.max(0, currentGold - cost);
+  const effectFailed = isDigital && Math.random() < DIGITAL_CRYSTAL_EFFECT_FAIL_RATE;
+  const marketLabel = getMarketTypeLabel(marketType);
+
+  recordCashflow(player, {
+    amount: -cost,
+    category: safeType === 'energy' ? 'shop_energy_crystal' : 'shop_heal_crystal',
+    source: `${marketLabel} 購買${safeType === 'energy' ? '回能水晶' : '回血水晶'}`,
+    marketType
+  });
+
+  if (effectFailed) {
+    rememberPlayer(player, {
+      type: '商店',
+      content: `在${marketLabel}購買${safeType === 'energy' ? '回能水晶' : '回血水晶'}`,
+      outcome: '水晶脈衝紊亂，這次未產生效果',
+      importance: 1,
+      tags: ['shop', marketType, 'crystal', 'effect_failed']
+    });
+    return {
+      success: true,
+      cost,
+      effectFailed: true,
+      message: `你購買了${safeType === 'energy' ? '回能水晶' : '回血水晶'}，但水晶脈衝紊亂，這次沒有產生效果。`
+    };
+  }
+
+  if (safeType === 'energy') {
+    if (!player.stats || typeof player.stats !== 'object') player.stats = {};
+    if (!player.maxStats || typeof player.maxStats !== 'object') player.maxStats = {};
+    const before = Math.max(0, Number(player.stats.能量 || 0));
+    const maxEnergy = Math.max(1, Number(player.maxStats.能量 || 100));
+    const after = Math.min(maxEnergy, before + SHOP_ENERGY_CRYSTAL_RECOVER);
+    player.stats.能量 = after;
+    const gain = Math.max(0, after - before);
+    rememberPlayer(player, {
+      type: '商店',
+      content: `在${marketLabel}購買回能水晶`,
+      outcome: gain > 0 ? `能量恢復 +${gain}` : '能量已滿，無需恢復',
+      importance: gain > 0 ? 2 : 1,
+      tags: ['shop', marketType, 'energy_crystal']
+    });
+    return {
+      success: true,
+      cost,
+      effectFailed: false,
+      message: gain > 0
+        ? `回能水晶生效：能量 +${gain}（${after}/${maxEnergy}）。`
+        : `回能水晶生效：目前能量已滿（${after}/${maxEnergy}）。`
+    };
+  }
+
+  const targetPet = pet && typeof pet === 'object' ? pet : null;
+  if (!targetPet) {
+    rememberPlayer(player, {
+      type: '商店',
+      content: `在${marketLabel}購買回血水晶`,
+      outcome: '未找到寵物，無法作用',
+      importance: 1,
+      tags: ['shop', marketType, 'heal_crystal', 'no_pet']
+    });
+    return {
+      success: true,
+      cost,
+      effectFailed: false,
+      message: '你購買了回血水晶，但目前沒有可恢復的寵物對象。'
+    };
+  }
+
+  const beforeHp = Math.max(0, Number(targetPet.hp || 0));
+  const maxHp = Math.max(1, Number(targetPet.maxHp || 100));
+  const afterHp = Math.min(maxHp, beforeHp + SHOP_HEAL_CRYSTAL_RECOVER);
+  targetPet.hp = afterHp;
+  const gain = Math.max(0, afterHp - beforeHp);
+  rememberPlayer(player, {
+    type: '商店',
+    content: `在${marketLabel}購買回血水晶`,
+    outcome: gain > 0 ? `${targetPet.name || '寵物'} 回復 +${gain} HP` : `${targetPet.name || '寵物'} 已滿血`,
+    importance: gain > 0 ? 2 : 1,
+    tags: ['shop', marketType, 'heal_crystal']
+  });
+  return {
+    success: true,
+    cost,
+    effectFailed: false,
+    message: gain > 0
+      ? `回血水晶生效：${targetPet.name || '寵物'} 回復 +${gain} HP（${afterHp}/${maxHp}）。`
+      : `回血水晶生效：${targetPet.name || '寵物'} 目前已滿血（${afterHp}/${maxHp}）。`
+  };
+}
+
 function buildMarketListingLine(listing = {}, idx = 0) {
   const qty = Math.max(1, Number(listing?.quantity || 1));
   const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
@@ -9404,18 +10330,26 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(listText);
 
-  const actionButtons = [];
-  for (const listing of listings.slice(0, 3)) {
-    actionButtons.push(
-      new ButtonBuilder()
-        .setCustomId(`pmkt_buy_${listing.id}`)
-        .setLabel(`買 ${String(listing.itemName || '物品').slice(0, 12)}`)
-        .setStyle(ButtonStyle.Success)
-    );
-  }
-
   const rows = [];
-  if (actionButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(actionButtons));
+  if (listings.length > 0) {
+    const selectOptions = listings.slice(0, 25).map((listing, idx) => {
+      const itemName = String(listing.itemName || '商品');
+      const qty = Math.max(1, Number(listing.quantity || 1));
+      const unitPrice = Math.max(1, Number(listing.unitPrice || 0));
+      return {
+        label: `${idx + 1}. ${itemName}`.slice(0, 100),
+        description: `x${qty}｜單價 ${unitPrice} Rns｜下拉選購`.slice(0, 100),
+        value: `pmktbuy_${String(listing.id || '').trim()}`
+      };
+    });
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`pmkt_buy_select_${safeMarket}`)
+      .setPlaceholder('下拉選擇要購買的商品')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(selectOptions);
+    rows.push(new ActionRowBuilder().addComponents(select));
+  }
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回鑑價站').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
@@ -9459,37 +10393,89 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss') {
   await interaction.update({ embeds: [embed], components: rows });
 }
 
+function getRarityRank(raw = '') {
+  const normalized = String(raw || '').trim();
+  if (normalized === '史詩') return 3;
+  if (normalized === '稀有') return 2;
+  return 1;
+}
+
+function normalizeListingRarity(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '普通';
+  if (/史詩|傳說|legend/i.test(text)) return '史詩';
+  if (/稀有|精良|罕見|rare/i.test(text)) return '稀有';
+  return '普通';
+}
+
+function estimateStoryReferencePriceByName(name = '') {
+  const text = String(name || '');
+  let value = 18;
+  if (/靈芝|人參|雪蓮|仙草|稀有|秘笈|核心|晶|寶|礦/u.test(text)) value += 65;
+  if (/肉|魚|野兔|野雞|野豬|鹿/u.test(text)) value += 18;
+  if (/毒|斷腸|曼陀羅/u.test(text)) value += 12;
+  if (/乾糧|水囊/u.test(text)) value = 5;
+  return Math.max(1, Math.floor(value));
+}
+
+function estimateMoveReferencePriceByTier(tier = 1) {
+  const safeTier = Math.max(1, Number(tier) || 1);
+  if (safeTier >= 3) return 520;
+  if (safeTier >= 2) return 280;
+  return 130;
+}
+
 function buildShopSellDraftOptions(player, ownerId) {
   ECON.ensurePlayerEconomy(player);
   const stacked = new Map();
 
-  const addStack = (rawName, source, amount = 1) => {
+  const addStack = (rawName, source, amount = 1, extra = {}) => {
     const name = String(rawName || '').trim();
     if (!name) return;
     const key = name;
     const qty = Math.max(1, Math.floor(Number(amount || 1)));
+    const rarity = normalizeListingRarity(extra?.rarity || '');
+    const refPrice = Math.max(1, Math.floor(Number(extra?.referencePrice || 0))) || estimateStoryReferencePriceByName(name);
     const prev = stacked.get(key);
     if (prev) {
       prev.quantity += qty;
       if (!prev.sources.includes(source)) prev.sources.push(source);
+      if (refPrice > Number(prev.referencePrice || 0)) prev.referencePrice = refPrice;
+      if (getRarityRank(rarity) > getRarityRank(prev.rarity)) prev.rarity = rarity;
       return;
     }
     stacked.set(key, {
       kind: 'item',
       sources: [source],
       itemName: name,
-      quantity: qty
+      quantity: qty,
+      rarity,
+      referencePrice: refPrice
     });
   };
 
   for (const good of Array.isArray(player.tradeGoods) ? player.tradeGoods : []) {
-    addStack(good?.name || '', 'tradeGoods', 1);
+    const goodName = typeof good === 'string' ? good : (good?.name || '');
+    addStack(goodName, 'tradeGoods', 1, {
+      rarity: good?.rarity || '普通',
+      referencePrice: Number(good?.value || 0)
+    });
   }
   for (const herb of Array.isArray(player.herbs) ? player.herbs : []) {
-    addStack(typeof herb === 'string' ? herb : herb?.name || '', 'herbs', 1);
+    const herbName = typeof herb === 'string' ? herb : herb?.name || '';
+    addStack(herbName, 'herbs', 1, {
+      rarity: /稀有|靈|仙|神/u.test(String(herbName || '')) ? '稀有' : '普通',
+      referencePrice: estimateStoryReferencePriceByName(herbName)
+    });
   }
   for (const inv of Array.isArray(player.inventory) ? player.inventory : []) {
-    addStack(typeof inv === 'string' ? inv : inv?.name || '', 'inventory', 1);
+    const itemName = typeof inv === 'string' ? inv : inv?.name || '';
+    addStack(itemName, 'inventory', 1, {
+      rarity: /史詩|傳說|神話/u.test(String(itemName || ''))
+        ? '史詩'
+        : (/稀有|精良|秘|寶/u.test(String(itemName || '')) ? '稀有' : '普通'),
+      referencePrice: estimateStoryReferencePriceByName(itemName)
+    });
   }
 
   const options = Array.from(stacked.values())
@@ -9499,8 +10485,10 @@ function buildShopSellDraftOptions(player, ownerId) {
       itemName: String(entry.itemName || '').trim(),
       quantityMax: Math.max(1, Number(entry.quantity || 1)),
       itemRef: { kind: 'item', source: Array.isArray(entry.sources) ? entry.sources[0] : 'inventory' },
-      label: String(entry.itemName || '').slice(0, 100),
-      description: `庫存 ${Math.max(1, Number(entry.quantity || 1))} 件｜${(entry.sources || []).join('+')}`
+      rarity: normalizeListingRarity(entry.rarity || '普通'),
+      referencePrice: Math.max(1, Math.floor(Number(entry.referencePrice || estimateStoryReferencePriceByName(entry.itemName || '')))),
+      label: `[${normalizeListingRarity(entry.rarity || '普通')}] ${String(entry.itemName || '')}`.slice(0, 100),
+      description: `庫存 ${Math.max(1, Number(entry.quantity || 1))}｜參考價 ${Math.max(1, Math.floor(Number(entry.referencePrice || 1)))} Rns`
     }));
 
   let blockedActiveSkillCount = 0;
@@ -9519,10 +10507,18 @@ function buildShopSellDraftOptions(player, ownerId) {
       }
       const moveName = String(move?.name || moveId).trim();
       if (!moveName) continue;
+      const moveRarity = normalizeListingRarity(
+        typeof PET.getMoveRarityByTier === 'function'
+          ? PET.getMoveRarityByTier(Number(move?.tier || 1))
+          : '普通'
+      );
+      const moveRefPrice = estimateMoveReferencePriceByTier(Number(move?.tier || 1));
       options.push({
         kind: 'pet_move',
         itemName: `技能晶片：${moveName}`,
         quantityMax: 1,
+        rarity: moveRarity,
+        referencePrice: moveRefPrice,
         itemRef: {
           kind: 'pet_move',
           petId: String(pet.id),
@@ -9530,8 +10526,8 @@ function buildShopSellDraftOptions(player, ownerId) {
           moveId,
           moveName
         },
-        label: `${pet.name}｜${moveName}`.slice(0, 100),
-        description: `技能晶片掛賣｜${pet.type || '未知'}｜未上陣`
+        label: `[${moveRarity}] ${pet.name}｜${moveName}`.slice(0, 100),
+        description: `技能晶片｜參考價 ${moveRefPrice} Rns｜未上陣`
       });
     }
   }
@@ -10126,6 +11122,7 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
   const lines = [];
   if (notice) lines.push(`✅ ${notice}`);
   lines.push(`請從下拉選單直接選擇要掛賣的項目（避免打錯字）。`);
+  lines.push(`每個項目都會顯示稀有度與參考價；你可自行掛更高價格。`);
   lines.push(`可選項目：${draft.options.length} 個`);
   if (draft.blockedActiveSkillCount > 0) {
     lines.push(`上陣中技能已自動排除：${draft.blockedActiveSkillCount} 招（需先到招式配置卸下）`);
@@ -10169,9 +11166,11 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
 async function showWorldShopSellModal(interaction, marketType = 'renaiss', spec = null) {
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const itemName = String(spec?.itemName || '商品').slice(0, 36);
+  const rarity = normalizeListingRarity(spec?.rarity || '普通');
+  const referencePrice = Math.max(1, Math.floor(Number(spec?.referencePrice || estimateStoryReferencePriceByName(itemName))));
   const modal = new ModalBuilder()
     .setCustomId(`shop_sell_modal_${safeMarket}`)
-    .setTitle(`上架賣單｜${itemName}`);
+    .setTitle(`上架賣單｜${rarity}｜${itemName}`);
 
   const qtyInput = new TextInputBuilder()
     .setCustomId('shop_sell_qty')
@@ -10184,11 +11183,12 @@ async function showWorldShopSellModal(interaction, marketType = 'renaiss', spec 
 
   const priceInput = new TextInputBuilder()
     .setCustomId('shop_sell_price')
-    .setLabel('單價（Rns）')
-    .setPlaceholder('例如：120')
+    .setLabel(`單價（Rns｜參考 ${referencePrice}）`.slice(0, 45))
+    .setPlaceholder(`例如：${referencePrice}（可掛更高）`)
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
-    .setMaxLength(8);
+    .setMaxLength(8)
+    .setValue(String(referencePrice));
 
   const noteInput = new TextInputBuilder()
     .setCustomId('shop_sell_note')
@@ -10399,18 +11399,38 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
   const embed = new EmbedBuilder()
     .setTitle(`🛒 商店可購買商品｜${getMarketTypeLabel(safeMarket)}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
-    .setDescription(`${notice ? `✅ ${notice}\n\n` : ''}${listText}\n\n加成點數：花費 200 Rns 可獲得 +1 點。`);
+    .setDescription(
+      `${notice ? `✅ ${notice}\n\n` : ''}` +
+      `${listText}\n\n` +
+      `回血水晶：${SHOP_HEAL_CRYSTAL_COST} Rns（恢復氣血）\n` +
+      `回能水晶：${SHOP_ENERGY_CRYSTAL_COST} Rns（恢復能量）\n` +
+      `加成點數：花費 200 Rns 可獲得 +1 點。`
+    );
 
-  const buyButtons = listings.slice(0, 3).map((listing) =>
-    new ButtonBuilder()
-      .setCustomId(`shop_buy_item_${listing.id}`)
-      .setLabel(`買 ${String(listing.itemName || '商品').slice(0, 11)}`)
-      .setStyle(ButtonStyle.Success)
-  );
   const rows = [];
-  if (buyButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(buyButtons));
+  if (listings.length > 0) {
+    const selectOptions = listings.slice(0, 25).map((listing, idx) => {
+      const itemName = String(listing.itemName || '商品');
+      const qty = Math.max(1, Number(listing.quantity || 1));
+      const unitPrice = Math.max(1, Number(listing.unitPrice || 0));
+      return {
+        label: `${idx + 1}. ${itemName}`.slice(0, 100),
+        description: `x${qty}｜單價 ${unitPrice} Rns｜下拉選購`.slice(0, 100),
+        value: `shopbuy_${String(listing.id || '').trim()}`
+      };
+    });
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`shop_buy_select_${safeMarket}`)
+      .setPlaceholder('下拉選擇要購買的商品')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(selectOptions);
+    rows.push(new ActionRowBuilder().addComponents(select));
+  }
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`shop_buy_heal_crystal_${safeMarket}`).setLabel(`🩸 回血水晶(${SHOP_HEAL_CRYSTAL_COST})`).setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_buy_energy_crystal_${safeMarket}`).setLabel(`⚡ 回能水晶(${SHOP_ENERGY_CRYSTAL_COST})`).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   ));
@@ -10498,6 +11518,276 @@ async function showInventory(interaction, user) {
   await interaction.update({ embeds: [embed], components: [row] });
 }
 
+function getCodexLabels(uiLang = 'zh-TW') {
+  const map = {
+    'zh-TW': {
+      overviewTitle: '📚 圖鑑總覽',
+      overviewDesc: '可分開查看 NPC 圖鑑與技能圖鑑。未收集項目只顯示數量，不顯示名稱。',
+      npcProgress: '🤝 NPC 圖鑑進度',
+      skillProgress: '🧬 技能圖鑑進度',
+      unknownCount: '🕶️ 未收集（隱藏名稱）',
+      npcButton: '🤝 NPC圖鑑',
+      skillButton: '🧬 技能圖鑑',
+      npcTitle: '🤝 NPC 圖鑑',
+      npcCollected: '已收集 NPC',
+      npcUnknown: '未收集 NPC',
+      npcEmpty: '（尚未遇到 NPC）',
+      skillTitle: '🧬 技能圖鑑',
+      skillCollected: '已收集技能',
+      skillUnknown: '未收集技能',
+      skillEmpty: '（尚未抽到技能）',
+      backCodex: '📚 回圖鑑',
+      canFight: '可交鋒',
+      canDraw: '可抽取'
+    },
+    'zh-CN': {
+      overviewTitle: '📚 图鉴总览',
+      overviewDesc: '可分开查看 NPC 图鉴与技能图鉴。未收集项目只显示数量，不显示名称。',
+      npcProgress: '🤝 NPC 图鉴进度',
+      skillProgress: '🧬 技能图鉴进度',
+      unknownCount: '🕶️ 未收集（隐藏名称）',
+      npcButton: '🤝 NPC图鉴',
+      skillButton: '🧬 技能图鉴',
+      npcTitle: '🤝 NPC 图鉴',
+      npcCollected: '已收集 NPC',
+      npcUnknown: '未收集 NPC',
+      npcEmpty: '（尚未遇到 NPC）',
+      skillTitle: '🧬 技能图鉴',
+      skillCollected: '已收集技能',
+      skillUnknown: '未收集技能',
+      skillEmpty: '（尚未抽到技能）',
+      backCodex: '📚 回图鉴',
+      canFight: '可交锋',
+      canDraw: '可抽取'
+    },
+    en: {
+      overviewTitle: '📚 Codex Overview',
+      overviewDesc: 'NPC Codex and Skill Codex are separated. Uncollected entries show counts only.',
+      npcProgress: '🤝 NPC Progress',
+      skillProgress: '🧬 Skill Progress',
+      unknownCount: '🕶️ Uncollected (hidden names)',
+      npcButton: '🤝 NPC Codex',
+      skillButton: '🧬 Skill Codex',
+      npcTitle: '🤝 NPC Codex',
+      npcCollected: 'Collected NPCs',
+      npcUnknown: 'Uncollected NPCs',
+      npcEmpty: '(none yet)',
+      skillTitle: '🧬 Skill Codex',
+      skillCollected: 'Collected Skills',
+      skillUnknown: 'Uncollected Skills',
+      skillEmpty: '(none yet)',
+      backCodex: '📚 Back Codex',
+      canFight: 'Fightable',
+      canDraw: 'Drawable'
+    }
+  };
+  return map[uiLang] || map['zh-TW'];
+}
+
+function collectPlayerCodexData(player) {
+  const codex = player?.codex && typeof player.codex === 'object' ? player.codex : {};
+  const npcEntries = Object.values(codex.npcEncountered || {})
+    .filter((entry) => entry && typeof entry === 'object')
+    .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
+  const drawEntries = Object.values(codex.drawnMoves || {})
+    .filter((entry) => entry && typeof entry === 'object')
+    .sort((a, b) => Number(b.lastAt || 0) - Number(a.lastAt || 0));
+
+  const allAgents = Array.isArray(CORE.getAgents?.()) ? CORE.getAgents() : [];
+  const allNpcIds = new Set(allAgents.map((agent) => String(agent?.id || '').trim()).filter(Boolean));
+  const encounteredNpcIds = new Set(npcEntries.map((entry) => String(entry.id || '').trim()).filter(Boolean));
+  const totalNpc = allNpcIds.size;
+  const encounteredNpc = Array.from(encounteredNpcIds).filter((id) => allNpcIds.has(id)).length;
+  const remainingNpc = Math.max(0, totalNpc - encounteredNpc);
+
+  const allMoves = getAllPetSkillMoves();
+  const allMoveMap = new Map();
+  for (const move of allMoves) {
+    const id = String(move?.id || '').trim();
+    if (!id || allMoveMap.has(id)) continue;
+    allMoveMap.set(id, move);
+  }
+  const totalSkills = allMoveMap.size;
+  const drawnKnownEntries = drawEntries.filter((entry) => allMoveMap.has(String(entry?.id || '').trim()));
+  const drawnIds = new Set(drawnKnownEntries.map((entry) => String(entry.id || '').trim()).filter(Boolean));
+  const collectedSkills = drawnIds.size;
+  const remainingSkills = Math.max(0, totalSkills - collectedSkills);
+  const totalDrawCount = Math.max(
+    0,
+    Number(codex.drawTotalCount || 0),
+    drawEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.count || 0)), 0)
+  );
+
+  const uniqueTier = { 1: 0, 2: 0, 3: 0 };
+  const pullTier = { 1: 0, 2: 0, 3: 0 };
+  for (const entry of drawnKnownEntries) {
+    const tier = Math.max(1, Math.min(3, Number(entry.tier || 1)));
+    uniqueTier[tier] += 1;
+    pullTier[tier] += Math.max(0, Number(entry.count || 0));
+  }
+
+  const remainingTier = { 1: 0, 2: 0, 3: 0 };
+  for (const [moveId, move] of allMoveMap.entries()) {
+    if (drawnIds.has(moveId)) continue;
+    const tier = Math.max(1, Math.min(3, Number(move?.tier || 1)));
+    remainingTier[tier] += 1;
+  }
+
+  return {
+    codex,
+    npcEntries,
+    drawEntries: drawnKnownEntries,
+    totalNpc,
+    encounteredNpc,
+    remainingNpc,
+    totalSkills,
+    collectedSkills,
+    remainingSkills,
+    totalDrawCount,
+    uniqueTier,
+    pullTier,
+    remainingTier
+  };
+}
+
+async function showPlayerCodex(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+
+  let mutated = ensurePlayerGenerationSchema(player);
+  if (recordNearbyNpcEncounters(player, 8)) mutated = true;
+  if (mutated) CORE.savePlayer(player);
+
+  const uiLang = getPlayerUILang(player);
+  const labels = getCodexLabels(uiLang);
+  const data = collectPlayerCodexData(player);
+
+  const embed = new EmbedBuilder()
+    .setTitle(labels.overviewTitle)
+    .setColor(0x3b82f6)
+    .setDescription(labels.overviewDesc)
+    .addFields(
+      {
+        name: labels.npcProgress,
+        value:
+          `已收集：**${data.encounteredNpc}/${data.totalNpc || 0}**\n` +
+          `${labels.unknownCount}：**${data.remainingNpc}**（${labels.canFight}）\n` +
+          `遭遇總次數：**${Math.max(0, Number(data.codex?.npcEncounterTotal || 0))}**`,
+        inline: true
+      },
+      {
+        name: labels.skillProgress,
+        value:
+          `已收集：**${data.collectedSkills}/${data.totalSkills || 0}**\n` +
+          `${labels.unknownCount}：**${data.remainingSkills}**（${labels.canDraw}）\n` +
+          `抽取總次數：**${data.totalDrawCount}**`,
+        inline: true
+      }
+    );
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('show_codex_npc').setLabel(labels.npcButton).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('show_codex_skill').setLabel(labels.skillButton).setStyle(ButtonStyle.Primary)
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row1, row2] });
+}
+
+async function showNpcCodex(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+
+  let mutated = ensurePlayerGenerationSchema(player);
+  if (recordNearbyNpcEncounters(player, 8)) mutated = true;
+  if (mutated) CORE.savePlayer(player);
+
+  const uiLang = getPlayerUILang(player);
+  const labels = getCodexLabels(uiLang);
+  const data = collectPlayerCodexData(player);
+
+  const npcLines = data.npcEntries.slice(0, 18).map((entry, idx) =>
+    `${idx + 1}. ${entry.name}${entry.title ? `（${entry.title}）` : ''}｜${entry.lastLocation || '未知地點'}`
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle(labels.npcTitle)
+    .setColor(0x4f46e5)
+    .setDescription(
+      `已收集 **${data.encounteredNpc}/${data.totalNpc || 0}** ｜ ` +
+      `未收集 **${data.remainingNpc}**（${labels.canFight}）`
+    )
+    .addFields(
+      { name: labels.npcCollected, value: formatCodexLines(npcLines, 1020, labels.npcEmpty), inline: false },
+      { name: labels.npcUnknown, value: `尚有 **${data.remainingNpc}** 位未收集（名稱隱藏）`, inline: false }
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('show_codex').setLabel(labels.backCodex).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_codex_skill').setLabel(labels.skillButton).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
+async function showSkillCodex(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+
+  let mutated = ensurePlayerGenerationSchema(player);
+  if (recordNearbyNpcEncounters(player, 8)) mutated = true;
+  if (mutated) CORE.savePlayer(player);
+
+  const uiLang = getPlayerUILang(player);
+  const labels = getCodexLabels(uiLang);
+  const data = collectPlayerCodexData(player);
+
+  const skillLines = data.drawEntries.slice(0, 20).map((entry, idx) => {
+    const tier = Math.max(1, Math.min(3, Number(entry.tier || 1)));
+    const tierEmoji = tier === 3 ? '🔮' : tier === 2 ? '💠' : '⚪';
+    return `${idx + 1}. ${tierEmoji} ${entry.name} ×${Math.max(1, Number(entry.count || 1))}`;
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle(labels.skillTitle)
+    .setColor(0x0ea5e9)
+    .setDescription(
+      `已收集 **${data.collectedSkills}/${data.totalSkills || 0}** ｜ ` +
+      `未收集 **${data.remainingSkills}**（${labels.canDraw}）`
+    )
+    .addFields(
+      {
+        name: labels.skillCollected,
+        value: formatCodexLines(skillLines, 1020, labels.skillEmpty),
+        inline: false
+      },
+      {
+        name: labels.skillUnknown,
+        value:
+          `尚有 **${data.remainingSkills}** 招未收集（名稱隱藏）\n` +
+          `T1/T2/T3 剩餘：${data.remainingTier[1]}/${data.remainingTier[2]}/${data.remainingTier[3]}`,
+        inline: false
+      }
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('show_codex').setLabel(labels.backCodex).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_codex_npc').setLabel(labels.npcButton).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
 // ============== 處理事件 ==============
 async function handleEvent(interaction, user, eventIndex, options = {}) {
   const player = CORE.loadPlayer(user.id);
@@ -10527,6 +11817,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   if (ensurePlayerGenerationSchema(player)) {
     CORE.savePlayer(player);
   }
+  if (recordNearbyNpcEncounters(player, 8)) {
+    CORE.savePlayer(player);
+  }
   ECON.ensurePlayerEconomy(player);
   if (!Array.isArray(player.herbs)) player.herbs = [];
   if (!Array.isArray(player.inventory)) player.inventory = [];
@@ -10547,6 +11840,14 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   if (!event) {
     await respondError('❌ 事件不存在！');
     return;
+  }
+  if (event?.enemy?.id) {
+    const npc = typeof CORE.getAgentFullInfo === 'function'
+      ? CORE.getAgentFullInfo(event.enemy.id)
+      : null;
+    if (npc && recordNpcEncounter(player, npc, player.location)) {
+      CORE.savePlayer(player);
+    }
   }
 
   if (event.action === 'wish_pool' && !wishTextFromModal) {
@@ -10784,9 +12085,15 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       result.gold = applied.delta.gold;
     }
 
-    EVENTS.addWorldEvent(
+    publishWorldEvent(
       `🪙 ${player.name}在${player.location}的許願池許願「${safeWishText}」，結果：${outcome.worldRumor}`,
-      'wish_pool'
+      'wish_pool',
+      {
+        actor: player.name,
+        location: player.location,
+        wish: safeWishText,
+        rumor: String(outcome.worldRumor || '').slice(0, 120)
+      }
     );
     queueMemory({
       type: '許願',
@@ -10818,9 +12125,16 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       customVerdict: outcome.verdict
     };
 
-    EVENTS.addWorldEvent(
+    publishWorldEvent(
       `✍️ ${player.name}在${player.location}採取自訂行動「${safeCustomAction}」，後續傳聞：${outcome.worldRumor}`,
-      'custom_input'
+      'custom_input',
+      {
+        actor: player.name,
+        location: player.location,
+        actionText: safeCustomAction,
+        verdict: String(outcome.verdict || 'costly'),
+        rumor: String(outcome.worldRumor || '').slice(0, 120)
+      }
     );
 
     queueMemory({
@@ -10831,7 +12145,10 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       tags: ['custom_input', String(outcome.verdict || 'costly')]
     });
   } else if (event.action === 'location_story_battle') {
-    const fallback = createGuaranteedLocationStoryBattleChoice(player);
+    const fallback = createGuaranteedLocationStoryBattleChoice(
+      player,
+      String(player?.currentStory || player?.generationState?.storySnapshot || '')
+    );
     const enemyTemplate = (event?.enemy && typeof event.enemy === 'object')
       ? { ...event.enemy }
       : (fallback?.enemy ? { ...fallback.enemy } : null);
@@ -10896,23 +12213,21 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
 
     if (result?.type === 'combat') {
       const hasExplicitEnemy = Boolean(result?.enemy?.name || event?.enemy?.name);
-      if (!hasExplicitEnemy && typeof CORE.buildRoamingDigitalEncounterEnemy === 'function') {
-        const roamingEncounter = CORE.buildRoamingDigitalEncounterEnemy(player.location, {
-          limit: 3,
-          forceRelocate: true,
-          persist: true
-        });
-        if (roamingEncounter?.enemy && Math.random() < 0.78) {
-          result.enemy = roamingEncounter.enemy;
-          result.message = `${result.message || event.desc || ''}\n\n${roamingEncounter.hint || ''}`.trim();
-          result.npcId = roamingEncounter.npcId;
-          result.npcGroup = roamingEncounter.group;
+      if (!hasExplicitEnemy) {
+        const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+        const fallbackTarget = resolveLocationStoryBattleTarget(player, storyText, { allowLooseSelection: true });
+        if (fallbackTarget?.enemy) {
+          result.enemy = fallbackTarget.enemy;
+          result.npcId = fallbackTarget.npcId;
+          result.npcName = fallbackTarget.npcName;
+          const joinLine = `${result.message || event.desc || ''}`.trim();
+          result.message = `${joinLine}\n\n你在${player.location}與${fallbackTarget.npcName}正面衝突，戰鬥無可避免。`.trim();
           queueMemory({
             type: '遭遇',
-            content: `在${player.location}遭遇無名滲透者`,
-            outcome: `分組 ${roamingEncounter.group || '未知'}｜戰鬥即將開始`,
+            content: `在${player.location}對上${fallbackTarget.npcName}`,
+            outcome: '由當前場景人物直接引發衝突',
             importance: 2,
-            tags: ['digital_roamer', 'combat']
+            tags: ['combat', 'story_bound']
           });
         }
       }
@@ -11010,7 +12325,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       }
     }
 
-    const tradeGood = maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice);
+    const tradeGood = await maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice);
     if (tradeGood) {
       ECON.addTradeGood(player, tradeGood);
       result.loot = tradeGood;
@@ -11093,25 +12408,65 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   // 減少飽腹度
   player.stats.飽腹度 = Math.max(0, (player.stats.飽腹度 || 100) - Math.floor(Math.random() * 5 + 3));
   incrementPlayerStoryTurns(player, 1);
+  const recoveryTick = applyPetRecoveryTurnTick(pet, 1);
+  if (recoveryTick.changed) {
+    PET.savePet(pet);
+  }
+  if (recoveryTick.revived) {
+    result.petRevived = true;
+    queueMemory({
+      type: '恢復',
+      content: `${pet.name} 完成復活`,
+      outcome: '戰敗後經過 2 回合已回到可戰鬥狀態',
+      importance: 2,
+      tags: ['pet_revive', 'turn_based']
+    });
+  }
   incrementLocationArcTurns(player, 1);
   const islandProgressAfterTurn = syncCurrentIslandStoryProgress(player);
   const islandCompletedNow = Boolean(
     !Boolean(islandStateBefore?.completed) &&
     islandProgressAfterTurn?.completed
   );
+  const completedLocation = String(player.location || '').trim();
   const nextIslandHint = islandCompletedNow && ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
-    ? ISLAND_STORY.getNextPrimaryLocation(player.location)
+    ? ISLAND_STORY.getNextPrimaryLocation(completedLocation)
     : '';
   const nextPortalHubHint = nextIslandHint && typeof getLocationPortalHub === 'function'
     ? String(getLocationPortalHub(nextIslandHint) || '').trim()
     : '';
   if (islandCompletedNow) {
+    // 這個地區已完成：開放同區自由遊走（可不傳送）
+    unlockRegionFreeRoamByLocation(player, completedLocation);
+    // 收尾點直接把玩家帶到該區主傳送門旁，讓轉場更自然
+    const regionPortalHub = typeof getLocationPortalHub === 'function'
+      ? String(getLocationPortalHub(completedLocation) || '').trim()
+      : '';
+    let movedToPortalHub = false;
+    if (regionPortalHub && regionPortalHub !== completedLocation) {
+      const fromLocation = completedLocation;
+      player.location = regionPortalHub;
+      syncLocationArcLocation(player);
+      movedToPortalHub = true;
+      result.message = `${String(result.message || '').trim()}\n\n🧭 你沿著島內主線收束路徑前進，抵達 **${regionPortalHub}** 的主傳送門節點。`.trim();
+      queueMemory({
+        type: '移動',
+        content: `地區收尾後前往主傳送門`,
+        outcome: `${fromLocation} -> ${regionPortalHub}`,
+        importance: 2,
+        tags: ['travel', 'portal_hub', 'island_story']
+      });
+    }
+
     const completedLine = nextPortalHubHint
-      ? `📍 你已完成 **${player.location}** 的島內篇章。主傳送門已啟動，建議前往 **${nextPortalHubHint}** 再推進下一區。`
+      ? `📍 你已完成 **${completedLocation}** 的島內篇章。主傳送門已啟動，建議前往 **${nextPortalHubHint}** 再推進下一區。`
       : (nextIslandHint
-        ? `📍 你已完成 **${player.location}** 的島內篇章。主傳送門已啟動，可考慮前往 **${nextIslandHint}**，或留在本地自由探索。`
-        : `📍 你已完成 **${player.location}** 的島內篇章。主傳送門已啟動，你可以留在本地自由探索，或前往下一個地區。`);
+        ? `📍 你已完成 **${completedLocation}** 的島內篇章。主傳送門已啟動，可考慮前往 **${nextIslandHint}**，或留在本地自由探索。`
+        : `📍 你已完成 **${completedLocation}** 的島內篇章。主傳送門已啟動，你可以留在本地自由探索，或前往下一個地區。`);
     result.message = `${String(result.message || '').trim()}\n\n${completedLine}`.trim();
+    if (!movedToPortalHub && regionPortalHub) {
+      result.message = `${String(result.message || '').trim()}\n\n🧭 你已走到 **${regionPortalHub}** 主傳送門旁，可立即傳送，也可繼續在本區遊走。`.trim();
+    }
     player.portalMenuOpen = true;
     player.forcePortalChoice = true;
     if (nextPortalHubHint && ISLAND_STORY && typeof ISLAND_STORY.unlockLocation === 'function') {
@@ -11119,7 +12474,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     }
     queueMemory({
       type: '地區篇章',
-      content: `${player.location} 劇情已完成`,
+      content: `${completedLocation} 劇情已完成`,
       outcome: nextPortalHubHint
         ? `主傳送門啟動｜建議前往 ${nextPortalHubHint}`
         : (nextIslandHint ? `建議前往 ${nextIslandHint}` : '可自由探索或跨區'),
@@ -11165,6 +12520,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       player,
       result?.isMentorSpar ? { skipBeginnerDanger: true } : undefined
     );
+    publishBattleWorldEvent(player, enemy?.name || event?.npcName || '未知敵人', 'battle_start');
     if (shouldCountCombatForLocationStory(event, result, enemy)) {
       markCurrentLocationStoryBattleDone(player, {
         npcId: String(event?.npcId || result?.npcId || enemy?.id || '').trim(),
@@ -11398,6 +12754,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       if (result.soldCount > 0) rewardText.push(`🏪 已售出 ${result.soldCount} 件`);
       if (result.item && result.success) rewardText.push(`📦 取得 ${result.item}`);
       if (result.loot?.name) rewardText.push(`🧰 ${result.loot.name}（${result.loot.rarity || '普通'}）`);
+      if (result.petRevived) rewardText.push(`🐾 ${pet.name} 復活完成（2回合制）`);
       if (Number(result?.passivePetHeal || 0) > 0) rewardText.push(`🩹 ${pet.name} 行進恢復 +${Number(result.passivePetHeal)} HP`);
       if (Number.isFinite(Number(result.digitalRiskScore))) {
         const score = Number(result.digitalRiskScore);
@@ -11428,7 +12785,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         .setColor(getAlignmentColor(player.alignment))
         .setDescription(storyOnlyDesc)
         .addFields(
-          { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
+          { name: '🐾 寵物', value: `${pet.name} (${getPetElementDisplayName(pet.type)})`, inline: true },
           { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
           { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
         );
@@ -11498,7 +12855,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         .setColor(getAlignmentColor(player.alignment))
         .setDescription(description)
         .addFields(
-          { name: '🐾 寵物', value: `${pet.name} (${pet.type})`, inline: true },
+          { name: '🐾 寵物', value: `${pet.name} (${getPetElementDisplayName(pet.type)})`, inline: true },
           { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
           { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
         );
@@ -11851,13 +13208,23 @@ async function renderManualBattle(interaction, player, pet, roundMessage = '', o
 }
 
 async function showTrueGameOver(interaction, user, detailText, mode = 'update') {
+  const beforeReset = CORE.loadPlayer(user.id);
+  const enemyName = String(beforeReset?.battleState?.enemy?.name || '敵人').trim();
+  if (beforeReset) {
+    publishBattleWorldEvent(
+      beforeReset,
+      enemyName,
+      'player_down',
+      String(detailText || '').replace(/\s+/g, ' ').slice(0, 120)
+    );
+  }
   CORE.resetPlayerGame(user.id);
   const embed = new EmbedBuilder()
     .setTitle('💀 你戰死了...')
     .setColor(0xff0000)
     .setDescription(`${detailText}\n\n你的旅程就此結束...`);
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('choose_positive').setLabel('🔄 重新開始').setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId('restart_onboarding').setLabel('🔄 重新開始').setStyle(ButtonStyle.Danger)
   );
   await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
 }
@@ -11866,8 +13233,16 @@ async function showPetDefeatedTransition(interaction, player, pet, battleDetail 
   PET.markPetDefeated(pet, '戰鬥落敗');
   PET.savePet(pet);
 
-  const remain = PET.getPetRecoveryRemainingMs(pet);
+  const remainTurns = typeof PET.getPetRecoveryRemainingTurns === 'function'
+    ? Number(PET.getPetRecoveryRemainingTurns(pet) || 2)
+    : 2;
   const enemyName = player?.battleState?.enemy?.name || '敵人';
+  publishBattleWorldEvent(
+    player,
+    enemyName,
+    'pet_down',
+    `${pet?.name || '夥伴'}復活倒數 ${formatRecoveryTurnsShort(remainTurns)}`
+  );
   player.battleState.fighter = 'player';
   player.battleState.mode = null;
   player.battleState.fleeAttempts = 0;
@@ -11884,7 +13259,7 @@ async function showPetDefeatedTransition(interaction, player, pet, battleDetail 
     .setTitle('🐾 寵物陣亡')
     .setColor(0xff9900)
     .setDescription(
-      `${pet.name} 在戰鬥中倒下了，將於 **${formatDurationShort(remain)}** 後復活。\n\n` +
+      `${pet.name} 在戰鬥中倒下了，將於 **${formatRecoveryTurnsShort(remainTurns)}** 後復活。\n\n` +
       `你若還要硬戰，可以改由 **${player.name}** 親自上場（ATK 固定 10）。` +
       `${battleDetail ? `\n\n📜 戰況回放：\n${String(battleDetail).slice(0, 1200)}` : ''}`
     );
@@ -11967,6 +13342,7 @@ async function startManualBattle(interaction, user) {
       importance: 2,
       tags: ['battle', 'manual_start']
     });
+    publishBattleWorldEvent(player, player.battleState.enemy.name, 'battle_start');
   }
   ensureBattleEnergyState(player);
   CORE.savePlayer(player);
@@ -12014,6 +13390,7 @@ async function startAutoBattle(interaction, user) {
       importance: 2,
       tags: ['battle', 'ai_start']
     });
+    publishBattleWorldEvent(player, player.battleState.enemy.name, 'battle_start');
   }
   ensureBattleEnergyState(player);
   CORE.savePlayer(player);
@@ -12102,7 +13479,7 @@ async function startAutoBattle(interaction, user) {
       source: `AI 戰鬥擊敗 ${enemy.name}`,
       marketType: 'renaiss'
     });
-    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
@@ -12112,6 +13489,12 @@ async function startAutoBattle(interaction, user) {
       importance: 3,
       tags: ['battle', 'victory', 'ai']
     });
+    publishBattleWorldEvent(
+      player,
+      enemy.name,
+      'battle_win',
+      `AI戰鬥勝利｜+${Number(finalResult.gold || 0)} Rns`
+    );
     player.currentStory = composePostBattleStory(
       player,
       `🏆 你的 AI 戰鬥成功擊敗 **${enemy.name}**，獲得 ${finalResult.gold} Rns 代幣與「${battleLoot.name}」。`,
@@ -12190,6 +13573,7 @@ async function handleFight(interaction, user) {
     return;
   }
 
+  let createdBattle = false;
   if (!player.battleState?.enemy) {
     player.battleState = {
       enemy: BATTLE.createEnemy('哥布林', Math.max(1, player.level || 1)),
@@ -12204,12 +13588,16 @@ async function handleFight(interaction, user) {
       humanState: null,
       petState: null
     };
+    createdBattle = true;
   } else if (player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
     player.battleState.fighter = 'player';
     player.battleState.mode = 'manual';
     player.battleState.fleeAttempts = 0;
   }
   ensureBattleEnergyState(player);
+  if (createdBattle) {
+    publishBattleWorldEvent(player, player.battleState?.enemy?.name || '哥布林', 'battle_start');
+  }
 
   CORE.savePlayer(player);
   await renderManualBattle(interaction, player, pet);
@@ -12289,7 +13677,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       source: `手動戰鬥擊敗 ${enemy.name}`,
       marketType: 'renaiss'
     });
-    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
@@ -12299,6 +13687,12 @@ async function handleUseMove(interaction, user, moveIndex) {
       importance: 3,
       tags: ['battle', 'victory']
     });
+    publishBattleWorldEvent(
+      player,
+      enemy.name,
+      'battle_win',
+      `手動勝利｜+${Number(playerPhase.gold || 0)} Rns`
+    );
     player.currentStory = composePostBattleStory(
       player,
       `🏆 你擊敗了 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
@@ -12416,7 +13810,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       source: `手動戰鬥擊敗 ${enemy.name}`,
       marketType: 'renaiss'
     });
-    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
@@ -12426,6 +13820,12 @@ async function handleUseMove(interaction, user, moveIndex) {
       importance: 3,
       tags: ['battle', 'victory']
     });
+    publishBattleWorldEvent(
+      player,
+      enemy.name,
+      'battle_win',
+      `手動勝利｜+${Number(enemyPhase.gold || 0)} Rns`
+    );
     player.currentStory = composePostBattleStory(
       player,
       `🏆 你擊敗了 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
@@ -12555,7 +13955,7 @@ async function handleBattleWait(interaction, user) {
       source: `待機反擊擊敗 ${enemy.name}`,
       marketType: 'renaiss'
     });
-    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
@@ -12565,6 +13965,12 @@ async function handleBattleWait(interaction, user) {
       importance: 3,
       tags: ['battle', 'victory', 'wait_turn']
     });
+    publishBattleWorldEvent(
+      player,
+      enemy.name,
+      'battle_win',
+      `待機逆轉勝｜+${Number(playerPhase.gold || 0)} Rns`
+    );
     player.currentStory = composePostBattleStory(
       player,
       `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
@@ -12681,7 +14087,7 @@ async function handleBattleWait(interaction, user) {
       source: `待機反擊擊敗 ${enemy.name}`,
       marketType: 'renaiss'
     });
-    const battleLoot = ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50);
+    const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
@@ -12691,6 +14097,12 @@ async function handleBattleWait(interaction, user) {
       importance: 3,
       tags: ['battle', 'victory', 'wait_turn']
     });
+    publishBattleWorldEvent(
+      player,
+      enemy.name,
+      'battle_win',
+      `待機逆轉勝｜+${Number(enemyPhase.gold || 0)} Rns`
+    );
     player.currentStory = composePostBattleStory(
       player,
       `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
@@ -12818,6 +14230,12 @@ async function handleFlee(interaction, user, attemptNum) {
       importance: 2,
       tags: ['battle', 'flee_success']
     });
+    publishBattleWorldEvent(
+      player,
+      enemy.name,
+      'battle_flee',
+      `第${currentAttempt}次逃跑成功`
+    );
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
@@ -12853,6 +14271,12 @@ async function handleFlee(interaction, user, attemptNum) {
     importance: 1,
     tags: ['battle', 'flee_fail']
   });
+  publishBattleWorldEvent(
+    player,
+    enemy.name,
+    'battle_flee_fail',
+    `第${currentAttempt}次逃跑失敗`
+  );
   CORE.savePlayer(player);
 
   // 可以再試一次
