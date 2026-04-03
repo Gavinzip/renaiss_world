@@ -1534,11 +1534,9 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     4
   );
   
-  // 確保玩家名字是中文（如果全是英文就用冒險者）
+  // 保留玩家原始名稱，避免模型把玩家名誤當其他 NPC。
   let safePlayerName = playerName.trim();
-  if (/^[a-zA-Z0-9]+$/.test(safePlayerName)) {
-    safePlayerName = '冒險者';
-  }
+  if (!safePlayerName) safePlayerName = '冒險者';
   
   // 根據玩家語言設定決定輸出語言
   const playerLang = player.language || 'zh-TW';
@@ -1651,6 +1649,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 25. 若【主線鋪陳保留】有內容，至少延續其中 1 個重點，但只在相關段落自然呼應，不要每句都硬提
 26. 若「島嶼劇情狀態」顯示進行中，優先推進該地在地衝突與線索，不要跳過島內收束直接跨區
 27. 若「島嶼劇情狀態」顯示已完成，移除硬引導語氣，改為開放世界敘事
+28. 「玩家：${safePlayerName}」是主角唯一名稱，禁止把同名當成其他 NPC 或通訊器另一端人物；若要新增角色，必須使用不同名字
 
 直接開始講：`;
 
@@ -1828,6 +1827,7 @@ ${anchorText}
 12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
 13. 若島嶼劇情進行中，至少 2 個選項要明確推進島內主題（來自島內引導段）
 14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例
+15. 玩家名稱「${playerName}」只能指主角本人；禁止再創建同名 NPC
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
