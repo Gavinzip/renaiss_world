@@ -16,5 +16,5 @@ then
   python3 -m pip install --user Pillow
 fi
 
-nohup node bot.js >> bot.log 2>&1 &
-echo "Bot started with PID $!"
+echo "[bootstrap] dependencies ready, starting bot..."
+exec node bot.js
