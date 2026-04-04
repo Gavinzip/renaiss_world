@@ -1096,6 +1096,7 @@ const PET_MOVE_LOADOUT_LIMIT = Math.max(1, Math.min(5, Number(process.env.PET_MO
 const SHOP_SELL_SELECT_LIMIT = 25;
 const SHOP_HAGGLE_SELECT_LIMIT = 25;
 const SHOP_HAGGLE_BULK_SELECT_LIMIT = 20;
+const MARKET_LIST_PAGE_SIZE = Math.max(5, Math.min(20, Number(process.env.MARKET_LIST_PAGE_SIZE || 20)));
 const SHOP_HAGGLE_OFFER_TTL_MS = 10 * 60 * 1000;
 const SHOP_HAGGLE_BLOCKED_ITEMS = new Set(['乾糧一包', '水囊']);
 const NPC_DIALOGUE_LOG_LIMIT = Math.max(20, Math.min(200, Number(process.env.NPC_DIALOGUE_LOG_LIMIT || 80)));
@@ -1439,11 +1440,12 @@ function buildChoiceOptionsText(choices = [], context = {}) {
   return optionsText;
 }
 
-function buildEventChoiceButtons(choices = []) {
+function buildEventChoiceButtons(choices = [], ownerId = '') {
+  const safeOwnerId = String(ownerId || '').trim();
   return choices.slice(0, CHOICE_DISPLAY_COUNT).map((choice, i) => {
     const label = (formatChoiceText(choice) || `選項${i + 1}`).substring(0, 20).trim();
     return new ButtonBuilder()
-      .setCustomId(`event_${i}`)
+      .setCustomId(safeOwnerId ? `event_${i}_${safeOwnerId}` : `event_${i}`)
       .setLabel(label || `${i + 1}`)
       .setStyle(ButtonStyle.Primary);
   });
@@ -7961,6 +7963,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'show_moves' ||
       customId.startsWith('set_main_pet_') ||
       customId.startsWith('alloc_hp_');
+    const isInventoryFlowButton =
+      customId === 'show_inventory' ||
+      customId.startsWith('inv_page_') ||
+      customId === 'show_codex' ||
+      customId === 'show_codex_npc' ||
+      customId === 'show_codex_skill' ||
+      customId === 'show_finance_ledger' ||
+      customId === 'show_memory_audit' ||
+      customId.startsWith('pmkt_');
+    const isStoryEventButton = customId.startsWith('event_');
     // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
@@ -7968,7 +7980,14 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'open_friend_add_modal' ||
       customId === 'sync_wallet_now' ||
       customId.startsWith('claim_new_pet_element_');
-    if (!isMapFlowButton && !isModalLauncherButton && !isShopFlowButton && !isPetFlowButton) {
+    if (
+      !isMapFlowButton &&
+      !isModalLauncherButton &&
+      !isShopFlowButton &&
+      !isPetFlowButton &&
+      !isInventoryFlowButton &&
+      !isStoryEventButton
+    ) {
       await lockPressedButtonImmediately(interaction);
     }
   }
@@ -8858,6 +8877,22 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 事件按鈕 =====
   if (customId.startsWith('event_')) {
+    const match = String(customId || '').match(/^event_(\d+)(?:_(\d+))?$/);
+    if (!match) {
+      await interaction.reply({ content: '⚠️ 選項格式錯誤，請點最新選項。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    const idx = Number.parseInt(match[1], 10);
+    if (Number.isNaN(idx)) {
+      await interaction.reply({ content: '⚠️ 選項索引錯誤，請重試。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    const ownerIdFromButton = String(match[2] || '').trim();
+    if (ownerIdFromButton && ownerIdFromButton !== String(user.id || '')) {
+      await interaction.reply({ content: '⚠️ 這不是你的選項按鈕。', ephemeral: true }).catch(() => {});
+      return;
+    }
+
     const player = CORE.loadPlayer(user.id);
     if (!player) {
       await interaction.reply({ content: '⚠️ 找不到角色資料，請使用 /start 重新開始', ephemeral: true });
@@ -8877,7 +8912,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
       await interaction.reply({ content: '⚠️ 這個選項已過期，請點擊最新訊息中的選項。', ephemeral: true });
       return;
     }
-    const idx = parseInt(customId.split('_')[1]);
     await handleEvent(interaction, user, idx);
     return;
   }
@@ -8954,7 +8988,14 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 顯示行囊 =====
   if (customId === 'show_inventory') {
-    await showInventory(interaction, user);
+    await showInventory(interaction, user, 0);
+    return;
+  }
+
+  if (customId.startsWith('inv_page_prev_') || customId.startsWith('inv_page_next_')) {
+    const currentPage = Math.max(0, Number(String(customId).split('_').pop() || 0));
+    const nextPage = customId.startsWith('inv_page_prev_') ? currentPage - 1 : currentPage + 1;
+    await showInventory(interaction, user, nextPage);
     return;
   }
 
@@ -9026,14 +9067,14 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
 
   if (customId.startsWith('pmkt_view_sell_')) {
-    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
-    await showPlayerMarketListings(interaction, user, marketType);
+    const parsed = parseMarketAndPageFromCustomId(customId, 'pmkt_view_sell_', 'renaiss');
+    await showPlayerMarketListings(interaction, user, parsed.marketType, parsed.page);
     return;
   }
 
   if (customId.startsWith('pmkt_my_')) {
-    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
-    await showMyMarketListings(interaction, user, marketType);
+    const parsed = parseMarketAndPageFromCustomId(customId, 'pmkt_my_', 'renaiss');
+    await showMyMarketListings(interaction, user, parsed.marketType, parsed.page);
     return;
   }
 
@@ -9434,8 +9475,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
 
   if (customId.startsWith('shop_buy_')) {
-    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
-    await showWorldShopBuyPanel(interaction, user, marketType);
+    const parsed = parseMarketAndPageFromCustomId(customId, 'shop_buy_', 'renaiss');
+    await showWorldShopBuyPanel(interaction, user, parsed.marketType, '', parsed.page);
     return;
   }
 
@@ -10327,7 +10368,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         { name: '📊 等級', value: String(player.level), inline: true }
       );
     
-    const buttons = buildEventChoiceButtons(choices);
+    const buttons = buildEventChoiceButtons(choices, player.id);
     appendMainMenuUtilityButtons(buttons, player);
     const components = [];
     for (let i = 0; i < buttons.length; i += 5) {
@@ -10585,7 +10626,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
 
       const newOptionsText = buildChoiceOptionsText(normalizedNewChoices, { player, pet });
 
-      const newButtons = buildEventChoiceButtons(normalizedNewChoices);
+      const newButtons = buildEventChoiceButtons(normalizedNewChoices, player.id);
       appendMainMenuUtilityButtons(newButtons, player);
 
       const newComponents = [];
@@ -11534,6 +11575,79 @@ function parseMarketTypeFromCustomId(customId = '', fallback = 'renaiss') {
   return fallback === 'digital' ? 'digital' : 'renaiss';
 }
 
+function parseMarketAndPageFromCustomId(customId = '', prefix = '', fallbackMarket = 'renaiss') {
+  const raw = String(customId || '');
+  const body = prefix && raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
+  const matched = body.match(/^(renaiss|digital)(?:_(\d+))?$/i);
+  if (!matched) {
+    return { marketType: fallbackMarket === 'digital' ? 'digital' : 'renaiss', page: 0 };
+  }
+  const marketType = String(matched[1] || fallbackMarket).toLowerCase() === 'digital' ? 'digital' : 'renaiss';
+  const page = Math.max(0, Number(matched[2] || 0));
+  return { marketType, page };
+}
+
+function paginateList(list = [], page = 0, pageSize = 6) {
+  const source = Array.isArray(list) ? list : [];
+  const size = Math.max(1, Number(pageSize || 6));
+  const totalPages = Math.max(1, Math.ceil(source.length / size));
+  const safePage = Math.max(0, Math.min(totalPages - 1, Number(page || 0)));
+  const start = safePage * size;
+  return {
+    items: source.slice(start, start + size),
+    page: safePage,
+    totalPages,
+    total: source.length,
+    start
+  };
+}
+
+function buildPagedFieldChunks(lines = [], maxLen = 1000, emptyText = '（空）') {
+  const entries = Array.isArray(lines)
+    ? lines.map((line) => String(line ?? '')).filter((line) => line.length > 0)
+    : [];
+  if (entries.length <= 0) return [String(emptyText || '（空）')];
+
+  const chunks = [];
+  let current = '';
+  const hardLimit = Math.max(120, Number(maxLen || 1000));
+
+  const appendLine = (line) => {
+    if (!line) return;
+    if (!current) {
+      current = line;
+      return;
+    }
+    if (current.length + 1 + line.length <= hardLimit) {
+      current += `\n${line}`;
+      return;
+    }
+    chunks.push(current);
+    current = line;
+  };
+
+  for (const rawLine of entries) {
+    if (rawLine.length <= hardLimit) {
+      appendLine(rawLine);
+      continue;
+    }
+    // 單行過長時切段，避免超過 Discord 欄位上限
+    let remain = rawLine;
+    let seg = 0;
+    while (remain.length > 0) {
+      const room = Math.max(24, hardLimit - (seg > 0 ? 3 : 0));
+      const part = remain.slice(0, room);
+      const line = seg > 0 ? `↪ ${part}` : part;
+      appendLine(line);
+      remain = remain.slice(room);
+      seg += 1;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks.length > 0 ? chunks : [String(emptyText || '（空）')];
+}
+
 function buyShopCrystal(player, pet, marketType = 'renaiss', crystalType = 'heal') {
   const safeType = crystalType === 'energy' ? 'energy' : 'heal';
   const isDigital = marketType === 'digital';
@@ -11644,7 +11758,8 @@ function buildMarketListingLine(listing = {}, idx = 0) {
   const owner = String(listing?.ownerName || '匿名玩家');
   const note = String(listing?.note || '').trim();
   const noteText = note ? `｜備註:${note}` : '';
-  return `${idx + 1}. ${listing.itemName} x${qty}｜單價 ${unitPrice}｜總價 ${total}｜掛單:${owner}${noteText}`;
+  const line = `${idx + 1}. ${listing.itemName} x${qty}｜單價 ${unitPrice}｜總價 ${total}｜掛單:${owner}${noteText}`;
+  return line.length > 180 ? `${line.slice(0, 177)}...` : line;
 }
 
 async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', notice = '') {
@@ -11687,7 +11802,7 @@ async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', n
   await interaction.update({ embeds: [embed], components: [row1, row2] });
 }
 
-async function showPlayerMarketListings(interaction, user, marketType = 'renaiss') {
+async function showPlayerMarketListings(interaction, user, marketType = 'renaiss', page = 0) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
@@ -11695,21 +11810,23 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const listings = ECON.getMarketListingsView({
+  const allListings = ECON.getMarketListingsView({
     marketType: safeMarket,
     type: 'sell',
     excludeOwnerId: user.id,
-    limit: 6
+    limit: 500
   });
+  const pager = paginateList(allListings, page, MARKET_LIST_PAGE_SIZE);
+  const listings = pager.items;
   const title = '🛒 可購買賣單';
   const listText = listings.length > 0
-    ? listings.map((l, i) => buildMarketListingLine(l, i)).join('\n')
+    ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
     : '（目前沒有可成交掛單）';
 
   const embed = new EmbedBuilder()
     .setTitle(`${title}｜${getMarketTypeLabel(safeMarket)}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
-    .setDescription(listText);
+    .setDescription(`${listText}\n\n頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}`);
 
   const rows = [];
   if (listings.length > 0) {
@@ -11732,6 +11849,18 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
     rows.push(new ActionRowBuilder().addComponents(select));
   }
   rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`pmkt_view_sell_${safeMarket}_${Math.max(0, pager.page - 1)}`)
+      .setLabel('⬅️ 上一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pager.page <= 0),
+    new ButtonBuilder()
+      .setCustomId(`pmkt_view_sell_${safeMarket}_${Math.min(pager.totalPages - 1, pager.page + 1)}`)
+      .setLabel('➡️ 下一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pager.page >= pager.totalPages - 1)
+  ));
+  rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回鑑價站').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
   ));
@@ -11739,7 +11868,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
   await interaction.update({ embeds: [embed], components: rows });
 }
 
-async function showMyMarketListings(interaction, user, marketType = 'renaiss') {
+async function showMyMarketListings(interaction, user, marketType = 'renaiss', page = 0) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
@@ -11747,16 +11876,18 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss') {
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const mine = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 6 });
+  const allMine = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 500 });
+  const pager = paginateList(allMine, page, MARKET_LIST_PAGE_SIZE);
+  const mine = pager.items;
 
   const text = mine.length > 0
-    ? mine.map((l, i) => `${i + 1}. ${l.itemName} x${l.quantity}｜單價 ${l.unitPrice}｜總價 ${l.totalPrice}`).join('\n')
+    ? mine.map((l, i) => `${pager.start + i + 1}. ${l.itemName} x${l.quantity}｜單價 ${l.unitPrice}｜總價 ${l.totalPrice}`).join('\n')
     : '（你目前沒有掛單）';
 
   const embed = new EmbedBuilder()
     .setTitle(`📌 我的掛單｜${getMarketTypeLabel(safeMarket)}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
-    .setDescription(text);
+    .setDescription(`${text}\n\n頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}`);
 
   const cancelButtons = mine.slice(0, 3).map((listing) =>
     new ButtonBuilder()
@@ -11767,6 +11898,18 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss') {
 
   const rows = [];
   if (cancelButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(cancelButtons));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`pmkt_my_${safeMarket}_${Math.max(0, pager.page - 1)}`)
+      .setLabel('⬅️ 上一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pager.page <= 0),
+    new ButtonBuilder()
+      .setCustomId(`pmkt_my_${safeMarket}_${Math.min(pager.totalPages - 1, pager.page + 1)}`)
+      .setLabel('➡️ 下一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pager.page >= pager.totalPages - 1)
+  ));
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`pmkt_open_${safeMarket}`).setLabel('返回鑑價站').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Secondary)
@@ -12759,7 +12902,7 @@ function leaveShopSession(player) {
   delete player.shopSession;
 }
 
-async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', notice = '') {
+async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
     await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
@@ -12767,14 +12910,16 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const listings = ECON.getMarketListingsView({
+  const allListings = ECON.getMarketListingsView({
     marketType: safeMarket,
     type: 'sell',
     excludeOwnerId: user.id,
-    limit: 6
+    limit: 500
   });
+  const pager = paginateList(allListings, page, MARKET_LIST_PAGE_SIZE);
+  const listings = pager.items;
   const listText = listings.length > 0
-    ? listings.map((l, i) => buildMarketListingLine(l, i)).join('\n')
+    ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
     : '（目前沒有可購買商品）';
 
   const embed = new EmbedBuilder()
@@ -12783,6 +12928,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
       `${listText}\n\n` +
+      `頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}\n` +
       `回血水晶：${SHOP_HEAL_CRYSTAL_COST} Rns（恢復氣血）\n` +
       `回能水晶：${SHOP_ENERGY_CRYSTAL_COST} Rns（恢復能量）\n` +
       `加成點數：花費 200 Rns 可獲得 +1 點。`
@@ -12812,7 +12958,19 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`shop_buy_heal_crystal_${safeMarket}`).setLabel(`🩸 回血水晶(${SHOP_HEAL_CRYSTAL_COST})`).setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`shop_buy_energy_crystal_${safeMarket}`).setLabel(`⚡ 回能水晶(${SHOP_ENERGY_CRYSTAL_COST})`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary)
+  ));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`shop_buy_${safeMarket}_${Math.max(0, pager.page - 1)}`)
+      .setLabel('⬅️ 上一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pager.page <= 0),
+    new ButtonBuilder()
+      .setCustomId(`shop_buy_${safeMarket}_${Math.min(pager.totalPages - 1, pager.page + 1)}`)
+      .setLabel('➡️ 下一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(pager.page >= pager.totalPages - 1),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   ));
   await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
@@ -12859,9 +13017,8 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
 }
 
 // ============== 行囊/背包 ==============
-async function showInventory(interaction, user) {
+async function showInventory(interaction, user, page = 0) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
   const uiLang = getPlayerUILang(player);
   
   if (!player) {
@@ -12870,16 +13027,25 @@ async function showInventory(interaction, user) {
   }
   ECON.ensurePlayerEconomy(player);
   
-  // 顯示物品
-  const items = player.inventory || [];
-  const herbs = player.herbs || [];
-  const tradeGoods = player.tradeGoods || [];
-  
-  const itemsList = items.length > 0 ? items.map((item, i) => `${i+1}. ${item}`).join('\n') : '（空）';
-  const herbsList = herbs.length > 0 ? herbs.map((h, i) => `${i+1}. ${h}`).join('\n') : '（空）';
-  const goodsList = tradeGoods.length > 0
-    ? tradeGoods.slice(0, 10).map((g, i) => `${i + 1}. ${g.name}（${g.rarity || '普通'}｜${Number(g.value || 0)} Rns 代幣）`).join('\n')
-    : '（空）';
+  // 顯示物品（分頁，不截斷）
+  const items = Array.isArray(player.inventory) ? player.inventory : [];
+  const herbs = Array.isArray(player.herbs) ? player.herbs : [];
+  const tradeGoods = Array.isArray(player.tradeGoods) ? player.tradeGoods : [];
+
+  const itemLines = items.map((item, i) => `${i + 1}. ${String(item || '')}`);
+  const herbLines = herbs.map((h, i) => `${i + 1}. ${String(h || '')}`);
+  const goodLines = tradeGoods.map((g, i) =>
+    `${i + 1}. ${String(g?.name || '未命名素材')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns 代幣）`
+  );
+
+  const itemPages = buildPagedFieldChunks(itemLines, 1000, '（空）');
+  const herbPages = buildPagedFieldChunks(herbLines, 1000, '（空）');
+  const goodsPages = buildPagedFieldChunks(goodLines, 1000, '（空）');
+  const totalPages = Math.max(itemPages.length, herbPages.length, goodsPages.length, 1);
+  const safePage = Math.max(0, Math.min(totalPages - 1, Number(page || 0)));
+  const itemsList = itemPages[Math.min(safePage, itemPages.length - 1)] || '（空）';
+  const herbsList = herbPages[Math.min(safePage, herbPages.length - 1)] || '（空）';
+  const goodsList = goodsPages[Math.min(safePage, goodsPages.length - 1)] || '（空）';
   
   const embed = new EmbedBuilder()
     .setTitle(`🎒 ${player.name} 的行囊`)
@@ -12889,14 +13055,26 @@ async function showInventory(interaction, user) {
       { name: '📦 物品', value: itemsList, inline: true },
       { name: '🌿 草藥', value: herbsList, inline: true }
     )
-    .addFields({ name: '🧰 可售素材（前10）', value: goodsList, inline: false })
+    .addFields({ name: `🧰 可售素材（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
     .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
-  
-  const row = new ActionRowBuilder().addComponents(
+
+  const rowPage = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`inv_page_prev_${safePage}`)
+      .setLabel('⬅️ 上一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage <= 0),
+    new ButtonBuilder()
+      .setCustomId(`inv_page_next_${safePage}`)
+      .setLabel('➡️ 下一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage >= totalPages - 1)
+  );
+  const rowMain = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Primary)
   );
-  
-  await interaction.update({ embeds: [embed], components: [row] });
+
+  await interaction.update({ embeds: [embed], components: [rowPage, rowMain] });
 }
 
 function getCodexLabels(uiLang = 'zh-TW') {
@@ -12983,15 +13161,44 @@ function collectPlayerCodexData(player) {
 
   const allMoves = getAllPetSkillMoves();
   const allMoveMap = new Map();
+  const allMoveNameMap = new Map();
   for (const move of allMoves) {
     const id = String(move?.id || '').trim();
     if (!id || allMoveMap.has(id)) continue;
     allMoveMap.set(id, move);
+    const moveName = String(move?.name || '').trim();
+    if (moveName && !allMoveNameMap.has(moveName)) {
+      allMoveNameMap.set(moveName, move);
+    }
   }
+
   const totalSkills = allMoveMap.size;
   const drawnKnownEntries = drawEntries.filter((entry) => allMoveMap.has(String(entry?.id || '').trim()));
   const drawnIds = new Set(drawnKnownEntries.map((entry) => String(entry.id || '').trim()).filter(Boolean));
-  const collectedSkills = drawnIds.size;
+
+  const ownedPets = getPlayerOwnedPets(String(player?.id || '').trim());
+  const learnedMoveIds = new Set();
+  for (const pet of ownedPets) {
+    const moves = Array.isArray(pet?.moves) ? pet.moves : [];
+    for (const m of moves) {
+      const id = String(m?.id || '').trim();
+      if (id && allMoveMap.has(id)) learnedMoveIds.add(id);
+    }
+  }
+
+  const chipMoveIds = new Map();
+  const inventory = Array.isArray(player?.inventory) ? player.inventory : [];
+  for (const raw of inventory) {
+    const moveName = extractSkillChipMoveName(raw);
+    if (!moveName) continue;
+    const move = allMoveNameMap.get(String(moveName || '').trim());
+    const moveId = String(move?.id || '').trim();
+    if (!moveId || !allMoveMap.has(moveId)) continue;
+    chipMoveIds.set(moveId, (chipMoveIds.get(moveId) || 0) + 1);
+  }
+
+  const collectedIds = new Set([...drawnIds, ...learnedMoveIds, ...chipMoveIds.keys()]);
+  const collectedSkills = collectedIds.size;
   const remainingSkills = Math.max(0, totalSkills - collectedSkills);
   const totalDrawCount = Math.max(
     0,
@@ -12999,17 +13206,52 @@ function collectPlayerCodexData(player) {
     drawEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.count || 0)), 0)
   );
 
+  const drawCountById = new Map();
+  for (const entry of drawnKnownEntries) {
+    const id = String(entry?.id || '').trim();
+    if (!id) continue;
+    drawCountById.set(id, Math.max(0, Number(entry.count || 0)));
+  }
+
+  const collectedSkillEntries = Array.from(collectedIds).map((moveId) => {
+    const move = allMoveMap.get(moveId) || {};
+    const drawCount = drawCountById.get(moveId) || 0;
+    const chipCount = chipMoveIds.get(moveId) || 0;
+    const learned = learnedMoveIds.has(moveId);
+    const drawEntry = drawnKnownEntries.find((entry) => String(entry?.id || '').trim() === moveId);
+    const lastAt = Math.max(
+      0,
+      Number(drawEntry?.lastAt || 0),
+      learned ? Date.now() : 0
+    );
+    return {
+      id: moveId,
+      name: String(move?.name || drawEntry?.name || moveId),
+      tier: Math.max(1, Math.min(3, Number(move?.tier || drawEntry?.tier || 1))),
+      drawCount,
+      chipCount,
+      learned,
+      lastAt
+    };
+  }).sort((a, b) => {
+    const byTime = Number(b.lastAt || 0) - Number(a.lastAt || 0);
+    if (byTime !== 0) return byTime;
+    const byTier = Number(b.tier || 1) - Number(a.tier || 1);
+    if (byTier !== 0) return byTier;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
+  });
+
   const uniqueTier = { 1: 0, 2: 0, 3: 0 };
   const pullTier = { 1: 0, 2: 0, 3: 0 };
-  for (const entry of drawnKnownEntries) {
+  for (const entry of collectedSkillEntries) {
     const tier = Math.max(1, Math.min(3, Number(entry.tier || 1)));
     uniqueTier[tier] += 1;
-    pullTier[tier] += Math.max(0, Number(entry.count || 0));
+    pullTier[tier] += Math.max(0, Number(entry.drawCount || 0));
   }
 
   const remainingTier = { 1: 0, 2: 0, 3: 0 };
   for (const [moveId, move] of allMoveMap.entries()) {
-    if (drawnIds.has(moveId)) continue;
+    if (collectedIds.has(moveId)) continue;
     const tier = Math.max(1, Math.min(3, Number(move?.tier || 1)));
     remainingTier[tier] += 1;
   }
@@ -13018,6 +13260,7 @@ function collectPlayerCodexData(player) {
     codex,
     npcEntries,
     drawEntries: drawnKnownEntries,
+    skillEntries: collectedSkillEntries,
     totalNpc,
     encounteredNpc,
     remainingNpc,
@@ -13064,7 +13307,8 @@ async function showPlayerCodex(interaction, user) {
         value:
           `已收集：**${data.collectedSkills}/${data.totalSkills || 0}**\n` +
           `${labels.unknownCount}：**${data.remainingSkills}**（${labels.canDraw}）\n` +
-          `抽取總次數：**${data.totalDrawCount}**`,
+          `抽取總次數：**${data.totalDrawCount}**\n` +
+          `（含：抽取 / 寵物已學 / 背包技能晶片）`,
         inline: true
       }
     );
@@ -13133,10 +13377,15 @@ async function showSkillCodex(interaction, user) {
   const labels = getCodexLabels(uiLang);
   const data = collectPlayerCodexData(player);
 
-  const skillLines = data.drawEntries.slice(0, 20).map((entry, idx) => {
+  const skillLines = data.skillEntries.slice(0, 30).map((entry, idx) => {
     const tier = Math.max(1, Math.min(3, Number(entry.tier || 1)));
     const tierEmoji = tier === 3 ? '🔮' : tier === 2 ? '💠' : '⚪';
-    return `${idx + 1}. ${tierEmoji} ${entry.name} ×${Math.max(1, Number(entry.count || 1))}`;
+    const tags = [];
+    if (Number(entry.drawCount || 0) > 0) tags.push(`抽取x${Number(entry.drawCount || 0)}`);
+    if (Number(entry.chipCount || 0) > 0) tags.push(`晶片x${Number(entry.chipCount || 0)}`);
+    if (entry.learned) tags.push('寵物已學');
+    const source = tags.length > 0 ? `｜${tags.join('・')}` : '';
+    return `${idx + 1}. ${tierEmoji} ${entry.name}${source}`;
   });
 
   const embed = new EmbedBuilder()
@@ -13180,6 +13429,10 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       await interaction.followUp({ content, ephemeral: true }).catch(() => {});
       return;
     }
+    if (interaction?.isButton && interaction.isButton()) {
+      await interaction.reply({ content, ephemeral: true }).catch(() => {});
+      return;
+    }
     if (interaction?.isModalSubmit && interaction.isModalSubmit()) {
       if (interaction.deferred || interaction.replied) {
         await interaction.followUp({ content, ephemeral: true }).catch(() => {});
@@ -13188,9 +13441,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       }
       return;
     }
-    await interaction.update({ content, components: [] }).catch(async () => {
-      await interaction.reply({ content, ephemeral: true }).catch(() => {});
-    });
+    await interaction.reply({ content, ephemeral: true }).catch(() => {});
   };
   
   if (!player || !pet) {
@@ -14260,7 +14511,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
           { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
         );
 
-      const buttons = buildEventChoiceButtons(newChoices);
+      const buttons = buildEventChoiceButtons(newChoices, player.id);
       appendMainMenuUtilityButtons(buttons, player);
 
       const components = [];
