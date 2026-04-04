@@ -289,9 +289,13 @@ function ensureNpcCombatProfile(npc = null, index = 0) {
       return id;
     }
     const bucket = tierBuckets[tier] || [];
-    while (bucket.length > 0) {
+    // 防止 bucket 內全都已被 used 時進入無限迴圈
+    let attempts = 0;
+    const maxAttempts = bucket.length;
+    while (bucket.length > 0 && attempts < maxAttempts) {
       const id = bucket[cursor % bucket.length];
       cursor += 1;
+      attempts += 1;
       if (!id || used.has(id)) continue;
       used.add(id);
       return id;
@@ -315,9 +319,13 @@ function ensureNpcCombatProfile(npc = null, index = 0) {
     if (picked) chosen.push(picked);
   }
 
-  while (chosen.length < 4 && fallbackIds.length > 0) {
+  // 防止 fallbackIds 全部都已 used 時進入無限迴圈
+  let fillAttempts = 0;
+  const maxFillAttempts = fallbackIds.length;
+  while (chosen.length < 4 && fallbackIds.length > 0 && fillAttempts < maxFillAttempts) {
     const id = fallbackIds[cursor % fallbackIds.length];
     cursor += 1;
+    fillAttempts += 1;
     if (!id || used.has(id)) continue;
     used.add(id);
     chosen.push(id);
