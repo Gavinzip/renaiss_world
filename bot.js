@@ -13421,9 +13421,6 @@ async function showSkillCodex(interaction, user) {
 // ============== 處理事件 ==============
 async function handleEvent(interaction, user, eventIndex, options = {}) {
   const player = CORE.loadPlayer(user.id);
-  const fallbackPet = PET.loadPet(user.id);
-  const petResolved = resolvePlayerMainPet(player, { fallbackPet });
-  const pet = petResolved?.pet || fallbackPet;
   const respondError = async (content) => {
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp({ content, ephemeral: true }).catch(() => {});
@@ -13443,50 +13440,23 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     }
     await interaction.reply({ content, ephemeral: true }).catch(() => {});
   };
-  
-  if (!player || !pet) {
+
+  if (!player) {
     await respondError('❌ 請重新開始！');
     return;
   }
-  if (petResolved?.changed) {
-    CORE.savePlayer(player);
-  }
-  if (ensurePlayerGenerationSchema(player)) {
-    CORE.savePlayer(player);
-  }
-  if (recordNearbyNpcEncounters(player, 8)) {
-    CORE.savePlayer(player);
-  }
-  ECON.ensurePlayerEconomy(player);
-  if (!Array.isArray(player.herbs)) player.herbs = [];
-  if (!Array.isArray(player.inventory)) player.inventory = [];
-  const worldDay = Number(CORE.getWorld()?.day || 1);
 
-  MAIN_STORY.ensureMainStoryState(player);
-  ensurePlayerIslandState(player);
-  const islandLocationBefore = String(player.location || '').trim();
-  const islandStateBefore = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
-    ? ISLAND_STORY.getIslandStoryState(player, islandLocationBefore)
-    : null;
-  
   const choices = player.eventChoices || [];
   const event = choices[eventIndex];
   const wishTextFromModal = String(options?.wishText || '').trim();
   const customActionTextFromModal = String(options?.customActionText || '').trim();
-  
+
   if (!event) {
     await respondError('❌ 事件不存在！');
     return;
   }
-  if (event?.enemy?.id) {
-    const npc = typeof CORE.getAgentFullInfo === 'function'
-      ? CORE.getAgentFullInfo(event.enemy.id)
-      : null;
-    if (npc && recordNpcEncounter(player, npc, player.location)) {
-      CORE.savePlayer(player);
-    }
-  }
 
+  // Modal 類事件先快速回應，避免先做重操作導致 3 秒超時
   if (event.action === 'wish_pool' && !wishTextFromModal) {
     const modal = new ModalBuilder()
       .setCustomId(`wish_pool_submit_${eventIndex}`)
@@ -13523,9 +13493,47 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   }
 
-  // 事件按鈕一律先即時確認，避免 Discord 顯示「互動失敗」
+  // 一般事件按鈕先 ACK，避免 Discord 顯示「此交互失敗」
   if (interaction?.isButton && interaction.isButton() && !interaction.deferred && !interaction.replied) {
     await interaction.deferUpdate().catch(() => {});
+  }
+
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
+  if (!pet) {
+    await respondError('❌ 請重新開始！');
+    return;
+  }
+
+  if (petResolved?.changed) {
+    CORE.savePlayer(player);
+  }
+  if (ensurePlayerGenerationSchema(player)) {
+    CORE.savePlayer(player);
+  }
+  if (recordNearbyNpcEncounters(player, 8)) {
+    CORE.savePlayer(player);
+  }
+  ECON.ensurePlayerEconomy(player);
+  if (!Array.isArray(player.herbs)) player.herbs = [];
+  if (!Array.isArray(player.inventory)) player.inventory = [];
+  const worldDay = Number(CORE.getWorld()?.day || 1);
+
+  MAIN_STORY.ensureMainStoryState(player);
+  ensurePlayerIslandState(player);
+  const islandLocationBefore = String(player.location || '').trim();
+  const islandStateBefore = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, islandLocationBefore)
+    : null;
+  
+  if (event?.enemy?.id) {
+    const npc = typeof CORE.getAgentFullInfo === 'function'
+      ? CORE.getAgentFullInfo(event.enemy.id)
+      : null;
+    if (npc && recordNpcEncounter(player, npc, player.location)) {
+      CORE.savePlayer(player);
+    }
   }
 
   const playerId = player?.id || user.id;
