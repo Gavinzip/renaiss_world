@@ -73,7 +73,7 @@ const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(10000, Number(process.env.SYSTEM_CHOIC
 const CHOICE_MAX_TOKENS = Math.max(700, Number(process.env.CHOICE_MAX_TOKENS || 3000));
 const CHOICE_OUTPUT_COUNT = 5;
 const BATTLE_CADENCE_TURNS = Math.max(3, Math.min(10, Number(process.env.BATTLE_CADENCE_TURNS || 5)));
-const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 3)));
+const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 1)));
 const RIVAL_NAME_REVEAL_ACT = Math.max(1, Math.min(6, Number(process.env.RIVAL_NAME_REVEAL_ACT || 3)));
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(16, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 10)));
@@ -431,7 +431,13 @@ async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', locati
     mentor_spar:
       `用途：玩家在 ${location || '目前位置'} 遇到正派名師，主動提出友誼賽求指導。\n` +
       '限制：要清楚描述這是「友誼賽」，不是生死戰；語氣尊重且有學習目的。\n' +
-      '固定標籤：tag 必須是 [🤝友誼賽]'
+      '固定標籤：tag 必須是 [🤝友誼賽]',
+    storage_heist:
+      `用途：故事中有人攜帶封存艙，玩家起心動念要直接搶奪。\n` +
+      `限制：必須明確是針對「對方手上的封存艙」採取行動；語句要貼合 ${location || '當前場景'}。\n` +
+      '限制：封存艙是便攜小型艙體（約小背包大小），禁止寫成巨大艙體。\n' +
+      '限制：這是高風險衝突，choice 句尾必須附上「（會進入戰鬥）」。\n' +
+      '固定標籤：tag 必須是 [⚔️會戰鬥]'
   }[action];
 
   if (!actionSpec) throw new Error(`Unsupported system choice action: ${action}`);
@@ -450,7 +456,7 @@ ${actionSpec}
 1. 不能使用通用空話，不要「隨便逛逛」「先看看」。
 2. 內容要有畫面感，且和 Renaiss 世界觀一致。
 3. 禁止出現武俠詞彙：江湖、俠客、門派、武功、內力、修煉、打坐。
-3. 直接輸出 JSON。`;
+4. 直接輸出 JSON。`;
 
   const response = await callAI(prompt, 0.9, {
     label: `systemChoice.${action}`,
@@ -704,6 +710,81 @@ async function injectMarketChoices(
   }
 
   return work.slice(0, CHOICE_OUTPUT_COUNT);
+}
+
+function isStorageHeistChoice(choice = {}) {
+  if (!choice || typeof choice !== 'object') return false;
+  if (String(choice.action || '').trim() === 'storage_heist') return true;
+  const text = [choice.name || '', choice.choice || '', choice.desc || '', choice.tag || ''].join(' ');
+  const hasVaultCue = /(封存[艙舱倉藏]|sealed cache pod|storage pod)/iu.test(text);
+  const hasHeistCue = /(搶|搶奪|奪走|強奪|劫|掠奪|snatch|rob|seize|grab)/iu.test(text);
+  return hasVaultCue && hasHeistCue;
+}
+
+async function injectStorageHeistChoice(choices, playerLang = 'zh-TW', location = '', options = {}) {
+  const base = Array.isArray(choices) ? choices.filter(Boolean).map(c => ({ ...c })) : [];
+  if (base.some(isStorageHeistChoice)) return base.slice(0, CHOICE_OUTPUT_COUNT);
+
+  const storySignals = options?.storySignals || {};
+  const hasCarrierCue = Boolean(storySignals?.storageCarrier);
+  if (!hasCarrierCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
+  const hasThreatCueSignal = Boolean(storySignals?.threat);
+  const chance = hasThreatCueSignal ? 0.78 : 0.62;
+  if (Math.random() > chance) return base.slice(0, CHOICE_OUTPUT_COUNT);
+
+  let heistChoice = null;
+  try {
+    heistChoice = await generateSystemChoiceWithAI({
+      action: 'storage_heist',
+      playerLang,
+      location
+    });
+  } catch {
+    heistChoice = normalizeChoiceByLanguage({
+      action: 'storage_heist',
+      name: '直接奪取封存艙',
+      choice: `盯準對方手上的封存艙，強行貼身奪取後立刻撤離（會進入戰鬥）`,
+      desc: '高風險硬搶，可能引來附近敵對勢力圍堵',
+      tag: '[⚔️會戰鬥]'
+    }, playerLang);
+  }
+
+  const normalizedChoice = normalizeChoiceByLanguage({
+    ...heistChoice,
+    action: 'fight',
+    tag: '[⚔️會戰鬥]',
+    choice: (() => {
+      const baseChoiceText = String(heistChoice?.choice || '').trim() || '盯準對方手上的封存艙，直接近身強奪';
+      return /[（(]\s*會進入戰鬥\s*[)）]/u.test(baseChoiceText)
+        ? baseChoiceText
+        : `${baseChoiceText}（會進入戰鬥）`;
+    })(),
+    desc: String(heistChoice?.desc || '高風險：你試圖奪走對方手上的封存艙，附近勢力可能立刻介入。').trim()
+  }, playerLang);
+
+  const reservedActions = new Set([
+    'portal_intent',
+    'wish_pool',
+    'market_renaiss',
+    'market_digital',
+    'mentor_spar',
+    'location_story_battle'
+  ]);
+  if (base.length < CHOICE_OUTPUT_COUNT) {
+    base.push(normalizedChoice);
+    return base.slice(0, CHOICE_OUTPUT_COUNT);
+  }
+
+  let replaceIdx = -1;
+  for (let i = base.length - 1; i >= 0; i--) {
+    if (!reservedActions.has(String(base[i]?.action || ''))) {
+      replaceIdx = i;
+      break;
+    }
+  }
+  if (replaceIdx < 0) replaceIdx = base.length - 1;
+  base[replaceIdx] = normalizedChoice;
+  return base.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
 async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = '', options = {}) {
@@ -1380,6 +1461,170 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
   return issues;
 }
 
+function isMainlineGuideChoiceText(choice = {}) {
+  if (!choice || typeof choice !== 'object') return false;
+  if (String(choice.action || '').trim() === 'main_story') return true;
+  const text = [choice.tag || '', choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+  return /(主線|導引|回到線索|沿線追查|下一段|下一步)/u.test(text);
+}
+
+function buildFallbackMainlineBridgeChoice({
+  playerLang = 'zh-TW',
+  location = '',
+  stageGoal = '',
+  stage = 1,
+  stageCount = 8
+} = {}) {
+  const safeLocation = String(location || '當前區域').trim() || '當前區域';
+  const safeGoal = String(stageGoal || '').trim() || '先做一輪在地交叉驗證，確保線索來源可靠';
+  const progressText = `地區進度 ${Math.max(1, Number(stage || 1))}/${Math.max(1, Number(stageCount || 8))}`;
+  const base = {
+    action: 'main_story',
+    tag: '[📖主線導引]',
+    name: '沿線推進調查',
+    choice: `沿${safeLocation}線路執行「${safeGoal}」，先做低風險驗證再深入`,
+    desc: `${progressText}｜承接當前現場線索，穩定推進下一段`,
+    mainlineGoal: safeGoal,
+    mainlineProgress: progressText,
+    mainlineStage: Math.max(1, Number(stage || 1)),
+    mainlineStageCount: Math.max(1, Number(stageCount || 8)),
+    mainlineBridge: true
+  };
+  return normalizeChoiceByLanguage(base, playerLang);
+}
+
+async function generateMainlineBridgeChoiceWithAI({
+  playerLang = 'zh-TW',
+  location = '',
+  stageGoal = '',
+  stage = 1,
+  stageCount = 8,
+  storyTail = ''
+} = {}) {
+  const safeLocation = String(location || '當前區域').trim() || '當前區域';
+  const safeGoal = String(stageGoal || '').replace(/\s+/g, ' ').trim();
+  if (!safeGoal) {
+    return buildFallbackMainlineBridgeChoice({ playerLang, location: safeLocation, stageGoal: safeGoal, stage, stageCount });
+  }
+
+  const langInstruction = {
+    'zh-TW': '請用繁體中文',
+    'zh-CN': '請用簡體中文',
+    'en': 'Please output in English'
+  }[playerLang] || '請用繁體中文';
+  const progressText = `地區進度 ${Math.max(1, Number(stage || 1))}/${Math.max(1, Number(stageCount || 8))}`;
+  const tail = String(storyTail || '').replace(/\s+/g, ' ').trim().slice(-280);
+
+  const prompt = `你是 Renaiss 劇情選項橋接器，只生成 1 個自然承接的主線選項（JSON 物件）。
+風格限制：原創科技收藏敘事，禁止武俠語氣與模板句。
+
+語言：${playerLang}（${langInstruction}）
+地點：${safeLocation}
+主線目標（8-2）：${safeGoal}
+故事尾段（8-1）：
+${tail || '（無）'}
+
+任務：
+生成 1 個「從 8-1 承接到 8-2」的可執行選項，語氣要像玩家當下真的會做的事，不可模板化。
+禁止出現這種句型：先處理本區關鍵、回到核心線索、照劇本走。
+
+輸出格式（只輸出 JSON，不要額外文字）：
+{"name":"12字內短標題","choice":"12-30字具體動作","desc":"12-34字補充說明","tag":"[📖主線導引]"}
+
+規則：
+1. 選項必須承接「故事尾段」中的場景或行動方向。
+2. 選項要默默導向「主線目標」，但不能直接複誦目標原文。
+3. 必須可執行、可觀察，不可空話。
+4. 禁止武俠詞彙：江湖、俠客、門派、武功、內力、修煉。`;
+
+  try {
+    const raw = await callAI(prompt, 0.9, {
+      label: 'mainlineBridgeChoice',
+      model: MINIMAX_MODEL,
+      maxTokens: 260,
+      timeoutMs: SYSTEM_CHOICE_TIMEOUT_MS,
+      retries: 2
+    });
+    const parsed = parseJsonOrThrow(raw, 'object');
+    const choice = normalizeChoiceByLanguage({
+      action: 'main_story',
+      name: String(parsed?.name || '').trim() || '沿線推進調查',
+      choice: String(parsed?.choice || '').trim() || `沿${safeLocation}持續追查，先做一輪在地驗證`,
+      desc: String(parsed?.desc || '').trim() || `${progressText}｜承接現場線索推進下一段`,
+      tag: '[📖主線導引]',
+      mainlineGoal: safeGoal,
+      mainlineProgress: progressText,
+      mainlineStage: Math.max(1, Number(stage || 1)),
+      mainlineStageCount: Math.max(1, Number(stageCount || 8)),
+      mainlineBridge: true
+    }, playerLang);
+    return choice;
+  } catch (e) {
+    console.log('[AI][mainlineBridgeChoice] fallback:', e?.message || e);
+    return buildFallbackMainlineBridgeChoice({
+      playerLang,
+      location: safeLocation,
+      stageGoal: safeGoal,
+      stage,
+      stageCount
+    });
+  }
+}
+
+async function injectMainlineBridgeChoiceWithAI(choices = [], options = {}) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_OUTPUT_COUNT).map(item => ({ ...item })) : [];
+  if (list.length === 0) return list;
+
+  const playerLang = String(options?.playerLang || 'zh-TW').trim() || 'zh-TW';
+  const location = String(options?.location || '').trim();
+  const stageGoal = String(options?.stageGoal || '').trim();
+  const stage = Math.max(1, Number(options?.stage || 1));
+  const stageCount = Math.max(1, Number(options?.stageCount || 8));
+  const storyTail = String(options?.storyTail || '').trim();
+  const islandCompleted = Boolean(options?.islandCompleted);
+
+  if (islandCompleted) return list;
+  if (!stageGoal) return list;
+
+  const existingGuideIdx = list.findIndex(isMainlineGuideChoiceText);
+  if (existingGuideIdx >= 0) {
+    const normalized = normalizeChoiceByLanguage({
+      ...list[existingGuideIdx],
+      action: 'main_story',
+      tag: '[📖主線導引]',
+      mainlineGoal: stageGoal,
+      mainlineProgress: `地區進度 ${stage}/${stageCount}`,
+      mainlineStage: stage,
+      mainlineStageCount: stageCount,
+      mainlineBridge: true
+    }, playerLang);
+    list[existingGuideIdx] = normalized;
+    return list.slice(0, CHOICE_OUTPUT_COUNT);
+  }
+
+  const bridgeChoice = await generateMainlineBridgeChoiceWithAI({
+    playerLang,
+    location,
+    stageGoal,
+    stage,
+    stageCount,
+    storyTail
+  });
+  if (!bridgeChoice || typeof bridgeChoice !== 'object') return list.slice(0, CHOICE_OUTPUT_COUNT);
+
+  const fp = getChoiceFingerprint(bridgeChoice);
+  const hasDuplicate = list.some((item) => getChoiceFingerprint(item) === fp);
+  if (hasDuplicate) return list.slice(0, CHOICE_OUTPUT_COUNT);
+
+  if (list.length < CHOICE_OUTPUT_COUNT) {
+    list.push(bridgeChoice);
+    return list.slice(0, CHOICE_OUTPUT_COUNT);
+  }
+
+  list[list.length - 1] = bridgeChoice;
+  return list.slice(0, CHOICE_OUTPUT_COUNT);
+}
+
 function hasUnanchoredEntityToken(text = '', anchors = []) {
   const source = String(text || '');
   if (!source) return false;
@@ -1392,11 +1637,17 @@ function hasUnanchoredEntityToken(text = '', anchors = []) {
 
 function buildStorySystemSignals(story = '') {
   const text = String(story || '');
+  const storageVaultPattern = /封存[艙舱倉藏函]/u;
+  const storageCarrierPattern =
+    /(手(?:上|中|裡|里)|懷裡|怀里|背著|背着|抱著|抱着|提著|提着|攜帶|携带|拿著|拿着|夾著|夹着|腰間|腰间).{0,14}封存[艙舱倉藏函]|封存[艙舱倉藏函].{0,12}(在手上|在手中|在手裡|在手里|被抱著|被抱着|被提著|被提着|被背著|被背着|被攜帶|被携带|掛在腰間|挂在腰间)/u;
   return {
     portal: /(傳送門|門紋|節點|躍遷|空間折疊|坐標轉移)/u.test(text),
     wishPool: /(許願|願望|祈願|祈福|祭壇|願池)/u.test(text),
     market: /(市集|攤位|交易|收購|鑑價|鑑定|封存艙|修復臺|修復台|商人|倉管|貨艙)/u.test(text),
-    mentor: /(導師|名師|友誼賽|切磋|指導|拜師)/u.test(text)
+    mentor: /(導師|名師|友誼賽|切磋|指導|拜師)/u.test(text),
+    storageVault: storageVaultPattern.test(text),
+    storageCarrier: storageCarrierPattern.test(text),
+    threat: hasThreatCue(text)
   };
 }
 
@@ -1425,6 +1676,32 @@ function hasThreatCue(text = '') {
   const tail = getTailWindow(text, 360);
   if (!hasThreatKeyword(tail)) return false;
   return !THREAT_RESOLVED_KEYWORDS.some((keyword) => tail.includes(keyword));
+}
+
+function resolveMainlineBridgeLock(player = null, previousChoice = null) {
+  const fromPlayer = player && typeof player === 'object' && player.mainlineBridgeLock && typeof player.mainlineBridgeLock === 'object'
+    ? player.mainlineBridgeLock
+    : null;
+  const fromChoice = previousChoice && typeof previousChoice === 'object'
+    ? previousChoice
+    : null;
+
+  const goal = String(fromPlayer?.goal || fromChoice?.mainlineGoal || '').trim();
+  if (!goal) return null;
+
+  const stage = Math.max(1, Number(fromPlayer?.stage || fromChoice?.mainlineStage || 1));
+  const stageCount = Math.max(stage, Number(fromPlayer?.stageCount || fromChoice?.mainlineStageCount || 8));
+  const progress = String(fromPlayer?.progress || fromChoice?.mainlineProgress || `地區進度 ${stage}/${stageCount}`).trim();
+  const location = String(fromPlayer?.location || player?.location || '').trim();
+  const sourceChoice = String(fromPlayer?.sourceChoice || fromChoice?.choice || fromChoice?.name || '').trim();
+  return {
+    goal,
+    stage,
+    stageCount,
+    progress,
+    location,
+    sourceChoice
+  };
 }
 
 function buildDeterministicFallbackStory({
@@ -1511,6 +1788,11 @@ async function injectSystemChoicesSafely(
     work = await injectMarketChoices(work, playerLang, location, newbieMask, { forceMarket, storySignals });
   } catch (e) {
     console.error('[AI] injectMarketChoices 失敗，略過:', e?.message || e);
+  }
+  try {
+    work = await injectStorageHeistChoice(work, playerLang, location, { storySignals });
+  } catch (e) {
+    console.error('[AI] injectStorageHeistChoice 失敗，略過:', e?.message || e);
   }
   try {
     work = await injectMentorSparChoice(work, playerLang, location, { storySignals });
@@ -1704,6 +1986,15 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 - 不要像履歷或系統說明，必須寫成故事內心與現場感受。
 - 可以用第一人稱或第三人稱，但主角身份描述要明確，不能只叫「冒險者」帶過。`
     : '';
+  const mainlineBridgeLock = resolveMainlineBridgeLock(player, previousChoice);
+  const mainlineBridgeSection = mainlineBridgeLock
+    ? `\n【主線橋接鎖定（本回合必須先落地）】
+地點：${mainlineBridgeLock.location || location}
+目標：${mainlineBridgeLock.goal}
+進度：${mainlineBridgeLock.progress}
+來源行動：${mainlineBridgeLock.sourceChoice || previousAction}
+要求：開場 1-2 段先把這個目標落到可執行場景，再往外延展。`
+    : '';
   
   const prompt = `你是 Renaiss 世界的原創敘事引擎，風格是「科技收藏 + 夥伴協作 + 區域事件」。
 禁止武俠腔、禁止借用任何既有作品專有名詞或角色名。
@@ -1728,6 +2019,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 世界設定：
 ${loreSnippet}
 可被鑑定的物件示例：${appraisalExamples}
+封存艙尺寸規格：便攜小型艙體（約小背包大小，可單人攜行）
 勢力揭露規則：${rivalDisclosureRule}
 語言設定：${playerLang}
 ${npcStatusText}
@@ -1741,6 +2033,7 @@ ${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationInstruction ? `\n【導航約束】\n${navigationInstruction}` : ''}
 ${openingBeatSection}
+${mainlineBridgeSection}
 
 【上一個行動】
 ${previousAction}
@@ -1783,6 +2076,10 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 33. 若要讓 NPC 主動出現，必須在當前地點或附近可互動地點內合理登場，不可跨區瞬移
 34. 高通緝壓迫需採「漸進式」：先可疑視線/尾隨，再試探接觸，最後才進入正面衝突；不可一開場就連續跳多名追兵
 35. 若提到「可鑑定品」，優先使用「可被鑑定的物件示例」中的物件，避免憑空造出不合世界觀的品項
+36. 封存艙一律描寫為便攜小型艙體（約小背包大小），禁止寫成人體尺寸或大型貨櫃
+37. 若人物攜帶封存艙，請寫成可單人抱持/背負的尺度，不可描述為巨型艙體
+38. 若存在【主線橋接鎖定】，開場 1-2 段必須優先承接該目標，且給出「現在就能做」的行動落點
+39. 主線橋接鎖定只能當「本回合先落地」的方向，不可直接照抄成模板句或條列宣告
 
 直接開始講：`;
 
@@ -1933,6 +2230,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格
 通緝熱度：${wantedPressure}
 附近敵對 NPC：${nearbyHostileHint}
+封存艙尺寸規格：便攜小型艙體（約小背包大小，可單人攜行）
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
 導航目標：${navigationTarget || '（未設定）'}
@@ -1986,6 +2284,8 @@ ${anchorText}
 17. ${cadenceRequirement}
 18. ${wantedRequirement}
 19. 若通緝熱度偏高，5 個選項中最多只允許 1 個「敵對主動逼近/立即戰鬥」類，其餘需維持調查、移動、社交或交易分散度
+20. 若故事已明確提到有人手持/背著封存艙，可允許其中 1 個選項走「直接搶奪封存艙」高風險路線（可進入戰鬥），但文句必須貼合當下人物與場景，不可模板化
+21. 封存艙一律視為便攜小型艙體（約小背包大小），不得描寫成人體尺寸或大型艙體
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
@@ -2060,6 +2360,31 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       } else {
         throw new Error(`choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
       }
+    }
+
+    const roadmap = ISLAND_STORY && typeof ISLAND_STORY.getStoryRoadmap === 'function'
+      ? ISLAND_STORY.getStoryRoadmap(location, islandStageCount)
+      : [];
+    const safeStage = Math.max(1, Number(islandStage || 1));
+    const stageIndex = Math.max(0, Math.min(Math.max(0, roadmap.length - 1), safeStage - 1));
+    const stageGoal = String((Array.isArray(roadmap) && roadmap[stageIndex]) || '').trim();
+    const bridgeTail = [storyFocus.closing, storyFocus.tail]
+      .map((text) => String(text || '').trim())
+      .filter(Boolean)
+      .join('\n');
+
+    try {
+      validatedChoices = await injectMainlineBridgeChoiceWithAI(validatedChoices, {
+        playerLang,
+        location,
+        stageGoal,
+        stage: safeStage,
+        stageCount: islandStageCount,
+        storyTail: bridgeTail || fullStoryText.slice(-320),
+        islandCompleted
+      });
+    } catch (bridgeErr) {
+      console.log('[AI][choices] injectMainlineBridgeChoiceWithAI skipped:', bridgeErr?.message || bridgeErr);
     }
 
     recordAIPerf('choices', Date.now() - startedAt);

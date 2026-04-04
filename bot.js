@@ -1235,6 +1235,7 @@ const STORY_DIALOGUE_PIN_TTL_TURNS = Math.max(4, Math.min(40, Number(process.env
 const MAINLINE_PIN_LIMIT = Math.max(8, Math.min(80, Number(process.env.MAINLINE_PIN_LIMIT || 32)));
 const MAINLINE_PIN_TTL_TURNS = Math.max(6, Math.min(80, Number(process.env.MAINLINE_PIN_TTL_TURNS || 20)));
 const MAINLINE_CUE_PATTERN = /(可疑|供應隊|帳本|來源|流向|封存艙|金屬壓印|航海羅盤|座標|傳送門|門紋|節點|神秘鑑價站|鑑價站|四巨頭|試煉|追兵|攔截|線索|不明勢力|暗潮)/u;
+const MAINLINE_BRIDGE_LOCK_TTL_TURNS = Math.max(1, Math.min(8, Number(process.env.MAINLINE_BRIDGE_LOCK_TTL_TURNS || 2)));
 const LOCATION_ENTRY_GATE_ENABLED = String(process.env.LOCATION_ENTRY_GATE_ENABLED || '1') !== '0';
 const LOCATION_ENTRY_MIN_WINRATE = Math.max(1, Math.min(99, Number(process.env.LOCATION_ENTRY_MIN_WINRATE || 50)));
 const AGGRESSIVE_CHOICE_TARGET_RATE = Math.max(0, Math.min(1, Number(process.env.AGGRESSIVE_CHOICE_TARGET_RATE || 0.9)));
@@ -1553,6 +1554,54 @@ function buildEventChoiceButtons(choices = [], ownerId = '') {
       .setLabel(label || `${i + 1}`)
       .setStyle(ButtonStyle.Primary);
   });
+}
+
+async function tryRecoverEventButtonsAfterFailure(interaction, userId) {
+  const channel = interaction?.channel;
+  if (!channel || !userId) return false;
+  const player = CORE.loadPlayer(userId);
+  if (!player) return false;
+
+  const rawChoices = Array.isArray(player.eventChoices) ? player.eventChoices : [];
+  if (rawChoices.length <= 0) return false;
+
+  const normalizedChoices = applyChoicePolicy(player, normalizeEventChoices(player, rawChoices));
+  if (!Array.isArray(normalizedChoices) || normalizedChoices.length <= 0) return false;
+
+  const changed =
+    normalizedChoices.length !== rawChoices.length ||
+    normalizedChoices.some((choice, idx) => choice !== rawChoices[idx]);
+  if (changed) {
+    player.eventChoices = normalizedChoices;
+    CORE.savePlayer(player);
+  }
+
+  const buttons = buildEventChoiceButtons(normalizedChoices, player.id);
+  appendMainMenuUtilityButtons(buttons, player);
+  const components = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    components.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+  }
+  if (components.length <= 0) return false;
+
+  const sourceMsg = interaction?.message;
+  if (sourceMsg && typeof sourceMsg.edit === 'function') {
+    const edited = await sourceMsg.edit({ components }).then(() => true).catch(() => false);
+    if (edited) {
+      trackActiveGameMessage(player, channel?.id, sourceMsg.id);
+      return true;
+    }
+  }
+
+  const recoveryMsg = await channel
+    .send({
+      content: '🔁 已自動恢復選項按鈕，請再按一次。',
+      components
+    })
+    .catch(() => null);
+  if (!recoveryMsg) return false;
+  trackActiveGameMessage(player, channel?.id, recoveryMsg.id);
+  return true;
 }
 
 function getPlayerUILang(player = null) {
@@ -3424,40 +3473,34 @@ function grantStarterFivePullIfNeeded(playerId) {
   const drawResult = GACHA.drawMoveFree(player, STARTER_FIVE_PULL_COUNT, { grantPoints: false });
   if (!drawResult?.success) return null;
 
-  const learnedMoves = [];
-  const duplicateMoves = [];
+  const grantedChips = [];
   const failedMoves = [];
 
   for (const draw of drawResult.draws || []) {
     const move = draw?.move;
-    if (!move?.id) continue;
-    const learned = GACHA.learnDrawnMove(playerId, move);
-    if (learned?.success) {
-      learnedMoves.push({
+    if (!move?.name) continue;
+    const added = addSkillChipToInventory(player, move.name);
+    if (added) {
+      grantedChips.push({
         name: move.name,
         tier: draw?.tier || move.tier || 1,
         emoji: draw?.tierEmoji || (move.tier === 3 ? '🔮' : move.tier === 2 ? '💠' : '⚪')
       });
       continue;
     }
-    if (/已經學過/.test(String(learned?.reason || ''))) {
-      duplicateMoves.push(move.name);
-    } else {
-      failedMoves.push(`${move.name}（${learned?.reason || '學習失敗'}）`);
-    }
+    failedMoves.push(`${move.name}（發放失敗）`);
   }
 
-  const refreshed = CORE.loadPlayer(playerId);
-  if (!refreshed) return { draws: drawResult.draws || [], learnedMoves, duplicateMoves, failedMoves };
-  ensureStarterRewardState(refreshed);
-  refreshed.starterRewards.fivePullClaimed = true;
-  refreshed.starterRewards.claimedAt = Date.now();
-  CORE.savePlayer(refreshed);
+  ensureStarterRewardState(player);
+  player.starterRewards.fivePullClaimed = true;
+  player.starterRewards.claimedAt = Date.now();
+  CORE.savePlayer(player);
 
   return {
     draws: drawResult.draws || [],
-    learnedMoves,
-    duplicateMoves,
+    grantedChips,
+    learnedMoves: grantedChips,
+    duplicateMoves: [],
     failedMoves
   };
 }
@@ -4092,6 +4135,19 @@ function ensurePlayerGenerationSchema(player) {
   const normalizedRecentChoices = normalizeRecentChoiceHistory(player.recentChoiceHistory);
   if (JSON.stringify(player.recentChoiceHistory || []) !== JSON.stringify(normalizedRecentChoices)) {
     player.recentChoiceHistory = normalizedRecentChoices;
+    mutated = true;
+  }
+  const normalizedMainlineBridge = normalizeMainlineBridgeLock(player.mainlineBridgeLock, player);
+  const activeMainlineBridge = normalizedMainlineBridge && currentTurn <= Number(normalizedMainlineBridge.expireTurn || 0)
+    ? normalizedMainlineBridge
+    : null;
+  if (activeMainlineBridge) {
+    if (JSON.stringify(player.mainlineBridgeLock || {}) !== JSON.stringify(activeMainlineBridge)) {
+      player.mainlineBridgeLock = activeMainlineBridge;
+      mutated = true;
+    }
+  } else if (Object.prototype.hasOwnProperty.call(player, 'mainlineBridgeLock')) {
+    delete player.mainlineBridgeLock;
     mutated = true;
   }
 
@@ -5071,6 +5127,82 @@ function clearPendingStoryTrigger(player) {
   if (Object.prototype.hasOwnProperty.call(player, 'pendingStoryTrigger')) {
     delete player.pendingStoryTrigger;
   }
+}
+
+function normalizeMainlineBridgeLock(raw = null, player = null) {
+  if (!raw || typeof raw !== 'object') return null;
+  const goal = String(raw.goal || raw.mainlineGoal || '').trim().slice(0, 220);
+  if (!goal) return null;
+  const location = String(raw.location || player?.location || '').trim().slice(0, 40);
+  const stage = Math.max(1, Math.floor(Number(raw.stage || raw.mainlineStage || 1) || 1));
+  const stageCount = Math.max(stage, Math.floor(Number(raw.stageCount || raw.mainlineStageCount || 8) || 8));
+  const progress = String(raw.progress || raw.mainlineProgress || `地區進度 ${stage}/${stageCount}`).trim().slice(0, 80);
+  const sourceChoice = String(raw.sourceChoice || '').trim().slice(0, 220);
+  const createdAt = Number(raw.createdAt || Date.now()) || Date.now();
+  const currentTurn = Math.max(0, Math.floor(Number(player?.storyTurns || 0)));
+  const expireRaw = Number(raw.expireTurn);
+  const expireTurn = Number.isFinite(expireRaw)
+    ? Math.max(currentTurn, Math.floor(expireRaw))
+    : (currentTurn + MAINLINE_BRIDGE_LOCK_TTL_TURNS);
+  return {
+    goal,
+    location,
+    stage,
+    stageCount,
+    progress,
+    sourceChoice,
+    createdAt,
+    expireTurn
+  };
+}
+
+function getMainlineBridgeLock(player, options = {}) {
+  if (!player || typeof player !== 'object') return null;
+  const autoClear = options?.autoClear !== false;
+  const normalized = normalizeMainlineBridgeLock(player.mainlineBridgeLock, player);
+  if (!normalized) {
+    if (autoClear && Object.prototype.hasOwnProperty.call(player, 'mainlineBridgeLock')) {
+      delete player.mainlineBridgeLock;
+    }
+    return null;
+  }
+  const currentTurn = Math.max(0, Math.floor(Number(player?.storyTurns || 0)));
+  if (currentTurn > Number(normalized.expireTurn || 0)) {
+    if (autoClear && Object.prototype.hasOwnProperty.call(player, 'mainlineBridgeLock')) {
+      delete player.mainlineBridgeLock;
+    }
+    return null;
+  }
+  if (autoClear && JSON.stringify(player.mainlineBridgeLock || {}) !== JSON.stringify(normalized)) {
+    player.mainlineBridgeLock = normalized;
+  }
+  return normalized;
+}
+
+function setMainlineBridgeLock(player, payload = {}) {
+  if (!player || typeof player !== 'object') return null;
+  const currentTurn = Math.max(0, Math.floor(Number(player?.storyTurns || 0)));
+  const normalized = normalizeMainlineBridgeLock({
+    ...payload,
+    createdAt: Date.now(),
+    expireTurn: currentTurn + MAINLINE_BRIDGE_LOCK_TTL_TURNS
+  }, player);
+  if (!normalized) return null;
+  player.mainlineBridgeLock = normalized;
+  return normalized;
+}
+
+function clearMainlineBridgeLock(player) {
+  if (!player || typeof player !== 'object') return;
+  if (Object.prototype.hasOwnProperty.call(player, 'mainlineBridgeLock')) {
+    delete player.mainlineBridgeLock;
+  }
+}
+
+function consumeMainlineBridgeLock(player) {
+  const lock = getMainlineBridgeLock(player, { autoClear: false });
+  clearMainlineBridgeLock(player);
+  return lock;
 }
 
 function formatPetHpWithRecovery(pet) {
@@ -9776,6 +9908,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: failMsg, ephemeral: true }).catch(() => {});
       }
     } catch (_) {}
+
+    try {
+      if (String(customId || '').startsWith('event_')) {
+        await tryRecoverEventButtonsAfterFailure(interaction, user?.id);
+      }
+    } catch (_) {}
   }
 });
 
@@ -10169,15 +10307,16 @@ async function createCharacterWithName(interaction, user, profile, charName, opt
     );
 
   if (starterPack) {
-    const learnedLine = starterPack.learnedMoves.length > 0
-      ? starterPack.learnedMoves
+    const chips = Array.isArray(starterPack.grantedChips) ? starterPack.grantedChips : [];
+    const chipLine = chips.length > 0
+      ? chips
         .slice(0, 5)
         .map((m) => `${m.emoji} ${m.name}`)
         .join('、')
-      : '本次抽到的招式已重複或欄位已滿，沒有新增。';
+      : '本次技能晶片發放失敗，請稍後重試。';
     embed.addFields({
       name: '🎁 開局贈禮：免費五連抽',
-      value: `已自動發放並嘗試學習。\n本次新增：${starterPack.learnedMoves.length} 招\n${learnedLine}`,
+      value: `已發放為技能晶片（已進背包，可販售；想學再到寵物招式頁學習）。\n本次新增：${chips.length} 張\n${chipLine}`,
       inline: false
     });
   }
@@ -10399,15 +10538,16 @@ async function handleNameSubmit(interaction, user) {
     .addFields({ name: '📜 招式', value: dmgInfo, inline: false });
 
   if (starterPack) {
-    const learnedLine = starterPack.learnedMoves.length > 0
-      ? starterPack.learnedMoves
+    const chips = Array.isArray(starterPack.grantedChips) ? starterPack.grantedChips : [];
+    const chipLine = chips.length > 0
+      ? chips
         .slice(0, 5)
         .map(m => `${m.emoji} ${m.name}`)
         .join('、')
-      : '本次抽到的招式已重複或欄位已滿，沒有新增。';
+      : '本次技能晶片發放失敗，請稍後重試。';
     embed.addFields({
       name: '🎁 開局贈禮：免費五連抽',
-      value: `已自動發放並嘗試學習。\n本次新增：${starterPack.learnedMoves.length} 招\n${learnedLine}`,
+      value: `已發放為技能晶片（已進背包，可販售；想學再到寵物招式頁學習）。\n本次新增：${chips.length} 張\n${chipLine}`,
       inline: false
     });
   }
@@ -10459,15 +10599,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
     .addFields({ name: '📜 招式', value: dmgInfo, inline: false });
 
   if (starterPack) {
-    const learnedLine = starterPack.learnedMoves.length > 0
-      ? starterPack.learnedMoves
+    const chips = Array.isArray(starterPack.grantedChips) ? starterPack.grantedChips : [];
+    const chipLine = chips.length > 0
+      ? chips
         .slice(0, 5)
         .map(m => `${m.emoji} ${m.name}`)
         .join('、')
-      : '本次抽到的招式已重複或欄位已滿，沒有新增。';
+      : '本次技能晶片發放失敗，請稍後重試。';
     embed.addFields({
       name: '🎁 開局贈禮：免費五連抽',
-      value: `已自動發放並嘗試學習。\n本次新增：${starterPack.learnedMoves.length} 招\n${learnedLine}`,
+      value: `已發放為技能晶片（已進背包，可販售；想學再到寵物招式頁學習）。\n本次新增：${chips.length} 張\n${chipLine}`,
       inline: false
     });
   }
@@ -10785,6 +10926,9 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         }
 
         player.currentStory = storyText;
+        if (getMainlineBridgeLock(player, { autoClear: true })) {
+          consumeMainlineBridgeLock(player);
+        }
         player.eventChoices = [];
         if (pendingStoryTrigger) {
           clearPendingStoryTrigger(player);
@@ -13815,6 +13959,10 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   // 執行事件（傳送門為特殊流程，不走一般事件表）
   let result = null;
   let selectedChoice = event.choice || event.name || '未知選擇';
+  const eventMainlineGoal = String(event?.mainlineGoal || '').trim();
+  const eventMainlineProgress = String(event?.mainlineProgress || '').trim();
+  const eventMainlineStage = Math.max(1, Number(event?.mainlineStage || 1));
+  const eventMainlineStageCount = Math.max(eventMainlineStage, Number(event?.mainlineStageCount || 8));
   let extraStoryGuide = '';
   const pendingMemories = [];
   const queueMemory = (memory) => {
@@ -13909,8 +14057,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   } else if (event.action === 'main_story') {
     const mainlineNarrative = String(event.mainlineNarrative || '').trim();
-    const mainlineGoal = String(event.mainlineGoal || '').trim();
-    const mainlineProgress = String(event.mainlineProgress || '').trim();
+    const mainlineGoal = eventMainlineGoal;
+    const mainlineProgress = eventMainlineProgress;
     const fallbackMsg = String(event.desc || event.choice || '主線正在暗中推進。').trim();
     const message = mainlineNarrative || fallbackMsg;
     const messageWithProgress = mainlineProgress ? `${message}\n📌 ${mainlineProgress}` : message;
@@ -13919,6 +14067,16 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       message: messageWithProgress
     };
     selectedChoice = String(event.choice || event.name || '主線推進');
+    if (mainlineGoal) {
+      setMainlineBridgeLock(player, {
+        goal: mainlineGoal,
+        location: String(player.location || '').trim(),
+        stage: eventMainlineStage,
+        stageCount: eventMainlineStageCount,
+        progress: mainlineProgress || `地區進度 ${eventMainlineStage}/${eventMainlineStageCount}`,
+        sourceChoice: selectedChoice
+      });
+    }
     queueMemory({
       type: '主線',
       content: mainlineGoal || selectedChoice || '主線改為被動觸發，不需固定按鈕',
@@ -14640,7 +14798,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
           choice: selectedChoice,
           desc: previousOutcomeText || event?.desc || '',
           action: event?.action || '',
-          outcome: previousOutcomeText || ''
+          outcome: previousOutcomeText || '',
+          mainlineGoal: eventMainlineGoal,
+          mainlineProgress: eventMainlineProgress,
+          mainlineStage: eventMainlineStage,
+          mainlineStageCount: eventMainlineStageCount
         },
         memoryContext
       );
@@ -14665,6 +14827,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       }
 
       player.currentStory = storyText;
+      if (getMainlineBridgeLock(player, { autoClear: true })) {
+        consumeMainlineBridgeLock(player);
+      }
       player.eventChoices = [];
       const rememberStats = rememberStoryDialogues(player, storyText);
       if ((rememberStats?.quotes || 0) > 0 || (rememberStats?.mainline || 0) > 0) {
