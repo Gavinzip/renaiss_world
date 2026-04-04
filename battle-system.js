@@ -95,10 +95,26 @@ function clampInt(value, min, max, fallback = min) {
   return Math.max(min, Math.min(max, rounded));
 }
 
+function round1(value, fallback = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return Number(fallback) || 0;
+  return Math.round(num * 10) / 10;
+}
+
+function fmt1(value, fallback = 0) {
+  return String(Math.round(round1(value, fallback)));
+}
+
 const ELEMENT_COUNTER = Object.freeze({
   水: '火',
   火: '草',
   草: '水'
+});
+
+const ELEMENT_DAMAGE_BALANCE = Object.freeze({
+  水: 1.0,
+  火: 0.95,
+  草: 0.92
 });
 
 function normalizeCombatElement(raw = '') {
@@ -152,6 +168,8 @@ function cloneMoveForEnemy(move = {}, powerScale = 1) {
     damage: scaled,
     baseDamage: scaled,
     tier: clampInt(move?.tier || 1, 1, 3, 1),
+    priority: clampInt(move?.priority || 0, -1, 3, 0),
+    speed: clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0),
     effect: { ...(move?.effect || {}) }
   };
 }
@@ -166,6 +184,8 @@ function normalizePresetMove(move, fallbackAttack = 10) {
       damage: Math.max(1, Number(fallbackAttack) || 10),
       baseDamage: Math.max(1, Number(fallbackAttack) || 10),
       tier: 1,
+      priority: 0,
+      speed: 0,
       effect: {}
     };
   }
@@ -177,6 +197,8 @@ function normalizePresetMove(move, fallbackAttack = 10) {
       damage: Math.max(1, Number(fallbackAttack) || 10),
       baseDamage: Math.max(1, Number(fallbackAttack) || 10),
       tier: 1,
+      priority: 0,
+      speed: 0,
       effect: {}
     };
   }
@@ -191,6 +213,8 @@ function normalizePresetMove(move, fallbackAttack = 10) {
       damage: Math.max(1, Number(move.damage ?? move.baseDamage ?? fallbackAttack) || 10),
       baseDamage: Math.max(1, Number(move.baseDamage ?? move.damage ?? fallbackAttack) || 10),
       tier: clampInt(move.tier || 1, 1, 3, 1),
+      priority: clampInt(move.priority || 0, -1, 3, 0),
+      speed: clampInt(move.speed ?? move.priority ?? 0, -1, 3, 0),
       effect: { ...(move.effect || {}) }
     };
   }
@@ -317,6 +341,8 @@ function buildEnemyMoveLoadout(enemyName = '', level = 1, rawMoves = [], options
       damage: fallbackAttack,
       baseDamage: fallbackAttack,
       tier: plan.minTier,
+      priority: 0,
+      speed: 0,
       effect: {}
     });
   }
@@ -541,7 +567,7 @@ function ensureStatusState(entity) {
 
 function normalizeMove(move = {}, fallbackAttack = 10) {
   if (typeof move === 'string') {
-    return { name: move, damage: fallbackAttack, baseDamage: fallbackAttack, tier: 1, effect: {} };
+    return { name: move, damage: fallbackAttack, baseDamage: fallbackAttack, tier: 1, priority: 0, speed: 0, effect: {} };
   }
   return {
     ...move,
@@ -549,7 +575,33 @@ function normalizeMove(move = {}, fallbackAttack = 10) {
     damage: Number(move?.damage ?? move?.baseDamage ?? fallbackAttack),
     baseDamage: Number(move?.baseDamage ?? move?.damage ?? fallbackAttack),
     tier: clampInt(move?.tier || 1, 1, 3, 1),
+    priority: clampInt(move?.priority || 0, -1, 3, 0),
+    speed: clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0),
     effect: move?.effect || {}
+  };
+}
+
+function getMoveSpeed(move = {}) {
+  return clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0);
+}
+
+function decideActionOrder(fighter, playerMove, enemy, enemyMove) {
+  const playerMoveSpeed = getMoveSpeed(playerMove);
+  const enemyMoveSpeed = getMoveSpeed(enemyMove);
+  if (playerMoveSpeed !== enemyMoveSpeed) {
+    return {
+      first: playerMoveSpeed > enemyMoveSpeed ? 'player' : 'enemy',
+      reason: 'move_speed',
+      playerMoveSpeed,
+      enemyMoveSpeed
+    };
+  }
+
+  return {
+    first: Math.random() < 0.5 ? 'player' : 'enemy',
+    reason: 'coin_flip',
+    playerMoveSpeed,
+    enemyMoveSpeed
   };
 }
 
@@ -579,7 +631,7 @@ function applyDotEffectsAtTurnStart(entity, label) {
       totalDamage += perTurn;
       status[entry.key] -= 1;
       if (status[entry.key] <= 0) status[entry.powerKey] = 0;
-      lines.push(`${entry.icon} ${label}受到${entry.text}影響，損失 ${perTurn} HP（剩 ${Math.max(0, status[entry.key])} 回合）`);
+      lines.push(`${entry.icon} ${label}受到${entry.text}影響，損失 ${fmt1(perTurn)} HP（剩 ${Math.max(0, status[entry.key])} 回合）`);
     }
   }
 
@@ -589,7 +641,7 @@ function applyDotEffectsAtTurnStart(entity, label) {
     totalDamage += perTurn;
     status.dot -= 1;
     if (status.dot <= 0) status.dotPower = 0;
-    lines.push(`⚡ ${label}受到持續干擾，損失 ${perTurn} HP（剩 ${Math.max(0, status.dot)} 回合）`);
+    lines.push(`⚡ ${label}受到持續干擾，損失 ${fmt1(perTurn)} HP（剩 ${Math.max(0, status.dot)} 回合）`);
   }
 
   if (totalDamage > 0) entity.hp = Math.max(0, entity.hp);
@@ -731,7 +783,7 @@ function applyMoveEffects(attacker, defender, move, rawInstantDamage, appliedDam
   if (effect.heal) {
     const healAmount = Math.max(1, Number(effect.heal || 0));
     attacker.hp = Math.min(attacker.maxHp || attacker.hp, attacker.hp + healAmount);
-    lines.push(`💚 ${attackerLabel}恢復 ${healAmount} HP。`);
+    lines.push(`💚 ${attackerLabel}恢復 ${fmt1(healAmount)} HP。`);
   }
 
   if (effect.cleanse) {
@@ -742,13 +794,13 @@ function applyMoveEffects(attacker, defender, move, rawInstantDamage, appliedDam
   if (effect.drain && appliedDamage > 0) {
     const healFromDrain = Math.min(Number(effect.drain || 0), Math.max(1, Math.floor(appliedDamage * 0.5)));
     attacker.hp = Math.min(attacker.maxHp || attacker.hp, attacker.hp + healFromDrain);
-    lines.push(`🩸 ${attackerLabel}抽取能量，回復 ${healFromDrain} HP。`);
+    lines.push(`🩸 ${attackerLabel}抽取能量，回復 ${fmt1(healFromDrain)} HP。`);
   }
 
   if (effect.selfDamage) {
     const selfDmg = Math.max(1, Number(effect.selfDamage || 0));
     attacker.hp = Math.max(0, attacker.hp - selfDmg);
-    lines.push(`💥 ${attackerLabel}承受反噬，自損 ${selfDmg} HP。`);
+    lines.push(`💥 ${attackerLabel}承受反噬，自損 ${fmt1(selfDmg)} HP。`);
   }
 
   if (effect.shield) {
@@ -851,7 +903,7 @@ function applyAttack(attacker, defender, move, moveDmg, lines, attackerLabel, de
     lines.push(`💨 ${attackerLabel}施展「${move.name}」，但${missCheck.reason}`);
     if (missCheck.selfDamage > 0) {
       attacker.hp = Math.max(0, attacker.hp - missCheck.selfDamage);
-      lines.push(`⚠️ ${attackerLabel}因失誤損失 ${missCheck.selfDamage} HP。`);
+      lines.push(`⚠️ ${attackerLabel}因失誤損失 ${fmt1(missCheck.selfDamage)} HP。`);
     }
     return { dealtDamage: 0 };
   }
@@ -881,7 +933,7 @@ function applyAttack(attacker, defender, move, moveDmg, lines, attackerLabel, de
   }
 
   defender.hp = Math.max(0, defender.hp - finalDamage);
-  lines.push(`⚔️ ${attackerLabel}施展「${move.name}」，造成 ${finalDamage} 點傷害！`);
+  lines.push(`⚔️ ${attackerLabel}施展「${move.name}」，造成 ${fmt1(finalDamage)} 點傷害！`);
 
   let reflected = 0;
   if (finalDamage > 0) {
@@ -889,7 +941,7 @@ function applyAttack(attacker, defender, move, moveDmg, lines, attackerLabel, de
     if (defenderStatus.thorns > 0) reflected += Math.max(1, Math.floor(finalDamage * 0.2));
     if (reflected > 0) {
       attacker.hp = Math.max(0, attacker.hp - reflected);
-      lines.push(`🔁 ${defenderLabel}反制成功，反彈 ${reflected} 點傷害給 ${attackerLabel}！`);
+      lines.push(`🔁 ${defenderLabel}反制成功，反彈 ${fmt1(reflected)} 點傷害給 ${attackerLabel}！`);
     }
   }
 
@@ -921,6 +973,10 @@ function calculatePlayerMoveDamage(move, player, fighter) {
   let base = Number(move.baseDamage || move.damage || 0);
   base += level * 2;
   base += Math.floor(attack * 0.5);
+
+  const attackerElement = getCombatantElement(fighter, null);
+  const elementScale = Number(ELEMENT_DAMAGE_BALANCE[attackerElement] || 1.0);
+  base = Math.max(0, Math.floor(base * elementScale));
 
   const instant = Math.max(0, base);
   let overTime = 0;
@@ -1128,35 +1184,88 @@ function executeBattleEnemyPhase(player, fighter, enemy, enemyMove = null, optio
 
 // ============== 執行戰鬥回合 ==============
 function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null, options = {}) {
-  const playerPhase = executeBattlePlayerPhase(player, fighter, enemy, chosenMove, options);
-  if (playerPhase.completed) return playerPhase;
+  ensureStatusState(fighter);
+  ensureStatusState(enemy);
 
-  const enemyPhase = executeBattleEnemyPhase(player, fighter, enemy, enemyMove, options);
-  const mergedLines = [...(playerPhase.lines || []), ...(enemyPhase.lines || [])];
-  const merged = buildBattleResult(
-    mergedLines,
-    {
-      victory: enemyPhase.victory,
-      death: enemyPhase.death,
-      defeatedFighterType: enemyPhase.defeatedFighterType,
-      enemy: enemyPhase.enemy,
-      enemyId: enemyPhase.enemyId,
-      gold: enemyPhase.gold,
-      wantedLevel: enemyPhase.wantedLevel,
-      outcomeText: enemyPhase.outcomeText
-    },
-    fighter,
-    enemy
-  );
+  const lines = [];
+  const fighterLabel = fighter?.isHuman ? `🧍 ${fighter.name}` : `🐾 ${fighter.name}`;
+  const enemyLabel = `👹 ${enemy.name}`;
+
+  const fighterDot = applyDotEffectsAtTurnStart(fighter, fighterLabel);
+  const enemyDot = applyDotEffectsAtTurnStart(enemy, enemyLabel);
+  const turnStartLines = [...fighterDot.lines, ...enemyDot.lines];
+  lines.push(...turnStartLines);
+
+  let normalizedPlayerMove = normalizeMove(chosenMove, fighter.attack || 10);
+  let normalizedEnemyMove = enemyMove ? normalizeMove(enemyMove, enemy.attack || 10) : null;
+  if (!normalizedEnemyMove) normalizedEnemyMove = normalizeMove(enemyChooseMove(enemy), enemy.attack || 10);
+
+  let playerDamage = 0;
+  let enemyDamage = 0;
+  const playerLines = [];
+  const enemyLines = [];
+
+  const runPlayerAction = () => {
+    if (enemy.hp <= 0 || fighter.hp <= 0) return;
+    const before = enemy.hp;
+    const startIdx = lines.length;
+    const playerMoveDmg = calculatePlayerMoveDamage(normalizedPlayerMove, player, fighter);
+    const res = applyAttack(fighter, enemy, normalizedPlayerMove, playerMoveDmg, lines, fighterLabel, enemyLabel);
+    playerDamage += Math.max(0, Number(res?.dealtDamage || 0), Math.max(0, before - enemy.hp));
+    playerLines.push(...lines.slice(startIdx));
+  };
+
+  const runEnemyAction = () => {
+    if (enemy.hp <= 0 || fighter.hp <= 0) return;
+    const before = fighter.hp;
+    const startIdx = lines.length;
+    const enemyMoveDmg = calculatePlayerMoveDamage(
+      {
+        baseDamage: normalizedEnemyMove.baseDamage ?? normalizedEnemyMove.damage,
+        effect: normalizedEnemyMove.effect || {},
+        tier: normalizedEnemyMove.tier || 1
+      },
+      player,
+      enemy
+    );
+    const res = applyAttack(enemy, fighter, normalizedEnemyMove, enemyMoveDmg, lines, enemyLabel, fighterLabel);
+    enemyDamage += Math.max(0, Number(res?.dealtDamage || 0), Math.max(0, before - fighter.hp));
+    enemyLines.push(...lines.slice(startIdx));
+  };
+
+  if (enemy.hp <= 0 || fighter.hp <= 0) {
+    lines.push('☠️ 回合開始時已有一方倒下。');
+  } else {
+    const order = decideActionOrder(fighter, normalizedPlayerMove, enemy, normalizedEnemyMove);
+    if (order.reason === 'move_speed' && order.playerMoveSpeed !== order.enemyMoveSpeed) {
+      lines.push(`💨 招式速度判定：${order.first === 'player' ? fighterLabel : enemyLabel} 先手（速度 ${Math.max(order.playerMoveSpeed, order.enemyMoveSpeed)}）`);
+    } else {
+      lines.push(`🎲 同招式速度：${order.first === 'player' ? fighterLabel : enemyLabel} 搶到先手。`);
+    }
+
+    if (order.first === 'player') {
+      runPlayerAction();
+      runEnemyAction();
+    } else {
+      runEnemyAction();
+      runPlayerAction();
+    }
+  }
+
+  decayStatusEndRound(fighter);
+  decayStatusEndRound(enemy);
+
+  const outcome = resolveBattleOutcome(player, fighter, enemy, options) || { victory: null };
+  const merged = buildBattleResult(lines, outcome, fighter, enemy);
   return {
     ...merged,
-    turnStartLines: playerPhase.turnStartLines || [],
-    playerLines: playerPhase.playerLines || [],
-    playerMoveName: playerPhase.playerMoveName || '',
-    playerDamage: Number(playerPhase.playerDamage || 0),
-    enemyLines: enemyPhase.enemyLines || [],
-    enemyMoveName: enemyPhase.enemyMoveName || '',
-    enemyDamage: Number(enemyPhase.enemyDamage || 0)
+    turnStartLines,
+    playerLines,
+    playerMoveName: normalizedPlayerMove?.name || chosenMove?.name || '普通攻擊',
+    playerDamage: Number(playerDamage || 0),
+    enemyLines,
+    enemyMoveName: normalizedEnemyMove?.name || '',
+    enemyDamage: Number(enemyDamage || 0)
   };
 }
 
@@ -1169,11 +1278,13 @@ function enemyChooseMove(enemy) {
   const weighted = enemy.moves.map((rawMove) => {
     const move = normalizeMove(rawMove, enemy.attack || 10);
     const tier = clampInt(move?.tier || 1, 1, 3, 1);
+    const moveSpeed = clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0);
     const effect = move?.effect || {};
     const hasControl = Boolean(effect.stun || effect.freeze || effect.bind || effect.slow || effect.fear || effect.confuse || effect.blind || effect.missNext);
     const hasDot = Boolean(effect.burn || effect.poison || effect.trap || effect.bleed || effect.dot || effect.spreadPoison);
     const highDamage = Number(move?.damage || 0) >= Number(enemy?.attack || 10) * 1.1;
     let weight = 1 + (tier - 1) * 0.7;
+    weight += moveSpeed * 0.05;
     if (hasControl) weight += 0.45;
     if (hasDot) weight += 0.3;
     if (highDamage) weight += 0.25;

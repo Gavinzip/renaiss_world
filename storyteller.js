@@ -363,6 +363,46 @@ function normalizeChoiceByLanguage(choice, playerLang = 'zh-TW') {
   };
 }
 
+function sanitizeMainlineBridgeChoiceTone(choice = {}, {
+  playerLang = 'zh-TW',
+  location = '',
+  progressText = ''
+} = {}) {
+  if (!choice || typeof choice !== 'object') return choice;
+  const safeLocation = String(location || '當前區域').trim() || '當前區域';
+  const safeProgress = String(progressText || '').trim() || '地區進度 1/8';
+  const next = { ...choice };
+  const clean = (text = '') => {
+    let out = String(text || '').trim();
+    if (!out) return out;
+    out = out
+      .replace(/主傳送門測試/gu, '主傳送門')
+      .replace(/測試([^，。；、\n]{0,24})是否可用/gu, '確認$1是否穩定')
+      .replace(/方向是否可用/gu, '航線是否穩定')
+      .replace(/測試/gu, '確認');
+    if (/是否可用/u.test(out)) {
+      out = out.replace(/是否可用/gu, '是否穩定');
+    }
+    return out;
+  };
+  next.name = clean(next.name);
+  next.choice = clean(next.choice);
+  next.desc = clean(next.desc);
+
+  // 若仍呈現系統測試語氣，改成自然敘事版主線動作。
+  const merged = [next.name || '', next.choice || '', next.desc || ''].join(' ');
+  if (/測試|是否可用|可不可用/u.test(merged)) {
+    next.name = playerLang === 'en' ? 'Trace transfer route' : '追查跨區路線';
+    next.choice = playerLang === 'en'
+      ? `Go to the main gate near ${safeLocation} and confirm route records before moving on`
+      : `先到${safeLocation}主傳送門核對跨區航線紀錄，再決定下一步`;
+    next.desc = playerLang === 'en'
+      ? `${safeProgress} | Keep continuity by linking current clues to the next area`
+      : `${safeProgress}｜承接現場線索，先做跨區前的資訊核對`;
+  }
+  return next;
+}
+
 function previewAIContent(content) {
   try {
     if (typeof content === 'string') return content.slice(0, 120);
@@ -1499,7 +1539,9 @@ async function generateMainlineBridgeChoiceWithAI({
   stageGoal = '',
   stage = 1,
   stageCount = 8,
-  storyTail = ''
+  storyTail = '',
+  storyContext = '',
+  bridgeContext = ''
 } = {}) {
   const safeLocation = String(location || '當前區域').trim() || '當前區域';
   const safeGoal = String(stageGoal || '').replace(/\s+/g, ' ').trim();
@@ -1514,6 +1556,8 @@ async function generateMainlineBridgeChoiceWithAI({
   }[playerLang] || '請用繁體中文';
   const progressText = `地區進度 ${Math.max(1, Number(stage || 1))}/${Math.max(1, Number(stageCount || 8))}`;
   const tail = String(storyTail || '').replace(/\s+/g, ' ').trim().slice(-280);
+  const fullContext = String(storyContext || '').replace(/\s+/g, ' ').trim().slice(-1600);
+  const bridgeCtx = String(bridgeContext || '').replace(/\s+/g, ' ').trim().slice(-1200);
 
   const prompt = `你是 Renaiss 劇情選項橋接器，只生成 1 個自然承接的主線選項（JSON 物件）。
 風格限制：原創科技收藏敘事，禁止武俠語氣與模板句。
@@ -1521,8 +1565,12 @@ async function generateMainlineBridgeChoiceWithAI({
 語言：${playerLang}（${langInstruction}）
 地點：${safeLocation}
 主線目標（8-2）：${safeGoal}
-故事尾段（8-1）：
+故事全文（8-1，截斷）：
+${fullContext || '（無）'}
+故事尾段（8-1，優先承接）：
 ${tail || '（無）'}
+橋接上下文（與主選項同源）：
+${bridgeCtx || '（無）'}
 
 任務：
 生成 1 個「從 8-1 承接到 8-2」的可執行選項，語氣要像玩家當下真的會做的事，不可模板化。
@@ -1535,7 +1583,10 @@ ${tail || '（無）'}
 1. 選項必須承接「故事尾段」中的場景或行動方向。
 2. 選項要默默導向「主線目標」，但不能直接複誦目標原文。
 3. 必須可執行、可觀察，不可空話。
-4. 禁止武俠詞彙：江湖、俠客、門派、武功、內力、修煉。`;
+4. 禁止武俠詞彙：江湖、俠客、門派、武功、內力、修煉。
+5. 禁止系統測試語氣：不可寫「測試是否可用」「方向是否可用」「主傳送門測試」這類句子。
+6. 不可忽略「故事全文」裡已出現的人物/物件關係，禁止憑空改寫前文事實。
+7. 優先使用「橋接上下文」內已出現的人名、地點、物件與動作詞。`;
 
   try {
     const raw = await callAI(prompt, 0.9, {
@@ -1558,15 +1609,23 @@ ${tail || '（無）'}
       mainlineStageCount: Math.max(1, Number(stageCount || 8)),
       mainlineBridge: true
     }, playerLang);
-    return choice;
+    return sanitizeMainlineBridgeChoiceTone(choice, {
+      playerLang,
+      location: safeLocation,
+      progressText
+    });
   } catch (e) {
     console.log('[AI][mainlineBridgeChoice] fallback:', e?.message || e);
-    return buildFallbackMainlineBridgeChoice({
+    return sanitizeMainlineBridgeChoiceTone(buildFallbackMainlineBridgeChoice({
       playerLang,
       location: safeLocation,
       stageGoal: safeGoal,
       stage,
       stageCount
+    }), {
+      playerLang,
+      location: safeLocation,
+      progressText
     });
   }
 }
@@ -1581,6 +1640,12 @@ async function injectMainlineBridgeChoiceWithAI(choices = [], options = {}) {
   const stage = Math.max(1, Number(options?.stage || 1));
   const stageCount = Math.max(1, Number(options?.stageCount || 8));
   const storyTail = String(options?.storyTail || '').trim();
+  const storyContext = String(options?.storyContext || '').trim();
+  const bridgeContext = String(options?.bridgeContext || '').trim();
+  const bridgeChoiceResolved = Boolean(options?.bridgeChoiceResolved);
+  const precomputedBridgeChoice = options?.bridgeChoice && typeof options.bridgeChoice === 'object'
+    ? { ...options.bridgeChoice }
+    : null;
   const islandCompleted = Boolean(options?.islandCompleted);
 
   if (islandCompleted) return list;
@@ -1602,15 +1667,44 @@ async function injectMainlineBridgeChoiceWithAI(choices = [], options = {}) {
     return list.slice(0, CHOICE_OUTPUT_COUNT);
   }
 
-  const bridgeChoice = await generateMainlineBridgeChoiceWithAI({
+  let bridgeRaw = precomputedBridgeChoice;
+  if (!bridgeRaw && bridgeChoiceResolved) {
+    bridgeRaw = buildFallbackMainlineBridgeChoice({
+      playerLang,
+      location,
+      stageGoal,
+      stage,
+      stageCount
+    });
+  }
+  if (!bridgeRaw) {
+    bridgeRaw = await generateMainlineBridgeChoiceWithAI({
+      playerLang,
+      location,
+      stageGoal,
+      stage,
+      stageCount,
+      storyTail,
+      storyContext,
+      bridgeContext
+    });
+  }
+  if (!bridgeRaw || typeof bridgeRaw !== 'object') return list.slice(0, CHOICE_OUTPUT_COUNT);
+  const progressText = `地區進度 ${stage}/${stageCount}`;
+  const bridgeChoice = sanitizeMainlineBridgeChoiceTone(normalizeChoiceByLanguage({
+    ...bridgeRaw,
+    action: 'main_story',
+    tag: '[📖主線導引]',
+    mainlineGoal: stageGoal,
+    mainlineProgress: progressText,
+    mainlineStage: stage,
+    mainlineStageCount: stageCount,
+    mainlineBridge: true
+  }, playerLang), {
     playerLang,
     location,
-    stageGoal,
-    stage,
-    stageCount,
-    storyTail
+    progressText
   });
-  if (!bridgeChoice || typeof bridgeChoice !== 'object') return list.slice(0, CHOICE_OUTPUT_COUNT);
 
   const fp = getChoiceFingerprint(bridgeChoice);
   const hasDuplicate = list.some((item) => getChoiceFingerprint(item) === fp);
@@ -2159,6 +2253,12 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const islandRoadmapPrompt = ISLAND_STORY && typeof ISLAND_STORY.buildStoryRoadmapPrompt === 'function'
     ? ISLAND_STORY.buildStoryRoadmapPrompt(location, islandStage, islandStageCount)
     : '';
+  const roadmap = ISLAND_STORY && typeof ISLAND_STORY.getStoryRoadmap === 'function'
+    ? ISLAND_STORY.getStoryRoadmap(location, islandStageCount)
+    : [];
+  const safeStage = Math.max(1, Number(islandStage || 1));
+  const stageIndex = Math.max(0, Math.min(Math.max(0, roadmap.length - 1), safeStage - 1));
+  const stageGoal = String((Array.isArray(roadmap) && roadmap[stageIndex]) || '').trim();
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
   const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
@@ -2219,6 +2319,36 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     : '';
   const storyAnchors = extractStoryAnchors(fullStoryText, npcs, location, sourceChoiceText);
   const anchorText = storyAnchors.length > 0 ? storyAnchors.join('、') : '（無）';
+  const bridgeTail = [storyFocus.closing, storyFocus.tail]
+    .map((text) => String(text || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  const bridgeContext = [
+    `上一個選擇：${sourceChoiceText || '（無）'}`,
+    `最近已做過的選擇：${recentChoiceText || '（無）'}`,
+    `已出現元素：${anchorText}`,
+    `附近可互動地點：${nearbyHint}`,
+    `附近可疑勢力：${digitalPresenceText}`,
+    `當地NPC：${npcStatusText || '（無）'}`,
+    navigationTarget ? `導航目標：${navigationTarget}` : '',
+    focusedMemory ? `記憶摘要：${focusedMemory}` : '',
+    islandGuidePrompt ? `島內引導：${islandGuidePrompt}` : ''
+  ].filter(Boolean).join('\n');
+  const bridgeChoicePromise = (!islandCompleted && stageGoal)
+    ? generateMainlineBridgeChoiceWithAI({
+      playerLang,
+      location,
+      stageGoal,
+      stage: safeStage,
+      stageCount: islandStageCount,
+      storyTail: bridgeTail || fullStoryText.slice(-320),
+      storyContext: fullStoryText,
+      bridgeContext
+    }).catch((bridgeErr) => {
+      console.log('[AI][mainlineBridgeChoice] parallel fallback:', bridgeErr?.message || bridgeErr);
+      return null;
+    })
+    : Promise.resolve(null);
   
   const prompt = `你是 Renaiss 世界的冒險策劃師，設計的選項要有創意、刺激。
 風格限制：原創「科技收藏×真偽鑑識」敘事，禁止武俠語氣，禁止既有 IP 名詞（寶可夢、數碼寶貝、斗羅大陸等）。
@@ -2362,16 +2492,7 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       }
     }
 
-    const roadmap = ISLAND_STORY && typeof ISLAND_STORY.getStoryRoadmap === 'function'
-      ? ISLAND_STORY.getStoryRoadmap(location, islandStageCount)
-      : [];
-    const safeStage = Math.max(1, Number(islandStage || 1));
-    const stageIndex = Math.max(0, Math.min(Math.max(0, roadmap.length - 1), safeStage - 1));
-    const stageGoal = String((Array.isArray(roadmap) && roadmap[stageIndex]) || '').trim();
-    const bridgeTail = [storyFocus.closing, storyFocus.tail]
-      .map((text) => String(text || '').trim())
-      .filter(Boolean)
-      .join('\n');
+    const precomputedBridgeChoice = await bridgeChoicePromise;
 
     try {
       validatedChoices = await injectMainlineBridgeChoiceWithAI(validatedChoices, {
@@ -2381,6 +2502,10 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
         stage: safeStage,
         stageCount: islandStageCount,
         storyTail: bridgeTail || fullStoryText.slice(-320),
+        storyContext: fullStoryText,
+        bridgeContext,
+        bridgeChoice: precomputedBridgeChoice,
+        bridgeChoiceResolved: true,
         islandCompleted
       });
     } catch (bridgeErr) {

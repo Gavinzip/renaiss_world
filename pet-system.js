@@ -126,6 +126,62 @@ const NEGATIVE_MOVES = [
   { id: 'ultimate_dark', name: '零界崩解', element: '暗域', type: 'negative', tier: 3, baseDamage: 45, effect: { selfDamage: 20 }, desc: '引爆零界反應器，代價極高' }
 ];
 
+function deriveMovePriority(move = {}) {
+  const effect = (move && typeof move.effect === 'object') ? move.effect : {};
+  if (effect.flee) return 3;
+  if (effect.wait) return -1;
+
+  const hasSupport = Boolean(effect.heal || effect.cleanse || effect.shield || effect.dodge || effect.reflect || effect.thorns);
+  const hasHardControl = Boolean(effect.stun || effect.freeze || effect.missNext);
+  const hasSoftControl = Boolean(effect.bind || effect.slow || effect.fear || effect.confuse || effect.blind);
+  const isHeavyBurst = Number(move.baseDamage || 0) >= 40 || Number(move.tier || 1) >= 3;
+
+  let priority = 0;
+  if (hasSupport) priority += 1;
+  if (hasHardControl) priority += 1;
+  if (!hasSupport && !hasHardControl && !hasSoftControl && isHeavyBurst) priority -= 1;
+  return Math.max(-1, Math.min(2, priority));
+}
+
+function deriveMoveSpeed(move = {}) {
+  const effect = (move && typeof move.effect === 'object') ? move.effect : {};
+  if (effect.flee) return 3;
+  if (effect.wait) return -1;
+
+  const hasHardControl = Boolean(effect.stun || effect.freeze || effect.missNext);
+  const hasSupport = Boolean(effect.heal || effect.cleanse || effect.shield || effect.dodge || effect.reflect);
+  const hasHeavyBurst = Number(move.baseDamage || 0) >= 35 || Number(move.tier || 1) >= 3;
+
+  let speed = 0;
+  if (hasSupport || hasHardControl) speed += 1;
+  if (hasHeavyBurst) speed -= 1;
+  return Math.max(-1, Math.min(3, speed));
+}
+
+function enforceMovePriority(pool = []) {
+  for (const move of pool) {
+    if (!move || typeof move !== 'object') continue;
+    const fixed = Number(move.priority);
+    if (Number.isFinite(fixed)) {
+      move.priority = Math.max(-1, Math.min(3, Math.floor(fixed)));
+      continue;
+    }
+    move.priority = deriveMovePriority(move);
+  }
+}
+
+function enforceMoveSpeed(pool = []) {
+  for (const move of pool) {
+    if (!move || typeof move !== 'object') continue;
+    const fixed = Number(move.speed);
+    if (Number.isFinite(fixed)) {
+      move.speed = Math.max(-1, Math.min(3, Math.floor(fixed)));
+      continue;
+    }
+    move.speed = deriveMoveSpeed(move);
+  }
+}
+
 function enforceControlMoveTier(pool = []) {
   const hardControlKeys = ['stun', 'freeze'];
   const controlKeys = ['bind', 'slow', 'fear', 'confuse', 'blind', 'missNext'];
@@ -147,11 +203,15 @@ function enforceControlMoveTier(pool = []) {
 // 控制型技能不應落在普通階，避免前期連控失衡
 enforceControlMoveTier(POSITIVE_MOVES);
 enforceControlMoveTier(NEGATIVE_MOVES);
+enforceMovePriority(POSITIVE_MOVES);
+enforceMovePriority(NEGATIVE_MOVES);
+enforceMoveSpeed(POSITIVE_MOVES);
+enforceMoveSpeed(NEGATIVE_MOVES);
 
 // ============== 初始技能 ==============
 const INITIAL_MOVES = [
-  { id: 'head_butt', name: '頭槌', element: '普通', type: 'normal', tier: 1, baseDamage: 8, effect: {}, desc: '寵物本能攻擊' },
-  { id: 'flee', name: '逃跑', element: '普通', type: 'normal', tier: 1, baseDamage: 0, effect: { flee: true }, desc: '100%逃脫' }
+  { id: 'head_butt', name: '頭槌', element: '普通', type: 'normal', tier: 1, priority: 0, speed: 0, baseDamage: 8, effect: {}, desc: '寵物本能攻擊' },
+  { id: 'flee', name: '逃跑', element: '普通', type: 'normal', tier: 1, priority: 3, speed: 3, baseDamage: 0, effect: { flee: true }, desc: '100%逃脫' }
 ];
 
 const ALL_MOVES = [...POSITIVE_MOVES, ...NEGATIVE_MOVES, ...INITIAL_MOVES];
@@ -280,6 +340,12 @@ function normalizeLoadedMove(move) {
 
   const normalized = cloneMoveTemplate(template);
   normalized.currentProficiency = Number(move.currentProficiency || 0);
+  if (!Number.isFinite(Number(normalized.priority))) {
+    normalized.priority = deriveMovePriority(normalized);
+  }
+  if (!Number.isFinite(Number(normalized.speed))) {
+    normalized.speed = deriveMoveSpeed(normalized);
+  }
   if (move.cooldown !== undefined) normalized.cooldown = move.cooldown;
 
   const changed =
@@ -287,6 +353,8 @@ function normalizeLoadedMove(move) {
     move.name !== normalized.name ||
     move.element !== normalized.element ||
     move.type !== normalized.type ||
+    Number(move.priority || 0) !== Number(normalized.priority || 0) ||
+    Number(move.speed || 0) !== Number(normalized.speed || 0) ||
     Number(move.baseDamage || 0) !== Number(normalized.baseDamage || 0) ||
     JSON.stringify(move.effect || {}) !== JSON.stringify(normalized.effect || {});
 

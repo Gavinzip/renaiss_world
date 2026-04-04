@@ -176,6 +176,16 @@ function formatFinanceAmount(amount = 0) {
   return `${num > 0 ? '+' : ''}${num}`;
 }
 
+function round1(value, fallback = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return Number(fallback) || 0;
+  return Math.round(num * 10) / 10;
+}
+
+function format1(value, fallback = 0) {
+  return String(Math.round(round1(value, fallback)));
+}
+
 // ============== 玩家討論串管理 ==============
 function loadPlayerThreads() {
   if (!fs.existsSync(PLAYER_THREADS_FILE)) return {};
@@ -642,6 +652,62 @@ function applyFriendBattleResult(player, friendId = '', didWin = false) {
   return record;
 }
 
+function buildFriendDuelSnapshot(player) {
+  if (!player || typeof player !== 'object') return null;
+  const ownerId = String(player.id || '').trim();
+  if (!ownerId) return null;
+  const ownedPets = getPlayerOwnedPets(ownerId);
+  const petStates = {};
+  for (const p of ownedPets) {
+    const id = String(p?.id || '').trim();
+    if (!id) continue;
+    petStates[id] = {
+      hp: Math.max(0, Number(p?.hp || 0)),
+      status: cloneStatusState(p?.status),
+      reviveAt: p?.reviveAt || null,
+      reviveTurnsRemaining: Math.max(0, Number(p?.reviveTurnsRemaining || 0))
+    };
+  }
+  return {
+    playerHp: Math.max(0, Number(player?.stats?.生命 || 0)),
+    petStates
+  };
+}
+
+function restoreFriendDuelSnapshot(player, snapshot, activePet = null) {
+  if (!player || !snapshot || typeof snapshot !== 'object') return false;
+  let restored = false;
+  const maxPlayerHp = Math.max(1, Number(player?.maxStats?.生命 || 100));
+  if (Number.isFinite(Number(snapshot?.playerHp)) && player?.stats) {
+    player.stats.生命 = Math.max(0, Math.min(maxPlayerHp, Number(snapshot.playerHp)));
+    restored = true;
+  }
+
+  const petStates = snapshot?.petStates && typeof snapshot.petStates === 'object'
+    ? snapshot.petStates
+    : {};
+  for (const [petId, state] of Object.entries(petStates)) {
+    const id = String(petId || '').trim();
+    if (!id || !state || typeof state !== 'object') continue;
+    const savedPet = (typeof PET.getPetById === 'function') ? PET.getPetById(id) : null;
+    if (!savedPet || String(savedPet.ownerId || '').trim() !== String(player.id || '').trim()) continue;
+    const maxHp = Math.max(1, Number(savedPet?.maxHp || savedPet?.hp || 100));
+    savedPet.hp = Math.max(0, Math.min(maxHp, Number(state?.hp || 0)));
+    savedPet.status = cloneStatusState(state?.status);
+    savedPet.reviveAt = state?.reviveAt || null;
+    savedPet.reviveTurnsRemaining = Math.max(0, Number(state?.reviveTurnsRemaining || 0));
+    PET.savePet(savedPet);
+    if (activePet && String(activePet?.id || '').trim() === id) {
+      activePet.hp = savedPet.hp;
+      activePet.status = cloneStatusState(savedPet.status);
+      activePet.reviveAt = savedPet.reviveAt || null;
+      activePet.reviveTurnsRemaining = savedPet.reviveTurnsRemaining;
+    }
+    restored = true;
+  }
+  return restored;
+}
+
 function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
   const petName = String(friendPet?.name || '夥伴').trim() || '夥伴';
   const ownerName = String(friendPlayer?.name || '好友').trim() || '好友';
@@ -653,6 +719,8 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
       name: String(m?.name || '普通攻擊').trim(),
       element: String(m?.element || '普通').trim(),
       tier: Math.max(1, Math.min(3, Number(m?.tier || 1))),
+      priority: Math.max(-1, Math.min(3, Number(m?.priority || 0) || 0)),
+      speed: Math.max(-1, Math.min(3, Number(m?.speed ?? m?.priority ?? 0) || 0)),
       baseDamage: Math.max(1, Number(m?.baseDamage ?? m?.damage ?? 10) || 10),
       damage: Math.max(1, Number(m?.baseDamage ?? m?.damage ?? 10) || 10),
       effect: (m?.effect && typeof m.effect === 'object') ? { ...m.effect } : {},
@@ -665,6 +733,8 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
     name: '友誼試探',
     element: '普通',
     tier: 1,
+    priority: 0,
+    speed: 0,
     baseDamage: Math.max(8, Number(friendPet?.attack || 12)),
     damage: Math.max(8, Number(friendPet?.attack || 12)),
     effect: {},
@@ -699,6 +769,7 @@ function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = fa
       .slice(0, CHOICE_DISPLAY_COUNT)
       .map((choice) => ({ ...choice }))
     : [];
+  const preState = (duel.preState && typeof duel.preState === 'object') ? duel.preState : null;
 
   const rivalPlayer = rivalId ? CORE.loadPlayer(rivalId) : null;
   if (rivalPlayer) {
@@ -707,15 +778,18 @@ function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = fa
   }
   const myRecord = applyFriendBattleResult(player, rivalId, didWin);
 
-  if (pet && Number(pet.hp || 0) <= 0) {
-    pet.hp = 1;
-    pet.status = '正常';
-    pet.reviveAt = null;
-    pet.reviveTurnsRemaining = 0;
-    PET.savePet(pet);
-  }
-  if (combatant?.isHuman && Number(player?.stats?.生命 || 0) <= 0) {
-    player.stats.生命 = 1;
+  const restoredBySnapshot = restoreFriendDuelSnapshot(player, preState, pet);
+  if (!restoredBySnapshot) {
+    if (pet && Number(pet.hp || 0) <= 0) {
+      pet.hp = 1;
+      pet.status = '正常';
+      pet.reviveAt = null;
+      pet.reviveTurnsRemaining = 0;
+      PET.savePet(pet);
+    }
+    if (combatant?.isHuman && Number(player?.stats?.生命 || 0) <= 0) {
+      player.stats.生命 = 1;
+    }
   }
 
   rememberPlayer(player, {
@@ -792,6 +866,7 @@ async function startFriendDuel(interaction, user, friendId = '') {
   const enemy = buildFriendDuelEnemyFromPlayer(targetPlayer, targetPet);
   const fighterType = CORE.canPetFight(myPet) ? 'pet' : 'player';
   const sourceChoice = `向好友 ${targetPlayer.name} 發起友誼戰`;
+  const duelSnapshot = buildFriendDuelSnapshot(challenger);
   const preservedStory = String(challenger.currentStory || '').trim();
   const preservedChoices = Array.isArray(challenger.eventChoices)
     ? normalizeEventChoices(challenger, challenger.eventChoices)
@@ -803,6 +878,14 @@ async function startFriendDuel(interaction, user, friendId = '') {
   const fighterLabel = fighterType === 'pet'
     ? `🐾 ${myPet.name}`
     : `🧍 ${challenger.name}(ATK 10)`;
+  const enemyElementText = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
+  const allyElementText = fighterType === 'pet'
+    ? formatBattleElementDisplay(myPet?.type || myPet?.element || '')
+    : '🧍 無屬性';
+  const relationText = getBattleElementRelation(
+    fighterType === 'pet' ? (myPet?.type || myPet?.element || '') : '',
+    resolveEnemyBattleElement(enemy)
+  ).text;
 
   challenger.battleState = {
     enemy,
@@ -824,7 +907,8 @@ async function startFriendDuel(interaction, user, friendId = '') {
       friendPetName: String(targetPet?.name || '').trim() || '夥伴',
       startedTurn: getPlayerStoryTurns(challenger),
       returnStory: preservedStory,
-      returnChoices: preservedChoices
+      returnChoices: preservedChoices,
+      preState: duelSnapshot
     }
   };
   rememberPlayer(challenger, {
@@ -842,12 +926,15 @@ async function startFriendDuel(interaction, user, friendId = '') {
     .setDescription(
       `**友誼戰即將開始！**\n\n` +
       `對手：${enemy.name}\n` +
+      `🏷️ 敵方屬性：${enemyElementText}\n` +
       `❤️ 對手 HP：${enemy.hp}/${enemy.maxHp}\n` +
       `⚔️ 對手攻擊：${enemy.attack}\n` +
       `${fighterLabel} 出戰\n` +
+      `🏷️ 我方屬性：${allyElementText}\n` +
+      `${relationText}\n` +
       `⚡ 戰鬥能量規則：每回合 +2，可結轉\n` +
       `🤝 友誼戰規則：不影響生死、無通緝、無金幣掉落\n` +
-      `📊 勝率預估：${estimate.rank}（約 ${estimate.winRate}%）\n\n` +
+      `📊 勝率預估：${estimate.rank}（約 ${format1(estimate.winRate)}%）\n\n` +
       `請選擇戰鬥模式：`
     );
   const row = new ActionRowBuilder().addComponents(
@@ -1521,7 +1608,7 @@ function buildBattlePreviewHint(choice, context = {}) {
   );
   const fighterType = CORE.canPetFight(pet) ? 'pet' : 'player';
   const estimate = estimateBattleOutcome(player, pet, previewEnemy, fighterType);
-  return `預估:${estimate.rank} ${estimate.winRate}%`;
+  return `預估:${estimate.rank} ${format1(estimate.winRate)}%`;
 }
 
 function appendBattlePreviewToChoice(text, choice, context = {}) {
@@ -3293,9 +3380,16 @@ function ensureEarlyGameIncomeChoice(player, choices = []) {
 function isMainlineGuideChoice(choice) {
   if (!choice || typeof choice !== 'object') return false;
   const action = String(choice.action || '').trim();
-  if (['main_story', 'portal_intent', 'location_story_battle', 'mentor_spar'].includes(action)) return true;
-  const text = [choice.tag || '', choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
-  return /(主線|收尾|下一區|跨區|傳送門|回到線索|沿線追查)/u.test(text);
+  if (action === 'main_story') return true;
+  const tag = String(choice.tag || '').trim();
+  if (/\[📖主線導引\]/u.test(tag)) return true;
+  // 傳送門本身不等於主線導引，避免一般移動選項被硬套上「地區進度 x/8」。
+  if (action === 'portal_intent') {
+    const portalText = [choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+    return /(主線|收尾|下一區|跨區|回到線索|沿線追查)/u.test(portalText);
+  }
+  const text = [tag, choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
+  return /(主線|收尾|下一區|跨區|回到線索|沿線追查)/u.test(text);
 }
 
 function createSoftMainlineGuideChoice(player) {
@@ -6331,11 +6425,13 @@ function pickBestMoveForAI(player, pet, enemy, combatant = null, availableEnergy
   let bestScore = -1;
   for (const move of affordableMoves) {
     const cost = BATTLE.getMoveEnergyCost(move);
+    const moveSpeed = Math.max(-1, Math.min(3, Number(move?.speed ?? move?.priority ?? 0) || 0));
     const dmg = BATTLE.calculatePlayerMoveDamage(move, player, activeCombatant);
     const netDamage = Math.max(1, (dmg.total || 0) - (enemy?.defense || 0));
     const killBonus = (enemy?.hp || 0) <= netDamage ? 120 : 0;
     const efficiencyBonus = Math.max(0, 4 - cost) * 2;
-    const score = netDamage + killBonus + efficiencyBonus;
+    const speedBonus = moveSpeed * 1;
+    const score = netDamage + killBonus + efficiencyBonus + speedBonus;
     if (score > bestScore) {
       best = move;
       bestScore = score;
@@ -6645,10 +6741,10 @@ function getMapText(lang = 'zh-TW') {
       mapDestinationSetNotice: (target) => `✅ 已設定目的地：${target}。下一段故事會朝這裡推進。`,
       mapAutoTravelLocked: (target) => `🧭 你想前往 **${target}**，但本地劇情尚未完成，只能先沿主線推進。`,
       mapAutoTravelCrossRegion: '🧭 區內移動僅限同一大區；跨區請使用主傳送門。',
-      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推進時感到壓力失衡（預估勝率 ${winRate}%），只好先在 **${from}** 整備。`,
+      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推進時感到壓力失衡（預估勝率 ${format1(winRate)}%），只好先在 **${from}** 整備。`,
       mapAutoTravelMoved: (from, target) => `🧭 你依照地圖座標離開 **${from}**，一路推進到 **${target}**。`,
       portalInvalidDestination: '⚠️ 無效的傳送目的地。',
-      portalGateDenied: (target, winRate) => `🛑 無法前往 **${target}**：目前勝率 ${winRate}%（需要 > ${LOCATION_ENTRY_MIN_WINRATE}%）。`,
+      portalGateDenied: (target, winRate) => `🛑 無法前往 **${target}**：目前勝率 ${format1(winRate)}%（需要 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`,
       portalTeleportStory: (from, to) => `🌀 傳送門正在開啟，空間折疊完成。\n你已由 **${from}** 抵達 **${to}**。`,
       portalDoneTitle: '✅ 傳送完成',
       portalDoneDesc: (from, to) => `你已由 **${from}** 傳送至 **${to}**。\n\n接下來按「📖 返回故事」，系統會以新地點生成新的故事與選項。`,
@@ -6726,10 +6822,10 @@ function getMapText(lang = 'zh-TW') {
       mapDestinationSetNotice: (target) => `✅ 已设置目的地：${target}。下一段故事会朝这里推进。`,
       mapAutoTravelLocked: (target) => `🧭 你想前往 **${target}**，但本地剧情尚未完成，只能先沿主线推进。`,
       mapAutoTravelCrossRegion: '🧭 区内移动仅限同一大区；跨区请使用主传送门。',
-      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推进时感到压力失衡（预估胜率 ${winRate}%），只好先在 **${from}** 整备。`,
+      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推进时感到压力失衡（预估胜率 ${format1(winRate)}%），只好先在 **${from}** 整备。`,
       mapAutoTravelMoved: (from, target) => `🧭 你依照地图坐标离开 **${from}**，一路推进到 **${target}**。`,
       portalInvalidDestination: '⚠️ 无效的传送目的地。',
-      portalGateDenied: (target, winRate) => `🛑 无法前往 **${target}**：当前胜率 ${winRate}%（需要 > ${LOCATION_ENTRY_MIN_WINRATE}%）。`,
+      portalGateDenied: (target, winRate) => `🛑 无法前往 **${target}**：当前胜率 ${format1(winRate)}%（需要 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`,
       portalTeleportStory: (from, to) => `🌀 传送门正在开启，空间折叠完成。\n你已由 **${from}** 抵达 **${to}**。`,
       portalDoneTitle: '✅ 传送完成',
       portalDoneDesc: (from, to) => `你已由 **${from}** 传送至 **${to}**。\n\n接下来按「📖 返回故事」，系统会以新地点生成新的故事与选项。`,
@@ -6807,10 +6903,10 @@ function getMapText(lang = 'zh-TW') {
       mapDestinationSetNotice: (target) => `✅ Destination set: ${target}. The next story step will move toward it.`,
       mapAutoTravelLocked: (target) => `🧭 You want to go to **${target}**, but local story is not completed yet. Continue the main arc first.`,
       mapAutoTravelCrossRegion: '🧭 In-region movement only supports same-region nodes; use portal for cross-region travel.',
-      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 You felt unstable pressure while advancing to **${target}** (estimated win rate ${winRate}%), so you regrouped at **${from}**.`,
+      mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 You felt unstable pressure while advancing to **${target}** (estimated win rate ${format1(winRate)}%), so you regrouped at **${from}**.`,
       mapAutoTravelMoved: (from, target) => `🧭 Following map coordinates, you moved from **${from}** to **${target}**.`,
       portalInvalidDestination: '⚠️ Invalid portal destination.',
-      portalGateDenied: (target, winRate) => `🛑 Cannot travel to **${target}**: current win rate ${winRate}% (required > ${LOCATION_ENTRY_MIN_WINRATE}%).`,
+      portalGateDenied: (target, winRate) => `🛑 Cannot travel to **${target}**: current win rate ${format1(winRate)}% (required > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%).`,
       portalTeleportStory: (from, to) => `🌀 Portal activated. Spatial fold complete.\nYou moved from **${from}** to **${to}**.`,
       portalDoneTitle: '✅ Teleport Complete',
       portalDoneDesc: (from, to) => `You teleported from **${from}** to **${to}**.\n\nNow press "📖 Back to Story" to generate new story and choices at the new location.`,
@@ -7028,7 +7124,7 @@ function maybeApplyRoamMovement(player, event, result, queueMemory) {
       queueMemory({
         type: '移動',
         content: `嘗試探索前往${targetLocation}`,
-        outcome: `受阻｜勝率 ${entryGate.winRate}%`,
+        outcome: `受阻｜勝率 ${format1(entryGate.winRate)}%`,
         importance: 1,
         tags: ['travel', 'wander', 'blocked', 'entry_gate']
       });
@@ -7552,6 +7648,76 @@ function getPetElementDisplayName(element = '') {
   if (normalized === '火') return '火屬性';
   if (normalized === '草') return '草屬性';
   return '水屬性';
+}
+
+function normalizeKnownBattleElement(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (text === '水' || /^water$/i.test(text) || /水屬性/u.test(text)) return '水';
+  if (text === '火' || /^fire$/i.test(text) || /火屬性/u.test(text)) return '火';
+  if (text === '草' || /^grass$/i.test(text) || /草屬性/u.test(text)) return '草';
+  return '';
+}
+
+function getBattleElementEmoji(raw = '') {
+  const normalized = normalizeKnownBattleElement(raw);
+  if (normalized === '水') return '💧';
+  if (normalized === '火') return '🔥';
+  if (normalized === '草') return '🌿';
+  return '🧪';
+}
+
+function formatBattleElementDisplay(raw = '', fallback = '未知屬性') {
+  const text = String(raw || '').trim();
+  if (!text) return `❔ ${fallback}`;
+  const normalized = normalizeKnownBattleElement(text);
+  if (normalized) return `${getBattleElementEmoji(normalized)} ${getPetElementDisplayName(normalized)}`;
+  const cleaned = text.replace(/屬性$/u, '').trim();
+  const label = cleaned ? `${cleaned}屬性` : fallback;
+  return `${getBattleElementEmoji(text)} ${label}`;
+}
+
+function resolveEnemyBattleElement(enemy = {}) {
+  const candidates = [
+    enemy?.type,
+    enemy?.element,
+    enemy?.petElement,
+    enemy?.npcPet?.element,
+    enemy?.companionPet?.element
+  ];
+  for (const raw of candidates) {
+    const text = String(raw || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function getBattleElementRelation(allyRaw = '', enemyRaw = '') {
+  const ally = normalizeKnownBattleElement(allyRaw);
+  const enemy = normalizeKnownBattleElement(enemyRaw);
+  const counter = { 水: '火', 火: '草', 草: '水' };
+  if (!ally || !enemy) {
+    return {
+      state: 'unknown',
+      text: '⚖️ 屬性克制：無明確克制（未知屬性）'
+    };
+  }
+  if (counter[ally] === enemy) {
+    return {
+      state: 'ally_advantage',
+      text: '🌟 屬性克制：我方克制敵方（傷害 +20%）'
+    };
+  }
+  if (counter[enemy] === ally) {
+    return {
+      state: 'enemy_advantage',
+      text: '⚠️ 屬性克制：敵方克制我方（對手傷害 +20%）'
+    };
+  }
+  return {
+    state: 'neutral',
+    text: '⚖️ 屬性克制：互不克制'
+  };
 }
 
 function pickDefaultPetNameByElement(element = '') {
@@ -8279,7 +8445,7 @@ async function handlePet(interaction, user) {
   
   const dmgInfo = pet.moves.map((m, i) => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `${i+1}. **${m.name}** (${m.element}): ${d.total}dmg`;
+    return `${i+1}. **${m.name}** (${m.element}): ${format1(d.total)}dmg`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -10322,7 +10488,7 @@ async function createCharacterWithName(interaction, user, profile, charName, opt
   const tierMeta = getMoveTierMeta(selectedMove.tier);
   const dmgInfo = pet.moves.map((m) => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `• ${m.name} (${m.element}): ${d.total}dmg`;
+    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -10561,7 +10727,7 @@ async function handleNameSubmit(interaction, user) {
   
   const dmgInfo = pet.moves.map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `• ${m.name} (${m.element}): ${d.total}dmg`;
+    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -10623,7 +10789,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   const dmgInfo = pet.moves.map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `• ${m.name} (${m.element}): ${d.total}dmg`;
+    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -11722,7 +11888,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     const tierEmoji = m.tier === 3 ? '🔮' : m.tier === 2 ? '💠' : '⚪';
     const tierName = m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通';
     const effectStr = describeMoveEffects(m);
-    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${dmg.total}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
+    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
   });
 
   const petSummary = ownedPets.map((pet, i) => {
@@ -11741,7 +11907,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
         const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, selectedPet);
         const energyCost = BATTLE.getMoveEnergyCost(move);
         const effectStr = describeMoveEffects(move);
-        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${dmg.total}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
+        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
       })
     : ['（背包目前沒有技能晶片）'];
 
@@ -11801,7 +11967,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
       return {
         label: `${move.name}`.slice(0, 100),
-        description: `${move.element || '未知'}/${tierText}｜${dmg.total}dmg⚡${energyCost}｜${effectShort}`.slice(0, 100),
+        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.total)}dmg⚡${energyCost}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
     });
@@ -11837,7 +12003,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   if (attackMoves.length > 0) {
     const moveOptions = attackMoves.slice(0, 25).map((m) => ({
       label: `${m.name}`.slice(0, 100),
-      description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet).total}dmg⚡${BATTLE.getMoveEnergyCost(m)}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
+      description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${format1(BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet).total)}dmg⚡${BATTLE.getMoveEnergyCost(m)}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
       value: `${selectedPet.id}::${m.id}`,
       default: selectedSet.has(String(m.id || ''))
     }));
@@ -14152,12 +14318,12 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     if (!entryGate.allowed) {
       result = {
         type: 'travel_blocked',
-        message: `🛑 你嘗試前往 **${targetLocation}**，但目前勝率僅 **${entryGate.winRate}%**（門檻 > ${LOCATION_ENTRY_MIN_WINRATE}%）。請先提升實力再前往。`
+        message: `🛑 你嘗試前往 **${targetLocation}**，但目前勝率僅 **${format1(entryGate.winRate)}%**（門檻 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。請先提升實力再前往。`
       };
       queueMemory({
         type: '移動',
         content: `嘗試前往${targetLocation}`,
-        outcome: `受阻｜勝率 ${entryGate.winRate}%`,
+        outcome: `受阻｜勝率 ${format1(entryGate.winRate)}%`,
         importance: 2,
         tags: ['travel', 'blocked', 'entry_gate']
       });
@@ -14664,8 +14830,16 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     const fighterLabel = fighterType === 'pet'
       ? `🐾 ${pet.name}`
       : `🧍 ${player.name}(ATK 10)`;
+    const enemyElementText = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
+    const allyElementText = fighterType === 'pet'
+      ? formatBattleElementDisplay(pet?.type || pet?.element || '')
+      : '🧍 無屬性';
+    const relationText = getBattleElementRelation(
+      fighterType === 'pet' ? (pet?.type || pet?.element || '') : '',
+      resolveEnemyBattleElement(enemy)
+    ).text;
     const enemyPetLine = enemy?.npcPet
-      ? `🐾 對手寵物：${enemy.npcPet.name}（ATK ${enemy.npcPet.attack}${enemy.npcPet.newbieScaled ? '｜新手區調整' : ''}）\n`
+      ? `🐾 對手寵物：${enemy.npcPet.name}（${formatBattleElementDisplay(enemy.npcPet.element)}｜ATK ${enemy.npcPet.attack}${enemy.npcPet.newbieScaled ? '｜新手區調整' : ''}）\n`
       : '';
     const beginnerGuardText = enemy.beginnerBalanced
       ? '🛡️ 新手區保護：本場敵人能力已平衡調整\n'
@@ -14711,17 +14885,20 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       .setDescription(
         `**戰鬥即將開始！**\n\n${player.currentStory}\n\n` +
         `👹 敵人：**${enemy.name}**\n` +
+        `🏷️ 敵方屬性：${enemyElementText}\n` +
         `❤️ 敵方 HP：${enemy.hp}/${enemy.maxHp}\n` +
         `⚔️ 敵方攻擊：${enemy.attack}\n` +
         `${enemyPetLine}` +
         `${fighterLabel} 出戰\n` +
+        `🏷️ 我方屬性：${allyElementText}\n` +
+        `${relationText}\n` +
         `⚡ 戰鬥能量規則：每回合 +2，可結轉到下一回合\n` +
         `${beginnerGuardText}\n` +
         `${beginnerDangerText}` +
         `${mentorRuleText}` +
-        `📊 **勝率預估：${battleEstimate.rank}（約 ${battleEstimate.winRate}%）**（模擬 ${battleEstimate.simulations || BATTLE_ESTIMATE_SIMULATIONS} 場）\n` +
+        `📊 **勝率預估：${battleEstimate.rank}（約 ${format1(battleEstimate.winRate)}%）**（模擬 ${battleEstimate.simulations || BATTLE_ESTIMATE_SIMULATIONS} 場）\n` +
         `你方平均傷害 ${battleEstimate.avgPlayerDamage}/回合，預計 ${battleEstimate.turnsToWin} 回合擊倒敵人\n` +
-        `敵方平均傷害 ${battleEstimate.enemyDamage}/回合，預計 ${battleEstimate.turnsToLose} 回合擊倒你方\n\n` +
+        `敵方平均傷害 ${format1(battleEstimate.enemyDamage)}/回合，預計 ${format1(battleEstimate.turnsToLose)} 回合擊倒你方\n\n` +
         `請選擇戰鬥模式：`
       );
 
@@ -15064,9 +15241,10 @@ function buildBattleMoveDetails(player, pet, combatant) {
   return getCombatantMoves(combatant, pet).map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, player, combatant);
     const energyCost = BATTLE.getMoveEnergyCost(m);
+    const moveSpeed = Math.max(-1, Math.min(3, Number(m?.speed ?? m?.priority ?? 0) || 0));
     const canUse = currentEnergy >= energyCost;
     const effectStr = describeMoveEffects(m);
-    return `⚔️ ${m.name} | ${d.total} dmg | ⚡${energyCost} | ${canUse ? '可用' : '能量不足'} | ${effectStr || '無'}`;
+    return `⚔️ ${m.name} | ${format1(d.total)} dmg | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${canUse ? '可用' : '能量不足'} | ${effectStr || '無'}`;
   }).join('\n');
 }
 
@@ -15169,7 +15347,7 @@ function buildActionPanelLines(title, data = {}, width = 24) {
   const moveLine = data?.move ? `招式：${data.move}` : '（尚未行動）';
   const damageLabel = data?.damageLabel || '造成';
   const damageLine = Number.isFinite(Number(data?.damage))
-    ? `${damageLabel}：${Math.max(0, Number(data.damage))}`
+    ? `${damageLabel}：${format1(Math.max(0, Number(data.damage)))}`
     : '';
   const extraLine = `附加：${data?.extra || '無'}`;
 
@@ -15219,10 +15397,10 @@ function buildAIBattleStory(rounds, combatant, enemy, finalResult) {
 
   for (const r of rounds) {
     const hitText = r.playerDamage > 0
-      ? `命中造成 **${r.playerDamage}** 點傷害`
+      ? `命中造成 **${format1(r.playerDamage)}** 點傷害`
       : '攻勢被對手硬生生擋下';
     const takenText = r.enemyDamage > 0
-      ? `反擊讓你承受 **${r.enemyDamage}** 點傷害`
+      ? `反擊讓你承受 **${format1(r.enemyDamage)}** 點傷害`
       : '反擊落空，擦身而過';
     lines.push(
       `**第 ${r.turn} 回合**\n` +
@@ -15260,6 +15438,14 @@ function padBattleLabel(text = '', width = 16) {
 function buildManualBattleBoard(enemy, combatant, state) {
   const enemyName = padBattleLabel(enemy?.name || '敵人', 14);
   const allyName = padBattleLabel(combatant?.name || '我方', 14);
+  const enemyElement = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
+  const allyElement = combatant?.isHuman
+    ? '🧍 無屬性'
+    : formatBattleElementDisplay(combatant?.type || combatant?.element || '');
+  const relationText = getBattleElementRelation(
+    combatant?.isHuman ? '' : (combatant?.type || combatant?.element || ''),
+    resolveEnemyBattleElement(enemy)
+  ).text.replace(/^([^\s]+\s)/u, '');
   const enemyHp = `${enemy?.hp || 0}/${enemy?.maxHp || 0}`;
   const allyHp = `${combatant?.hp || 0}/${combatant?.maxHp || 0}`;
   const turn = Number(state?.turn || 1);
@@ -15271,11 +15457,14 @@ function buildManualBattleBoard(enemy, combatant, state) {
     `${roundLine}\n` +
     `                 ┌─【敵方】──────────────┐\n` +
     `                 │ ${enemyName} HP ${enemyHp}\n` +
+    `                 │ 屬性 ${enemyElement}\n` +
     `                 │ ATK ${enemy?.attack || 0}\n` +
     `                 └───────────────────────┘\n` +
     `\n` +
     `┌─【我方】──────────────┐\n` +
     `│ ${allyName} HP ${allyHp}\n` +
+    `│ 屬性 ${allyElement}\n` +
+    `│ ${relationText}\n` +
     `│ ⚡ 能量 ${energy}（每回 +2，可結轉）\n` +
     `└───────────────────────┘\n` +
     '```'
@@ -15556,7 +15745,7 @@ async function continueBattleWithHuman(interaction, user) {
     player,
     pet,
     `⚠️ ${pet.name} 尚未復活，由你本人接戰。\n` +
-      `勝率預估：${estimate.rank}（約 ${estimate.winRate}%）`
+      `勝率預估：${estimate.rank}（約 ${format1(estimate.winRate)}%）`
   );
 }
 

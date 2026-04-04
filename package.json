@@ -7,7 +7,8 @@
     "start": "node bot.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "reindex:memory": "node tools/reindex-memory-index.js",
-    "backup:world": "node tools/run-world-backup.js"
+    "backup:world": "node tools/run-world-backup.js",
+    "test:battle-balance": "node tools/tests/battle-balance-full.js"
   },
   "keywords": [],
   "author": "",
