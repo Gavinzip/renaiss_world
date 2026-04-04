@@ -8530,6 +8530,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
       customId === 'open_profile' ||
+      customId === 'open_character' ||
+      customId === 'open_friends' ||
+      customId === 'open_settings' ||
+      customId === 'open_gacha' ||
+      customId === 'main_menu' ||
       customId === 'open_friend_add_modal' ||
       customId === 'sync_wallet_now' ||
       customId.startsWith('claim_new_pet_element_');
