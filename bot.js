@@ -216,7 +216,9 @@ function clearSelfCharacterData(userId) {
     removedThread: false,
     removedWallet: false,
     clearedSemanticMemory: 0,
-    clearedNpcQuotes: 0
+    clearedNpcQuotes: 0,
+    purgedFriendRefsPlayers: 0,
+    purgedFriendRefsLinks: 0
   };
 
   const playerFile = path.join(PLAYERS_DIR, `${id}.json`);
@@ -257,6 +259,9 @@ function clearSelfCharacterData(userId) {
   }
 
   releaseStoryLock(id);
+  const purge = purgePlayerFromAllFriendLists(id);
+  report.purgedFriendRefsPlayers = Number(purge?.affectedPlayers || 0);
+  report.purgedFriendRefsLinks = Number(purge?.removedLinks || 0);
   return report;
 }
 
@@ -406,6 +411,103 @@ function removeFriendIdFromList(list, friendId) {
   return source.filter((id) => String(id || '').trim() !== target);
 }
 
+function resetFriendPairState(fromSocial, targetSocial, fromId = '', targetId = '') {
+  const srcId = String(fromId || '').trim();
+  const dstId = String(targetId || '').trim();
+  if (!fromSocial || !targetSocial || !srcId || !dstId) return;
+
+  fromSocial.friends = removeFriendIdFromList(fromSocial.friends, dstId);
+  targetSocial.friends = removeFriendIdFromList(targetSocial.friends, srcId);
+  fromSocial.friendRequestsIncoming = removeFriendIdFromList(fromSocial.friendRequestsIncoming, dstId);
+  fromSocial.friendRequestsOutgoing = removeFriendIdFromList(fromSocial.friendRequestsOutgoing, dstId);
+  targetSocial.friendRequestsIncoming = removeFriendIdFromList(targetSocial.friendRequestsIncoming, srcId);
+  targetSocial.friendRequestsOutgoing = removeFriendIdFromList(targetSocial.friendRequestsOutgoing, srcId);
+
+  if (fromSocial.friendBattleStats && typeof fromSocial.friendBattleStats === 'object' && !Array.isArray(fromSocial.friendBattleStats)) {
+    delete fromSocial.friendBattleStats[dstId];
+  }
+  if (targetSocial.friendBattleStats && typeof targetSocial.friendBattleStats === 'object' && !Array.isArray(targetSocial.friendBattleStats)) {
+    delete targetSocial.friendBattleStats[srcId];
+  }
+}
+
+function removeFriendLinkFromPlayer(player, targetId = '') {
+  if (!player || typeof player !== 'object') return false;
+  const id = String(targetId || '').trim();
+  if (!id) return false;
+  const social = ensurePlayerFriendState(player);
+  let changed = false;
+
+  const nextFriends = removeFriendIdFromList(social.friends, id);
+  if (nextFriends.length !== social.friends.length) {
+    social.friends = nextFriends;
+    changed = true;
+  }
+  const nextIncoming = removeFriendIdFromList(social.friendRequestsIncoming, id);
+  if (nextIncoming.length !== social.friendRequestsIncoming.length) {
+    social.friendRequestsIncoming = nextIncoming;
+    changed = true;
+  }
+  const nextOutgoing = removeFriendIdFromList(social.friendRequestsOutgoing, id);
+  if (nextOutgoing.length !== social.friendRequestsOutgoing.length) {
+    social.friendRequestsOutgoing = nextOutgoing;
+    changed = true;
+  }
+  if (social.friendBattleStats && typeof social.friendBattleStats === 'object' && !Array.isArray(social.friendBattleStats)) {
+    if (Object.prototype.hasOwnProperty.call(social.friendBattleStats, id)) {
+      delete social.friendBattleStats[id];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function pruneMissingFriendLinksForPlayer(player) {
+  if (!player || typeof player !== 'object') return false;
+  const social = ensurePlayerFriendState(player);
+  const checks = [
+    ...(Array.isArray(social.friends) ? social.friends : []),
+    ...(Array.isArray(social.friendRequestsIncoming) ? social.friendRequestsIncoming : []),
+    ...(Array.isArray(social.friendRequestsOutgoing) ? social.friendRequestsOutgoing : [])
+  ];
+  let changed = false;
+  for (const rawId of checks) {
+    const id = String(rawId || '').trim();
+    if (!id) continue;
+    if (CORE.loadPlayer(id)) continue;
+    if (removeFriendLinkFromPlayer(player, id)) changed = true;
+  }
+  return changed;
+}
+
+function purgePlayerFromAllFriendLists(targetId = '') {
+  const id = String(targetId || '').trim();
+  if (!id) return { affectedPlayers: 0, removedLinks: 0 };
+  const players = typeof CORE.getAllPlayers === 'function' ? CORE.getAllPlayers() : [];
+  let affectedPlayers = 0;
+  let removedLinks = 0;
+  for (const player of Array.isArray(players) ? players : []) {
+    if (!player || typeof player !== 'object') continue;
+    if (String(player.id || '').trim() === id) continue;
+    const social = ensurePlayerFriendState(player);
+    const before =
+      (Array.isArray(social.friends) ? social.friends.length : 0) +
+      (Array.isArray(social.friendRequestsIncoming) ? social.friendRequestsIncoming.length : 0) +
+      (Array.isArray(social.friendRequestsOutgoing) ? social.friendRequestsOutgoing.length : 0) +
+      ((social.friendBattleStats && typeof social.friendBattleStats === 'object' && !Array.isArray(social.friendBattleStats) && Object.prototype.hasOwnProperty.call(social.friendBattleStats, id)) ? 1 : 0);
+    if (!removeFriendLinkFromPlayer(player, id)) continue;
+    const after =
+      (Array.isArray(social.friends) ? social.friends.length : 0) +
+      (Array.isArray(social.friendRequestsIncoming) ? social.friendRequestsIncoming.length : 0) +
+      (Array.isArray(social.friendRequestsOutgoing) ? social.friendRequestsOutgoing.length : 0) +
+      ((social.friendBattleStats && typeof social.friendBattleStats === 'object' && !Array.isArray(social.friendBattleStats) && Object.prototype.hasOwnProperty.call(social.friendBattleStats, id)) ? 1 : 0);
+    removedLinks += Math.max(0, before - after);
+    CORE.savePlayer(player);
+    affectedPlayers += 1;
+  }
+  return { affectedPlayers, removedLinks };
+}
+
 function getPlayerDisplayNameById(playerId = '') {
   const id = String(playerId || '').trim();
   if (!id) return '未知玩家';
@@ -448,9 +550,6 @@ function createFriendRequest(fromUserId, targetUserId) {
 
   const fromSocial = ensurePlayerFriendState(fromPlayer);
   const targetSocial = ensurePlayerFriendState(targetPlayer);
-  if (fromSocial.friends.includes(targetId) && targetSocial.friends.includes(fromId)) {
-    return { ok: false, code: 'already_friends', targetName: getPlayerDisplayNameById(targetId) };
-  }
 
   const reversePending = fromSocial.friendRequestsIncoming.includes(targetId) || targetSocial.friendRequestsOutgoing.includes(fromId);
   if (reversePending) {
@@ -460,15 +559,14 @@ function createFriendRequest(fromUserId, targetUserId) {
     return { ok: true, code: 'auto_accepted', targetName: getPlayerDisplayNameById(targetId) };
   }
 
-  if (fromSocial.friendRequestsOutgoing.includes(targetId)) {
-    return { ok: false, code: 'already_requested', targetName: getPlayerDisplayNameById(targetId) };
-  }
-
-  fromSocial.friendRequestsOutgoing.push(targetId);
-  targetSocial.friendRequestsIncoming.push(fromId);
+  // 送出申請時採「覆蓋」語意：先清掉這對 ID 之間舊的好友/申請/戰績關係，再寫入最新申請。
+  // 這可避免玩家刪檔重建後，對方殘留同 ID 的舊紀錄造成重複或卡住。
+  resetFriendPairState(fromSocial, targetSocial, fromId, targetId);
+  if (!fromSocial.friendRequestsOutgoing.includes(targetId)) fromSocial.friendRequestsOutgoing.push(targetId);
+  if (!targetSocial.friendRequestsIncoming.includes(fromId)) targetSocial.friendRequestsIncoming.push(fromId);
   CORE.savePlayer(fromPlayer);
   CORE.savePlayer(targetPlayer);
-  return { ok: true, code: 'requested', targetName: getPlayerDisplayNameById(targetId) };
+  return { ok: true, code: 'requested', overwritten: true, targetName: getPlayerDisplayNameById(targetId) };
 }
 
 function acceptFriendRequest(receiverUserId, requesterUserId) {
@@ -594,6 +692,13 @@ function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = fa
   const rivalName = String(duel.friendName || '好友').trim() || '好友';
   const sourceChoice = String(battleState?.sourceChoice || '').trim();
   const preBattleStory = String(battleState?.preBattleStory || player?.currentStory || '').trim();
+  const returnStory = String(duel.returnStory || preBattleStory || player?.currentStory || '').trim();
+  const returnChoices = Array.isArray(duel.returnChoices)
+    ? duel.returnChoices
+      .filter((choice) => choice && typeof choice === 'object')
+      .slice(0, CHOICE_DISPLAY_COUNT)
+      .map((choice) => ({ ...choice }))
+    : [];
 
   const rivalPlayer = rivalId ? CORE.loadPlayer(rivalId) : null;
   if (rivalPlayer) {
@@ -622,30 +727,20 @@ function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = fa
   });
 
   const summaryLine = `目前對 ${rivalName} 戰績：${myRecord?.wins || 0} 勝 / ${myRecord?.losses || 0} 敗`;
-  player.currentStory = composePostBattleStory(
-    player,
-    didWin
-      ? `🤝 你在與好友 **${rivalName}** 的友誼戰中勝出。`
-      : `🤝 你在與好友 **${rivalName}** 的友誼戰中落敗，但也看見下一步能精進的方向。`,
-    detailText,
-    `${summaryLine}\n你們相約下次再戰，這場切磋不影響生死與通緝。`,
-    sourceChoice,
-    preBattleStory
-  );
-  queuePendingStoryTrigger(player, {
-    name: '好友友誼戰結果',
-    choice: sourceChoice || `與${rivalName}友誼戰`,
-    desc: `${rivalName} 的切磋已告一段落`,
-    action: 'friend_duel_result',
-    outcome: `${didWin ? '勝利' : '落敗'}｜${summaryLine}`
-  });
+  player.currentStory = returnStory || player.currentStory || '';
+  if (returnChoices.length > 0) {
+    player.eventChoices = returnChoices;
+  }
+  if (player.pendingStoryTrigger) {
+    clearPendingStoryTrigger(player);
+  }
   player.battleState = null;
-  player.eventChoices = [];
   CORE.savePlayer(player);
   return {
     rivalName,
     record: myRecord,
-    summaryLine
+    summaryLine,
+    sourceChoice
   };
 }
 
@@ -697,6 +792,12 @@ async function startFriendDuel(interaction, user, friendId = '') {
   const enemy = buildFriendDuelEnemyFromPlayer(targetPlayer, targetPet);
   const fighterType = CORE.canPetFight(myPet) ? 'pet' : 'player';
   const sourceChoice = `向好友 ${targetPlayer.name} 發起友誼戰`;
+  const preservedStory = String(challenger.currentStory || '').trim();
+  const preservedChoices = Array.isArray(challenger.eventChoices)
+    ? normalizeEventChoices(challenger, challenger.eventChoices)
+      .slice(0, CHOICE_DISPLAY_COUNT)
+      .map((choice) => ({ ...choice }))
+    : [];
   const preBattleStory = composeActionBridgeStory(challenger, sourceChoice, `你鎖定了 ${targetPlayer.name} 的夥伴 ${targetPet.name || '夥伴'}，準備切磋。`);
   const estimate = estimateBattleOutcome(challenger, myPet, enemy, fighterType);
   const fighterLabel = fighterType === 'pet'
@@ -721,10 +822,11 @@ async function startFriendDuel(interaction, user, friendId = '') {
       friendId: targetId,
       friendName: String(targetPlayer.name || '').trim() || `玩家(${targetId})`,
       friendPetName: String(targetPet?.name || '').trim() || '夥伴',
-      startedTurn: getPlayerStoryTurns(challenger)
+      startedTurn: getPlayerStoryTurns(challenger),
+      returnStory: preservedStory,
+      returnChoices: preservedChoices
     }
   };
-  challenger.currentStory = `你向好友 ${targetPlayer.name} 發起友誼戰，雙方約定點到為止。`;
   rememberPlayer(challenger, {
     type: '好友友誼戰',
     content: `向 ${targetPlayer.name} 發起友誼戰`,
@@ -786,6 +888,7 @@ async function showFriendsMenu(interaction, user, notice = '') {
     return;
   }
   const social = ensurePlayerFriendState(player);
+  pruneMissingFriendLinksForPlayer(player);
   CORE.savePlayer(player);
 
   const friends = social.friends
@@ -1097,6 +1200,7 @@ const SHOP_SELL_SELECT_LIMIT = 25;
 const SHOP_HAGGLE_SELECT_LIMIT = 25;
 const SHOP_HAGGLE_BULK_SELECT_LIMIT = 20;
 const MARKET_LIST_PAGE_SIZE = Math.max(5, Math.min(20, Number(process.env.MARKET_LIST_PAGE_SIZE || 20)));
+const MOVES_DETAIL_PAGE_SIZE = Math.max(4, Math.min(12, Number(process.env.MOVES_DETAIL_PAGE_SIZE || 6)));
 const SHOP_HAGGLE_OFFER_TTL_MS = 10 * 60 * 1000;
 const SHOP_HAGGLE_BLOCKED_ITEMS = new Set(['乾糧一包', '水囊']);
 const NPC_DIALOGUE_LOG_LIMIT = Math.max(20, Math.min(200, Number(process.env.NPC_DIALOGUE_LOG_LIMIT || 80)));
@@ -1135,7 +1239,7 @@ const LOCATION_ENTRY_GATE_ENABLED = String(process.env.LOCATION_ENTRY_GATE_ENABL
 const LOCATION_ENTRY_MIN_WINRATE = Math.max(1, Math.min(99, Number(process.env.LOCATION_ENTRY_MIN_WINRATE || 50)));
 const AGGRESSIVE_CHOICE_TARGET_RATE = Math.max(0, Math.min(1, Number(process.env.AGGRESSIVE_CHOICE_TARGET_RATE || 0.9)));
 const BATTLE_CADENCE_TURNS = Math.max(3, Math.min(10, Number(process.env.BATTLE_CADENCE_TURNS || 5)));
-const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 3)));
+const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 1)));
 const SHOP_HEAL_CRYSTAL_COST = 200;
 const SHOP_HEAL_CRYSTAL_RECOVER = Math.max(10, Number(process.env.SHOP_HEAL_CRYSTAL_RECOVER || 30));
 const SHOP_ENERGY_CRYSTAL_COST = 2000;
@@ -2521,6 +2625,31 @@ function getPlayerWantedPressure(player = null) {
   return Math.max(localWanted, worldWanted);
 }
 
+function getWantedEscalationProfile(wantedLevel = 0) {
+  const level = Math.max(0, Number(wantedLevel || 0));
+  const clamped = Math.min(10, Math.floor(level));
+  const active = clamped >= WANTED_AMBUSH_MIN_LEVEL;
+  if (!active) {
+    return {
+      active: false,
+      level: clamped,
+      ambushChance: 0,
+      hunterCount: 0,
+      enemyScale: 1
+    };
+  }
+  const ambushChance = Math.max(0.26, Math.min(0.96, 0.24 + clamped * 0.12));
+  const hunterCount = Math.max(1, Math.min(5, 1 + Math.floor(clamped / 2)));
+  const enemyScale = Math.max(1, Math.min(1.7, 1 + clamped * 0.09));
+  return {
+    active: true,
+    level: clamped,
+    ambushChance,
+    hunterCount,
+    enemyScale
+  };
+}
+
 function getBattleCadenceInfo(player = null) {
   const turns = getPlayerStoryTurns(player);
   const span = BATTLE_CADENCE_TURNS;
@@ -2663,8 +2792,10 @@ function enforceMentorSparAvailability(player, choices = []) {
   });
 }
 
-function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
+function buildStoryBattleEnemyFromNpc(npc = null, player = null, options = {}) {
   if (!npc || typeof npc !== 'object') return null;
+  const wantedLevel = Math.max(0, Number(options?.wantedLevel || 0));
+  const escalation = getWantedEscalationProfile(wantedLevel);
   const difficulty = getLocationDifficultyForPlayer(player);
   const battle = Math.max(12, Number(npc?.stats?.戰力 || 24));
   const hpBase = Math.max(72, Number(npc?.stats?.生命 || 86));
@@ -2680,9 +2811,15 @@ function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
   const hpDelta = Math.max(-18, Math.min(34, Math.floor((hpBase - 90) * 0.26)));
   const atkDelta = Math.max(-4, Math.min(10, Math.floor((battle - 26) * 0.12)));
   const defDelta = Math.max(-3, Math.min(8, Math.floor((energy - 26) * 0.1)));
-  const hp = Math.max(72, Math.min(420, curve.hp + hpDelta));
-  const attack = Math.max(14, Math.min(95, curve.attack + atkDelta));
-  const defense = Math.max(6, Math.min(52, curve.defense + defDelta));
+  const baseHp = Math.max(72, Math.min(420, curve.hp + hpDelta));
+  const baseAttack = Math.max(14, Math.min(95, curve.attack + atkDelta));
+  const baseDefense = Math.max(6, Math.min(52, curve.defense + defDelta));
+  const scaledHp = escalation.active ? Math.floor(baseHp * escalation.enemyScale) : baseHp;
+  const scaledAttack = escalation.active ? Math.floor(baseAttack * (1 + (escalation.level * 0.06))) : baseAttack;
+  const scaledDefense = escalation.active ? Math.floor(baseDefense * (1 + (escalation.level * 0.04))) : baseDefense;
+  const hp = Math.max(72, Math.min(520, scaledHp));
+  const attack = Math.max(14, Math.min(120, scaledAttack));
+  const defense = Math.max(6, Math.min(72, scaledDefense));
   const moveIds = Array.isArray(npc?.battleMoveIds) ? npc.battleMoveIds : [];
   const moveNamesFromIds = moveIds
     .map((id) => (PET && typeof PET.getMoveById === 'function' ? PET.getMoveById(id) : null))
@@ -2701,8 +2838,9 @@ function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
       }
     : false;
   const villain = isNpcHostileByProfile(npc);
-  const rewardMin = Math.max(36, 22 + difficulty * 18 + Math.floor((curve.attack + attack) * 1.4));
-  const rewardMax = rewardMin + 80 + difficulty * 8;
+  const rewardMin = Math.max(36, 22 + difficulty * 18 + Math.floor((curve.attack + attack) * 1.4) + (escalation.active ? escalation.level * 14 : 0));
+  const rewardMax = rewardMin + 80 + difficulty * 8 + (escalation.active ? escalation.level * 12 : 0);
+  const companionPet = npcPet || (escalation.active && escalation.level >= 3 ? true : false);
   return {
     id: String(npc.id || npc.name || 'local_story_enemy').trim(),
     name: String(npc.name || '可疑敵手').trim(),
@@ -2715,7 +2853,9 @@ function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
     faction: villain ? 'digital' : 'neutral',
     villain,
     isMonster: false,
-    companionPet: npcPet
+    companionPet,
+    wantedLevel: escalation.level,
+    hunterCount: escalation.hunterCount
   };
 }
 
@@ -2819,6 +2959,7 @@ function scoreStoryBindingForNpc(npc = null, storyText = '', speakerHints = new 
 function resolveLocationStoryBattleTarget(player, storyText = '', options = {}) {
   const allowLooseSelection = options?.allowLooseSelection === true;
   const wantedLevel = Math.max(0, Number(options?.wantedLevel || 0));
+  const escalation = getWantedEscalationProfile(wantedLevel);
   const preferVillain = Boolean(options?.preferVillain) || wantedLevel >= WANTED_AMBUSH_MIN_LEVEL;
   const speakerHints = collectRecentStorySpeakerHints(player, storyText);
   const baseCandidates = getNearbyStoryBattleNpcCandidates(player)
@@ -2865,7 +3006,10 @@ function resolveLocationStoryBattleTarget(player, storyText = '', options = {}) 
       npcId: String(picked.id || '').trim(),
       npcName: String(picked.name || '在地勢力').trim(),
       npcTitle: String(picked.title || '').trim(),
-      enemy: buildStoryBattleEnemyFromNpc(picked, player)
+      enemy: buildStoryBattleEnemyFromNpc(picked, player, {
+        wantedLevel,
+        hunterCount: escalation.hunterCount
+      })
     };
   }
   return null;
@@ -2873,6 +3017,7 @@ function resolveLocationStoryBattleTarget(player, storyText = '', options = {}) 
 
 function createGuaranteedLocationStoryBattleChoice(player, storyText = '', options = {}) {
   const wantedLevel = Math.max(0, Number(options?.wantedLevel || getPlayerWantedPressure(player) || 0));
+  const escalation = getWantedEscalationProfile(wantedLevel);
   const target = resolveLocationStoryBattleTarget(player, storyText, {
     allowLooseSelection: Boolean(options?.allowLooseSelection),
     preferVillain: Boolean(options?.preferVillain),
@@ -2884,11 +3029,14 @@ function createGuaranteedLocationStoryBattleChoice(player, storyText = '', optio
     ? '可疑尾隨者'
     : String(target.npcName || '可疑敵手');
   const reason = String(options?.reason || 'story').trim();
+  const hunterText = escalation.active && escalation.hunterCount > 1
+    ? `${escalation.hunterCount} 組追兵`
+    : '追兵';
   const choiceText = reason === 'wanted'
-    ? `察覺${location}周邊有人盯上你的動向，鎖定${displayNpcName}先發制人（會進入戰鬥）`
+    ? `察覺${location}周邊有${hunterText}盯上你，鎖定${displayNpcName}先發制人（會進入戰鬥）`
     : `察覺${location}氣氛不對勁，鎖定${displayNpcName}動向先發制人（會進入戰鬥）`;
   const descText = reason === 'wanted'
-    ? `通緝熱度吸引敵對勢力主動接近：${displayNpcName}`
+    ? `通緝熱度 Lv.${wantedLevel}｜敵對勢力主動接近：${displayNpcName}`
     : `地區篇章關鍵戰：對手來自${location}在地勢力`;
   return {
     action: 'location_story_battle',
@@ -2912,7 +3060,8 @@ function ensureLocationStoryBattleChoiceAvailability(player, choices = []) {
   const turnsInLocation = Number(state?.turnsInLocation || 0);
   const cadence = getBattleCadenceInfo(player);
   const wantedPressure = getPlayerWantedPressure(player);
-  const wantedDriven = wantedPressure >= WANTED_AMBUSH_MIN_LEVEL;
+  const wantedEscalation = getWantedEscalationProfile(wantedPressure);
+  const wantedDriven = wantedEscalation.active;
   if (!wantedDriven && turnsInLocation < LOCATION_STORY_BATTLE_MIN_TURNS) return list;
   if (list.some((choice) => String(choice?.action || '').trim() === 'location_story_battle')) return list;
 
@@ -2920,7 +3069,10 @@ function ensureLocationStoryBattleChoiceAvailability(player, choices = []) {
   const threatScore = computeStoryThreatScore(storyText);
   if (!wantedDriven && threatScore < Math.max(14, STORY_THREAT_SCORE_THRESHOLD - 12)) return list;
   if (wantedDriven) {
-    const allowWantedImmediateBattle = cadence.dueConflict || threatScore >= Math.max(20, STORY_THREAT_SCORE_THRESHOLD - 6);
+    const allowWantedImmediateBattle =
+      cadence.dueConflict ||
+      threatScore >= Math.max(20, STORY_THREAT_SCORE_THRESHOLD - 6) ||
+      Math.random() < wantedEscalation.ambushChance;
     // 高通緝不代表每回合都立刻開戰：僅在節奏點/高威脅時才注入即時戰鬥
     if (!allowWantedImmediateBattle) return list;
   }
@@ -3118,12 +3270,41 @@ function createSoftMainlineGuideChoice(player) {
     action: 'main_story',
     tag: '[📖主線導引]',
     name: '回到核心線索',
-    choice: `先處理本區關鍵：${stageGoal}`,
+    choice: `先處理本區關鍵（${safeProgressText}）：${stageGoal}`,
     desc: `${safeProgressText}｜你也可同時做支線或自由探索`,
     mainlineGoal: stageGoal,
     mainlineProgress: safeProgressText,
     mainlineNarrative: `你決定先把${location}的主線段落往前推進：${stageGoal}。`
   };
+}
+
+function ensureMainlineChoiceProgress(choice, player) {
+  if (!choice || typeof choice !== 'object') return choice;
+  if (!isMainlineGuideChoice(choice)) return choice;
+
+  const next = { ...choice };
+  const meta = getIslandMainlineProgressMeta(player);
+  if (!meta) return next;
+  const progressText = meta.completed ? '本區主線已完成' : meta.progressText;
+  const action = String(next.action || '').trim();
+  if (!action || action === 'followup') next.action = 'main_story';
+  if (!String(next.tag || '').trim()) next.tag = '[📖主線導引]';
+
+  const choiceText = String(next.choice || next.name || '').trim();
+  if (choiceText && !/地區進度\s*\d+\s*\/\s*\d+/u.test(choiceText) && !/本區主線已完成/u.test(choiceText)) {
+    next.choice = `${choiceText}（${progressText}）`;
+  } else if (!choiceText) {
+    next.choice = `沿主線推進（${progressText}）`;
+  }
+
+  const descText = String(next.desc || '').trim();
+  if (!descText) {
+    next.desc = `${progressText}｜可自由探索但建議至少推進 1 段主線`;
+  } else if (!/地區進度\s*\d+\s*\/\s*\d+/u.test(descText) && !/本區主線已完成/u.test(descText)) {
+    next.desc = `${progressText}｜${descText}`;
+  }
+  next.mainlineProgress = progressText;
+  return next;
 }
 
 function createScatterChoice(player, salt = 0) {
@@ -3172,7 +3353,7 @@ function ensureSingleMainlineGuideChoice(player, choices = []) {
   }
 
   if (guideIndices.length === 0) {
-    const injected = createSoftMainlineGuideChoice(player);
+    const injected = ensureMainlineChoiceProgress(createSoftMainlineGuideChoice(player), player);
     const protectedActions = new Set(['wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery']);
     let replaceIdx = list.length - 1;
     for (let i = list.length - 1; i >= 0; i--) {
@@ -3200,6 +3381,7 @@ function ensureSingleMainlineGuideChoice(player, choices = []) {
     if (idx === keepIdx) continue;
     list[idx] = createScatterChoice(player, scatterSalt++);
   }
+  list[keepIdx] = ensureMainlineChoiceProgress(list[keepIdx], player);
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
 
@@ -4903,6 +5085,33 @@ function formatPetHpWithRecovery(pet) {
 function buildMainStatusBar(player, pet) {
   const hpText = formatPetHpWithRecovery(pet);
   return `氣血 ${hpText} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+}
+
+function getIslandMainlineProgressMeta(player) {
+  const location = String(player?.location || '').trim();
+  if (!location) return null;
+  const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, location)
+    : null;
+  if (!islandState) return null;
+  const stage = Math.max(1, Number(islandState?.stage || 1));
+  const stageCount = Math.max(8, Number(islandState?.stageCount || 8));
+  return {
+    location,
+    stage,
+    stageCount,
+    completed: Boolean(islandState?.completed),
+    progressText: `地區進度 ${stage}/${stageCount}`
+  };
+}
+
+function buildMainlineProgressLine(player) {
+  const meta = getIslandMainlineProgressMeta(player);
+  if (!meta) return '';
+  if (meta.completed) {
+    return `📖 本區主線：已完成（${meta.location}）`;
+  }
+  return `📖 本區主線：${meta.progressText}`;
 }
 
 function detectStitchedBattleStory(story = '') {
@@ -7498,7 +7707,8 @@ async function handleResetData(interaction, user) {
       `- 討論串綁定：${report.removedThread ? '已清除' : '無'}\n` +
       `- 錢包綁定：${report.removedWallet ? '已清除' : '無'}\n` +
       `- 向量記憶刪除：${report.clearedSemanticMemory} 筆\n` +
-      `- NPC 引言記憶刪除：${report.clearedNpcQuotes} 筆`,
+      `- NPC 引言記憶刪除：${report.clearedNpcQuotes} 筆\n` +
+      `- 其他玩家好友殘留清理：${report.purgedFriendRefsPlayers} 人（移除 ${report.purgedFriendRefsLinks} 筆）`,
     ephemeral: true
   });
 }
@@ -7526,7 +7736,8 @@ async function handleResetPlayerHistory(interaction) {
       `- 討論串綁定：${report.removedThread ? '已清除' : '無'}\n` +
       `- 錢包綁定：${report.removedWallet ? '已清除' : '無'}\n` +
       `- 向量記憶刪除：${report.clearedSemanticMemory} 筆\n` +
-      `- NPC 引言記憶刪除：${report.clearedNpcQuotes} 筆`,
+      `- NPC 引言記憶刪除：${report.clearedNpcQuotes} 筆\n` +
+      `- 其他玩家好友殘留清理：${report.purgedFriendRefsPlayers} 人（移除 ${report.purgedFriendRefsLinks} 筆）`,
     ephemeral: true
   });
 }
@@ -8977,6 +9188,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId.startsWith('moves_page_prev_') || customId.startsWith('moves_page_next_')) {
+    const matched = String(customId).match(/^moves_page_(prev|next)_(.+)_(\d+)$/);
+    const direction = String(matched?.[1] || '').trim();
+    const petId = String(matched?.[2] || '').trim();
+    const currentPage = Math.max(0, Number(matched?.[3] || 0));
+    const nextPage = direction === 'prev' ? currentPage - 1 : currentPage + 1;
+    await showMovesList(interaction, user, petId, '', nextPage);
+    return;
+  }
+
   if (customId.startsWith('set_main_pet_')) {
     const petId = String(customId || '').replace('set_main_pet_', '').trim();
     const player = CORE.loadPlayer(user.id);
@@ -10370,7 +10591,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     
     const optionsText = buildChoiceOptionsText(choices, { player, pet });
     
-    const description = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n**🆕 選項：**${optionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
+    const mainlineLine = buildMainlineProgressLine(player);
+    const description = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${mainlineLine ? `\n${mainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n**🆕 選項：**${optionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
     
     const embed = new EmbedBuilder()
       .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -10447,12 +10669,14 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   // ===== 狀態列 =====
   player.stats.飽腹度 = player.stats.飽腹度 || 100;
   const statusBar = buildMainStatusBar(player, pet);
+  const eventMainlineLine = buildMainlineProgressLine(player);
 
   // 先用 Loading 訊息回覆（先故事、後選項）
   const loadingHint = hasRecoverableStoryOnly
     ? 'AI 說書人正在補齊上次中斷的選項...'
     : (forceFreshStory ? 'AI 說書人正在承接戰鬥結果重塑新篇章...' : 'AI 說書人正在構思故事...');
-  const loadingDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
+  const loadingMainlineLine = buildMainlineProgressLine(player);
+  const loadingDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${loadingMainlineLine ? `\n${loadingMainlineLine}` : ''}\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
   
   const loadingEmbed = new EmbedBuilder()
     .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -10579,8 +10803,9 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         CORE.savePlayer(player);
       }
 
+      const storyFirstMainlineLine = buildMainlineProgressLine(player);
       const storyFirstDesc =
-        `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n` +
+        `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${storyFirstMainlineLine ? `\n${storyFirstMainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n` +
         (hasRecoverableStoryOnly
           ? '⏳ *已恢復上次故事，正在補齊選項...*'
           : '⏳ *故事已送達，正在生成選項...*');
@@ -10653,7 +10878,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         newComponents.push(new ActionRowBuilder().addComponents(newButtons.slice(i, i + 5)));
       }
 
-      const aiDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**\n\n${storyText}${portalGuideBlock}\n\n**🆕 新選項：**${newOptionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
+      const aiMainlineLine = buildMainlineProgressLine(player);
+      const aiDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${aiMainlineLine ? `\n${aiMainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n**🆕 新選項：**${newOptionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
 
       const aiEmbed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -11262,7 +11488,7 @@ function describeMoveEffects(moveOrEffect = {}) {
 }
 
 // ============== 招式列表 ==============
-async function showMovesList(interaction, user, selectedPetId = '', notice = '') {
+async function showMovesList(interaction, user, selectedPetId = '', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
   const uiLang = getPlayerUILang(player);
   if (!player) {
@@ -11300,6 +11526,8 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
   const learnableChipTotal = learnableChips.reduce((sum, item) => sum + Number(item?.count || 0), 0);
   const forgettableMoves = getForgettablePetMoves(selectedPet);
 
+  const currentPage = Math.max(0, Number(page || 0));
+
   const unlockedMoves = (selectedPet.moves || []).map((m, i) => {
     const isFlee = Boolean(m?.effect && m.effect.flee);
     const isSelected = selectedSet.has(String(m.id || ''));
@@ -11310,7 +11538,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     const tierName = m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通';
     const effectStr = describeMoveEffects(m);
     return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${dmg.total}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
-  }).join('\n\n') || '（無招式）';
+  });
 
   const petSummary = ownedPets.map((pet, i) => {
     const loadout = normalizePetMoveLoadout(pet, false);
@@ -11323,11 +11551,19 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
       .map((entry, idx) => {
         const move = entry.move || {};
         const tierEmoji = move.tier === 3 ? '🔮' : move.tier === 2 ? '💠' : '⚪';
+        const tierName = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
         const mark = entry.canLearn ? '✅可學' : (entry.reason === '已學會' ? '📘已學' : '🚫不可學');
-        return `${idx + 1}. ${tierEmoji} ${move.name} x${entry.count}｜${mark}`;
+        const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, selectedPet);
+        const energyCost = BATTLE.getMoveEnergyCost(move);
+        const effectStr = describeMoveEffects(move);
+        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${dmg.total}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
       })
-      .join('\n')
-    : '（背包目前沒有技能晶片）';
+    : ['（背包目前沒有技能晶片）'];
+
+  const movePager = paginateList(unlockedMoves, currentPage, MOVES_DETAIL_PAGE_SIZE);
+  const moveDetailText = movePager.items.length > 0 ? movePager.items.join('\n\n') : '（無招式）';
+  const chipPager = paginateList(chipOverview, movePager.page, MOVES_DETAIL_PAGE_SIZE);
+  const chipDetailText = chipPager.items.length > 0 ? chipPager.items.join('\n\n') : '（背包目前沒有技能晶片）';
 
   const noticeLine = notice
     ? (String(notice).startsWith('✅') || String(notice).startsWith('⚠️') ? String(notice) : `✅ ${notice}`)
@@ -11350,8 +11586,8 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     .setColor(getPetElementColor(selectedPet.type))
     .setDescription(description)
     .addFields(
-      { name: `🧭 ${selectedPet.name} 招式清單`, value: unlockedMoves.slice(0, 1024), inline: false },
-      { name: '🎒 可學習技能晶片', value: chipOverview.slice(0, 1024), inline: false },
+      { name: `🧭 ${selectedPet.name} 招式清單（第 ${movePager.page + 1}/${movePager.totalPages} 頁）`, value: moveDetailText.slice(0, 1024), inline: false },
+      { name: `🎒 可學習技能晶片（第 ${chipPager.page + 1}/${chipPager.totalPages} 頁）`, value: chipDetailText.slice(0, 1024), inline: false },
       { name: '🐾 全寵物攜帶總覽', value: petSummary.slice(0, 1024), inline: false }
     );
 
@@ -11375,9 +11611,12 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     const learnOptions = learnableChips.slice(0, 25).map((entry) => {
       const move = entry.move || {};
       const tierText = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
+      const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, selectedPet);
+      const energyCost = BATTLE.getMoveEnergyCost(move);
+      const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
       return {
         label: `${move.name}`.slice(0, 100),
-        description: `${move.element || '未知'} / ${tierText} / 晶片 x${entry.count}`.slice(0, 100),
+        description: `${move.element || '未知'}/${tierText}｜${dmg.total}dmg⚡${energyCost}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
     });
@@ -11413,7 +11652,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
   if (attackMoves.length > 0) {
     const moveOptions = attackMoves.slice(0, 25).map((m) => ({
       label: `${m.name}`.slice(0, 100),
-      description: `${m.element} / ${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}`.slice(0, 100),
+      description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet).total}dmg⚡${BATTLE.getMoveEnergyCost(m)}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
       value: `${selectedPet.id}::${m.id}`,
       default: selectedSet.has(String(m.id || ''))
     }));
@@ -11429,6 +11668,16 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
   const remainPoints = Math.max(0, Number(player?.upgradePoints || 0));
   const hpPerPoint = Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 0.2);
   const rowButtons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`moves_page_prev_${selectedPet.id}_${movePager.page}`)
+      .setLabel('⬅️ 上一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(movePager.page <= 0),
+    new ButtonBuilder()
+      .setCustomId(`moves_page_next_${selectedPet.id}_${movePager.page}`)
+      .setLabel('➡️ 下一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(movePager.page >= movePager.totalPages - 1),
     new ButtonBuilder()
       .setCustomId(`set_main_pet_${selectedPet.id}`)
       .setLabel(activePetId === String(selectedPet.id) ? '✅ 主上場' : '🎯 設主上場')
@@ -13885,7 +14134,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const hasExplicitEnemy = Boolean(result?.enemy?.name || event?.enemy?.name);
       if (!hasExplicitEnemy) {
         const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
-        const fallbackTarget = resolveLocationStoryBattleTarget(player, storyText, { allowLooseSelection: true });
+        const fallbackTarget = resolveLocationStoryBattleTarget(player, storyText, {
+          allowLooseSelection: true,
+          wantedLevel: getPlayerWantedPressure(player),
+          preferVillain: getPlayerWantedPressure(player) >= WANTED_AMBUSH_MIN_LEVEL
+        });
         if (fallbackTarget?.enemy) {
           result.enemy = fallbackTarget.enemy;
           result.npcId = fallbackTarget.npcId;
@@ -14360,7 +14613,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     embeds: [{
       title: `⚔️ ${player.name} - ${pet.name}`,
       color: getAlignmentColor(player.alignment),
-      description: `**📍 上個選擇：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*\n\n**📜 前情提要：**\n${prevStory}${prevOptionsText ? '\n\n**🆕 即將更新選項：**' + prevOptionsText : ''}`
+      description: `**狀態：【${statusBar}】**${eventMainlineLine ? `\n${eventMainlineLine}` : ''}\n\n**📍 上個選擇：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*\n\n**📜 前情提要：**\n${prevStory}${prevOptionsText ? '\n\n**🆕 即將更新選項：**' + prevOptionsText : ''}`
     }]
   });
 
@@ -14453,8 +14706,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const portalGuideText = extraStoryGuide || (player.portalMenuOpen ? buildPortalUsageGuide(player) : '');
       const portalGuideBlock = portalGuideText ? `\n\n${portalGuideText}` : '';
 
+      const storyOnlyMainlineLine = buildMainlineProgressLine(player);
       const storyOnlyDesc =
-        `**📍 上個選擇：** ${selectedChoice}\n\n${storyText}` +
+        `**狀態：【${statusBar}】**${storyOnlyMainlineLine ? `\n${storyOnlyMainlineLine}` : ''}\n\n**📍 上個選擇：** ${selectedChoice}\n\n${storyText}` +
         `${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}` +
         `${worldEventsText}${portalGuideBlock}\n\n⏳ *故事已送達，正在生成選項...*`;
 
@@ -14523,8 +14777,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const newChoices = player.eventChoices;
       const optionsText = buildChoiceOptionsText(newChoices, { player, pet });
 
+      const finalMainlineLine = buildMainlineProgressLine(player);
       const description =
-        `**📍 上個選擇：** ${selectedChoice}\n\n${storyText}` +
+        `**狀態：【${statusBar}】**${finalMainlineLine ? `\n${finalMainlineLine}` : ''}\n\n**📍 上個選擇：** ${selectedChoice}\n\n${storyText}` +
         `${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}` +
         `${worldEventsText}${portalGuideBlock}\n\n**🆕 新選項：**${optionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
 
