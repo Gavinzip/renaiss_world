@@ -186,6 +186,10 @@ function format1(value, fallback = 0) {
   return String(Math.round(round1(value, fallback)));
 }
 
+function getMoveSpeedValue(move = {}) {
+  return Math.max(-1, Math.min(3, Number(move?.speed ?? move?.priority ?? 0) || 0));
+}
+
 // ============== 玩家討論串管理 ==============
 function loadPlayerThreads() {
   if (!fs.existsSync(PLAYER_THREADS_FILE)) return {};
@@ -8445,7 +8449,8 @@ async function handlePet(interaction, user) {
   
   const dmgInfo = pet.moves.map((m, i) => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `${i+1}. **${m.name}** (${m.element}): ${format1(d.total)}dmg`;
+    const speed = getMoveSpeedValue(m);
+    return `${i+1}. **${m.name}** (${m.element}): ${format1(d.total)}dmg｜🚀速度${format1(speed)}`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -10493,7 +10498,8 @@ async function createCharacterWithName(interaction, user, profile, charName, opt
   const tierMeta = getMoveTierMeta(selectedMove.tier);
   const dmgInfo = pet.moves.map((m) => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg`;
+    const speed = getMoveSpeedValue(m);
+    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg｜🚀速度${format1(speed)}`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -10732,7 +10738,8 @@ async function handleNameSubmit(interaction, user) {
   
   const dmgInfo = pet.moves.map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg`;
+    const speed = getMoveSpeedValue(m);
+    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg｜🚀速度${format1(speed)}`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -10794,7 +10801,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   const dmgInfo = pet.moves.map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, {}, pet);
-    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg`;
+    const speed = getMoveSpeedValue(m);
+    return `• ${m.name} (${m.element}): ${format1(d.total)}dmg｜🚀速度${format1(speed)}`;
   }).join('\n');
   
   const embed = new EmbedBuilder()
@@ -11890,10 +11898,11 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     const statusMark = isFlee ? '🏃固定' : (isSelected ? '✅攜帶' : '▫️候補');
     const dmg = BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet);
     const energyCost = isFlee ? '-' : BATTLE.getMoveEnergyCost(m);
+    const moveSpeed = getMoveSpeedValue(m);
     const tierEmoji = m.tier === 3 ? '🔮' : m.tier === 2 ? '💠' : '⚪';
     const tierName = m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通';
     const effectStr = describeMoveEffects(m);
-    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
+    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${effectStr || '無效果'}`;
   });
 
   const petSummary = ownedPets.map((pet, i) => {
@@ -11911,14 +11920,23 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
         const mark = entry.canLearn ? '✅可學' : (entry.reason === '已學會' ? '📘已學' : '🚫不可學');
         const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, selectedPet);
         const energyCost = BATTLE.getMoveEnergyCost(move);
+        const moveSpeed = getMoveSpeedValue(move);
         const effectStr = describeMoveEffects(move);
-        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | ${effectStr || '無效果'}`;
+        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${effectStr || '無效果'}`;
       })
     : ['（背包目前沒有技能晶片）'];
 
-  const movePager = paginateList(unlockedMoves, currentPage, MOVES_DETAIL_PAGE_SIZE);
+  const movePreviewPager = paginateList(unlockedMoves, 0, MOVES_DETAIL_PAGE_SIZE);
+  const chipPreviewPager = paginateList(chipOverview, 0, MOVES_DETAIL_PAGE_SIZE);
+  const totalPages = Math.max(
+    1,
+    Number(movePreviewPager?.totalPages || 1),
+    Number(chipPreviewPager?.totalPages || 1)
+  );
+  const sharedPage = Math.max(0, Math.min(totalPages - 1, currentPage));
+  const movePager = paginateList(unlockedMoves, sharedPage, MOVES_DETAIL_PAGE_SIZE);
   const moveDetailText = movePager.items.length > 0 ? movePager.items.join('\n\n') : '（無招式）';
-  const chipPager = paginateList(chipOverview, movePager.page, MOVES_DETAIL_PAGE_SIZE);
+  const chipPager = paginateList(chipOverview, sharedPage, MOVES_DETAIL_PAGE_SIZE);
   const chipDetailText = chipPager.items.length > 0 ? chipPager.items.join('\n\n') : '（背包目前沒有技能晶片）';
 
   const noticeLine = notice
@@ -11969,10 +11987,11 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       const tierText = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
       const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, selectedPet);
       const energyCost = BATTLE.getMoveEnergyCost(move);
+      const moveSpeed = getMoveSpeedValue(move);
       const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
       return {
         label: `${move.name}`.slice(0, 100),
-        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.total)}dmg⚡${energyCost}｜${effectShort}`.slice(0, 100),
+        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.total)}dmg⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
     });
@@ -12008,7 +12027,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   if (attackMoves.length > 0) {
     const moveOptions = attackMoves.slice(0, 25).map((m) => ({
       label: `${m.name}`.slice(0, 100),
-      description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${format1(BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet).total)}dmg⚡${BATTLE.getMoveEnergyCost(m)}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
+      description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${format1(BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet).total)}dmg⚡${BATTLE.getMoveEnergyCost(m)}🚀${format1(getMoveSpeedValue(m))}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
       value: `${selectedPet.id}::${m.id}`,
       default: selectedSet.has(String(m.id || ''))
     }));
@@ -12028,12 +12047,12 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       .setCustomId(`moves_page_prev_${selectedPet.id}_${movePager.page}`)
       .setLabel('⬅️ 上一頁')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(movePager.page <= 0),
+      .setDisabled(sharedPage <= 0),
     new ButtonBuilder()
       .setCustomId(`moves_page_next_${selectedPet.id}_${movePager.page}`)
       .setLabel('➡️ 下一頁')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(movePager.page >= movePager.totalPages - 1),
+      .setDisabled(sharedPage >= totalPages - 1),
     new ButtonBuilder()
       .setCustomId(`set_main_pet_${selectedPet.id}`)
       .setLabel(activePetId === String(selectedPet.id) ? '✅ 主上場' : '🎯 設主上場')
@@ -15246,7 +15265,7 @@ function buildBattleMoveDetails(player, pet, combatant) {
   return getCombatantMoves(combatant, pet).map(m => {
     const d = BATTLE.calculatePlayerMoveDamage(m, player, combatant);
     const energyCost = BATTLE.getMoveEnergyCost(m);
-    const moveSpeed = Math.max(-1, Math.min(3, Number(m?.speed ?? m?.priority ?? 0) || 0));
+    const moveSpeed = getMoveSpeedValue(m);
     const canUse = currentEnergy >= energyCost;
     const effectStr = describeMoveEffects(m);
     return `⚔️ ${m.name} | ${format1(d.total)} dmg | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${canUse ? '可用' : '能量不足'} | ${effectStr || '無'}`;
