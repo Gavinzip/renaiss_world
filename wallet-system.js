@@ -88,7 +88,10 @@ function bindWallet(discordUserId, walletAddress) {
 
   settings[discordUserId] = {
     walletAddress: normalizedAddress,
-    boundAt: new Date().toISOString()
+    boundAt: new Date().toISOString(),
+    pendingRNS: 0,
+    walletRnsClaimed: 0,
+    walletRnsLastSyncedAt: null
   };
   
   if (saveWalletSettings(settings)) {
@@ -539,16 +542,56 @@ function isWalletBound(discordUserId) {
 // ============== 取得暫時 RNS ==============
 function getPendingRNS(discordUserId) {
   const settings = loadWalletSettings();
-  return settings[discordUserId]?.pendingRNS || 0;
+  return Math.max(0, Math.floor(Number(settings[discordUserId]?.pendingRNS || 0)));
 }
 
 // ============== 更新暫時 RNS ==============
 function updatePendingRNS(discordUserId, rns) {
   const settings = loadWalletSettings();
   if (settings[discordUserId]) {
-    settings[discordUserId].pendingRNS = rns;
+    settings[discordUserId].pendingRNS = Math.max(0, Math.floor(Number(rns || 0)));
     saveWalletSettings(settings);
   }
+}
+
+// ============== 同步錢包 RNS（只入帳新增差額） ==============
+function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
+  const settings = loadWalletSettings();
+  const userData = settings[discordUserId];
+  if (!userData) {
+    return { success: false, reason: '尚未綁定錢包！' };
+  }
+
+  const walletTotalRns = Math.max(0, Math.floor(Number(latestRns || 0)));
+  const pendingBefore = Math.max(0, Math.floor(Number(userData.pendingRNS || 0)));
+
+  const rawClaimed = Number(userData.walletRnsClaimed);
+  const hasClaimed = Number.isFinite(rawClaimed) && rawClaimed >= 0;
+  const assumeClaimedIfMissing = Boolean(options?.assumeClaimedIfMissing);
+  const migrateAsClaimed = !hasClaimed && (assumeClaimedIfMissing || pendingBefore > 0);
+  const claimedBefore = hasClaimed
+    ? Math.max(0, Math.floor(rawClaimed))
+    : (migrateAsClaimed ? walletTotalRns : 0);
+
+  const delta = Math.max(0, walletTotalRns - claimedBefore);
+  const pendingAfter = pendingBefore + delta;
+
+  userData.walletRnsClaimed = walletTotalRns;
+  userData.walletRnsLastSyncedAt = new Date().toISOString();
+  userData.pendingRNS = pendingAfter;
+  settings[discordUserId] = userData;
+  saveWalletSettings(settings);
+
+  return {
+    success: true,
+    migrated: !hasClaimed,
+    walletTotalRns,
+    claimedBefore,
+    claimedAfter: walletTotalRns,
+    delta,
+    pendingBefore,
+    pendingAfter
+  };
 }
 
 // ============== 更新錢包完整資料 ==============
@@ -585,6 +628,7 @@ module.exports = {
   isWalletBound,
   getPendingRNS,
   updatePendingRNS,
+  applyWalletRnsDelta,
   updateWalletData,
   getWalletData
 };

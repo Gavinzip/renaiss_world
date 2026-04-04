@@ -9460,8 +9460,15 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 分配 HP =====
   if (customId.startsWith('alloc_hp_')) {
-    const petId = customId.replace('alloc_hp_', '');
-    await handleAllocateHP(interaction, user, petId);
+    const raw = String(customId || '').replace('alloc_hp_', '').trim();
+    let petId = raw;
+    let amountInput = 1;
+    const amountMatch = raw.match(/^(.*)_(\d+|max)$/i);
+    if (amountMatch) {
+      petId = String(amountMatch[1] || '').trim();
+      amountInput = String(amountMatch[2] || '').trim().toLowerCase();
+    }
+    await handleAllocateHP(interaction, user, petId, amountInput);
     return;
   }
   
@@ -9495,7 +9502,15 @@ async function syncWalletAndApplyNow(discordUserId) {
     throw new Error(assets?.reason || '無法讀取錢包資產');
   }
 
-  WALLET.updatePendingRNS(discordUserId, assets.rns);
+  const player = CORE.loadPlayer(discordUserId);
+  const ledger = WALLET.applyWalletRnsDelta(discordUserId, assets.rns, {
+    // 舊資料升級：如果玩家檔已存在，預設視為先前已領過一次，避免同步後重複補發
+    assumeClaimedIfMissing: Boolean(player)
+  });
+  if (!ledger?.success) {
+    throw new Error(ledger?.reason || '錢包入帳同步失敗');
+  }
+
   WALLET.updateWalletData(discordUserId, {
     cardFMV: assets.assets.cardFMV,
     cardCount: assets.assets.cardCount,
@@ -9505,13 +9520,19 @@ async function syncWalletAndApplyNow(discordUserId) {
     totalSpentUSDT: assets.assets.totalSpentUSDT
   });
 
-  const player = CORE.loadPlayer(discordUserId);
   if (player) {
-    player.stats.財富 = assets.rns;
+    const currentGold = Math.max(0, Number(player?.stats?.財富 || 0));
+    player.stats.財富 = currentGold + Math.max(0, Number(ledger.delta || 0));
     CORE.savePlayer(player);
   }
 
-  return assets;
+  return {
+    ...assets,
+    walletTotalRns: ledger.walletTotalRns,
+    syncDeltaRns: ledger.delta,
+    pendingRns: ledger.pendingAfter,
+    claimedBefore: ledger.claimedBefore
+  };
 }
 
 function syncWalletInBackground(interaction, user, bindAddress = '') {
@@ -9525,7 +9546,8 @@ function syncWalletInBackground(interaction, user, bindAddress = '') {
       const notice =
         `✅ 錢包資料背景同步完成\n` +
         `錢包：\`${bindAddress || WALLET.getWalletAddress(userId) || 'unknown'}\`\n` +
-        `🎁 目前 Rns 代幣：${assets.rns}\n` +
+        `🎁 錢包可領總額：${assets.walletTotalRns}\n` +
+        `➕ 本次新增入帳：${assets.syncDeltaRns}\n` +
         `🐾 可擁有寵物：${maxPets} 隻`;
       if (interaction && typeof interaction.followUp === 'function') {
         await interaction.followUp({ content: notice, ephemeral: true }).catch(() => {});
@@ -9587,7 +9609,8 @@ async function handleWalletSyncNow(interaction, user) {
         `${cardInfo}` +
         `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
         `💸 總花費(開包+市場買入): $${Number(assets.assets.totalSpentUSDT || 0).toFixed(2)} USDT\n` +
-        `🎁 目前 Rns 代幣: ${assets.rns}\n` +
+        `🎁 錢包可領總額: ${assets.walletTotalRns}\n` +
+        `➕ 本次新增入帳: ${assets.syncDeltaRns}\n` +
         `🐾 可擁有寵物: ${maxPets} 隻`
       );
 
@@ -9772,6 +9795,8 @@ async function createCharacterWithName(interaction, user, profile, charName, opt
   player.currentStory = '';
   player.eventChoices = [];
   CORE.savePlayer(player);
+  // 建角後即視為入帳完成，避免用 pendingRNS 重複領取同一筆錢
+  WALLET.updatePendingRNS(user.id, 0);
   
   // 清除臨時資料
   clearPlayerTempData(user.id);
@@ -11010,15 +11035,36 @@ async function handleGachaResult(interaction, user, count) {
 }
 
 // ============== 分配 HP ==============
-async function handleAllocateHP(interaction, user, petId) {
+async function handleAllocateHP(interaction, user, petId, amountInput = 1) {
   const player = CORE.loadPlayer(user.id);
   
   if (!player) {
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
     return;
   }
+
+  const pet = PET.getPetById(petId);
+  if (!pet || String(pet.ownerId || '') !== String(user.id || '')) {
+    await showMovesList(interaction, user, petId, '⚠️ 找不到可加點的寵物。');
+    return;
+  }
+
+  const remain = Math.max(0, Number(player?.upgradePoints || 0));
+  let amount = 1;
+  if (String(amountInput || '').toLowerCase() === 'max') {
+    amount = remain;
+  } else {
+    const parsed = Math.floor(Number(amountInput || 1));
+    amount = Number.isFinite(parsed) ? parsed : 1;
+  }
+  amount = Math.max(1, amount);
+  if (remain <= 0) {
+    await showMovesList(interaction, user, petId, '⚠️ 升級點數不足。');
+    return;
+  }
+  amount = Math.min(amount, remain);
   
-  const result = GACHA.allocateUpgradePoint(user.id, petId, 1);
+  const result = GACHA.allocateUpgradePoint(user.id, petId, amount);
   
   if (!result.success) {
     await showMovesList(interaction, user, petId, `⚠️ 升級失敗：${result.reason}`);
@@ -11216,7 +11262,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     `可攜帶上陣招式：**${PET_MOVE_LOADOUT_LIMIT}**（逃跑技能固定，不占名額）`,
     `已解鎖招式：${selectedPet.moves.length}`,
     `背包晶片：${allChipTotal} 枚｜可學：${learnableChipTotal} 枚 / ${learnableChips.length} 種`,
-    `升級點數：${Number(player?.upgradePoints || 0)} 點（每點 +${Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 0.2)} HP）`,
+    `升級點數：${Number(player?.upgradePoints || 0)} 點（每點 +${Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 0.2)} HP，可批量）`,
     `主上場寵物：${activePetResolved?.pet?.name || selectedPet.name}`
   ].filter(Boolean).join('\n');
 
@@ -11309,19 +11355,38 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
       .setLabel(activePetId === String(selectedPet.id) ? '✅ 主上場' : '🎯 設主上場')
       .setStyle(activePetId === String(selectedPet.id) ? ButtonStyle.Success : ButtonStyle.Primary)
       .setDisabled(activePetId === String(selectedPet.id)),
-    new ButtonBuilder()
-      .setCustomId(`alloc_hp_${selectedPet.id}`)
-      .setLabel(`❤️ +${hpPerPoint}HP（剩${remainPoints}）`)
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(remainPoints <= 0),
     new ButtonBuilder().setCustomId('open_profile').setLabel('💳 檔案').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
+  );
+
+  const rowAllocate = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`alloc_hp_${selectedPet.id}_1`)
+      .setLabel(`❤️ +1（+${hpPerPoint}）`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(remainPoints <= 0),
+    new ButtonBuilder()
+      .setCustomId(`alloc_hp_${selectedPet.id}_5`)
+      .setLabel(`❤️ +5`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(remainPoints <= 0),
+    new ButtonBuilder()
+      .setCustomId(`alloc_hp_${selectedPet.id}_10`)
+      .setLabel(`❤️ +10`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(remainPoints <= 0),
+    new ButtonBuilder()
+      .setCustomId(`alloc_hp_${selectedPet.id}_max`)
+      .setLabel(`❤️ 全加（剩${remainPoints}）`)
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(remainPoints <= 0)
   );
 
   const components = [rowPetSelect];
   if (rowLearnChip) components.push(rowLearnChip);
   if (rowUnlearnChip) components.push(rowUnlearnChip);
   if (rowMoveAssign) components.push(rowMoveAssign);
+  components.push(rowAllocate);
   components.push(rowButtons);
   await interaction.update({ embeds: [embed], content: null, components });
 }
