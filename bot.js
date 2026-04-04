@@ -14798,6 +14798,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   }
   
   const statusBar = buildMainStatusBar(player, pet);
+  const eventMainlineLine = buildMainlineProgressLine(player);
   
   // 立即確認按鈕（避免 Discord 顯示失敗）
   await interaction.deferUpdate().catch(() => {});
