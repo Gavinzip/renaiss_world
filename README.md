@@ -31,6 +31,12 @@ Discord 文字冒險 / 戰鬥 Bot。
 - `gacha-system.js`：開包與招式抽取。
 - `game-core.js`：世界狀態、玩家存檔、記憶與全域邏輯。
 
+## 開發測試腳本位置
+- `tools/tests/ai-play-review.js`
+- `tools/tests/auto-test-5players.js`
+- `tools/tests/test-ai-flow.js`
+- `tools/tests/test-api.js`
+
 ## 資料目錄
 - `data/players/`：玩家存檔
 - `data/pets.json`：寵物資料
