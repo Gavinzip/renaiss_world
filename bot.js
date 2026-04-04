@@ -3424,9 +3424,9 @@ function createSoftMainlineGuideChoice(player) {
     return {
       action: 'portal_intent',
       tag: '[📖主線導引]',
-      name: '沿主線前往下一區',
-      choice: `回到${location}主傳送門，準備前往${nextPrimary}繼續追查`,
-      desc: `${chapterTitle}已收束，可先自由探索再傳送`,
+      name: '轉往下一個線索區',
+      choice: `回到${location}主傳送門，前往${nextPrimary}銜接下一段調查`,
+      desc: `${chapterTitle}已收束，可先整理證據再跨區`,
       mainlineNarrative: `你把${location}這段調查收束完成，下一步是經主傳送門前往${nextPrimary}。`
     };
   }
@@ -3434,9 +3434,9 @@ function createSoftMainlineGuideChoice(player) {
   return {
     action: 'main_story',
     tag: '[📖主線導引]',
-    name: '回到核心線索',
-    choice: `先處理本區關鍵（${safeProgressText}）：${stageGoal}`,
-    desc: `${safeProgressText}｜你也可同時做支線或自由探索`,
+    name: '沿現場線索追查',
+    choice: `回到${location}現場，優先核對「誰提供服務、何時出現」`,
+    desc: `${safeProgressText}｜先把當前證據補齊，再決定是否跨區`,
     mainlineGoal: stageGoal,
     mainlineProgress: safeProgressText,
     mainlineNarrative: `你決定先把${location}的主線段落往前推進：${stageGoal}。`
@@ -3456,10 +3456,8 @@ function ensureMainlineChoiceProgress(choice, player) {
   if (!String(next.tag || '').trim()) next.tag = '[📖主線導引]';
 
   const choiceText = String(next.choice || next.name || '').trim();
-  if (choiceText && !/地區進度\s*\d+\s*\/\s*\d+/u.test(choiceText) && !/本區主線已完成/u.test(choiceText)) {
-    next.choice = `${choiceText}（${progressText}）`;
-  } else if (!choiceText) {
-    next.choice = `沿主線推進（${progressText}）`;
+  if (!choiceText) {
+    next.choice = '沿現場線索繼續推進調查';
   }
 
   const descText = String(next.desc || '').trim();

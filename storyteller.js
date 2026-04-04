@@ -316,6 +316,27 @@ function sanitizeNarrativeText(text = '') {
   return output;
 }
 
+function stripNarrativeDraftLeak(text = '') {
+  let out = String(text || '');
+  if (!out) return '';
+
+  const draftMarker = /(等等[，,]?讓我|讓我重新|我來重新|好的[，,]?讓我重新|我需要讓玩家|玩家還在|前一段的最後是|我之前的開頭有誤|重新寫過|讓我看一下|根據前文)/u;
+  const directIdx = out.search(draftMarker);
+  if (directIdx >= 0 && directIdx > 120) {
+    out = out.slice(0, directIdx).trim();
+  }
+
+  const splitIdx = out.search(/\n-{3,}\n/u);
+  if (splitIdx >= 0) {
+    const tail = out.slice(splitIdx + 1);
+    if (draftMarker.test(tail)) {
+      out = out.slice(0, splitIdx).trim();
+    }
+  }
+
+  return out.trim();
+}
+
 function sanitizeAIContent(content) {
   let source = '';
   if (typeof content === 'string') {
@@ -379,6 +400,8 @@ function sanitizeMainlineBridgeChoiceTone(choice = {}, {
       .replace(/主傳送門測試/gu, '主傳送門')
       .replace(/測試([^，。；、\n]{0,24})是否可用/gu, '確認$1是否穩定')
       .replace(/方向是否可用/gu, '航線是否穩定')
+      .replace(/直接通過/gu, '先到')
+      .replace(/追查供應線/gu, '接續線索核查')
       .replace(/測試/gu, '確認');
     if (/是否可用/u.test(out)) {
       out = out.replace(/是否可用/gu, '是否穩定');
@@ -399,6 +422,15 @@ function sanitizeMainlineBridgeChoiceTone(choice = {}, {
     next.desc = playerLang === 'en'
       ? `${safeProgress} | Keep continuity by linking current clues to the next area`
       : `${safeProgress}｜承接現場線索，先做跨區前的資訊核對`;
+  }
+  if (/主傳送門.*前往.*接續線索核查/u.test(merged) || /主傳送門.*前往.*追查/u.test(merged)) {
+    next.name = playerLang === 'en' ? 'Verify local witness timing' : '核對現場目擊時序';
+    next.choice = playerLang === 'en'
+      ? `Re-check witness timeline near ${safeLocation} before deciding cross-zone movement`
+      : `先在${safeLocation}回頭核對目擊時序與服務來源，再決定是否跨區`;
+    next.desc = playerLang === 'en'
+      ? `${safeProgress} | Keep continuity by closing local evidence first`
+      : `${safeProgress}｜先補齊本地證據鏈，避免跨區後線索斷裂`;
   }
   return next;
 }
@@ -1904,6 +1936,7 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
   const maxTokens = Math.max(120, Number(options.maxTokens || AI_MAX_RESPONSE_TOKENS));
   const model = String(options.model || MINIMAX_MODEL);
   const label = String(options.label || 'callAI');
+  const strictFinalOnly = Boolean(options.strictFinalOnly);
   const hardRule = '\n\n【硬性輸出規則】只輸出最終答案，禁止輸出任何思考過程、XML標籤或系統說明。';
   let lastError = null;
 
@@ -1928,9 +1961,13 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
 
       const { content, finishReason } = await requestAI(body, timeoutMs);
       const cleaned = sanitizeAIContent(content);
+      const strictProbe = stripNarrativeDraftLeak(cleaned);
 
       if (!cleaned || cleaned.length < 30) {
         throw new Error(`Empty cleaned content raw=${previewAIContent(content)}`);
+      }
+      if (strictFinalOnly && (!strictProbe || strictProbe.length < 120)) {
+        throw new Error('Detected draft/meta leakage in output');
       }
       if (finishReason === 'length' && cleaned.length < 80) {
         throw new Error('Truncated content');
@@ -2189,9 +2226,10 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
         model,
         maxTokens: 1600,
         timeoutMs: STORY_TIMEOUT_MS,
-        retries: 3
+        retries: 3,
+        strictFinalOnly: true
       });
-      const normalizedStory = normalizeOutputByLanguage(story, playerLang);
+      const normalizedStory = normalizeOutputByLanguage(stripNarrativeDraftLeak(story), playerLang);
       if (!normalizedStory || normalizedStory.length < 120) {
         throw new Error('Story too short');
       }
