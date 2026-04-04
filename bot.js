@@ -1208,6 +1208,7 @@ const PLAYER_CODEX_NPC_LIMIT = Math.max(50, Math.min(1000, Number(process.env.PL
 const PLAYER_CODEX_DRAW_LIMIT = Math.max(50, Math.min(2000, Number(process.env.PLAYER_CODEX_DRAW_LIMIT || 800)));
 const STARTER_FIVE_PULL_COUNT = 5;
 const GENERATION_HISTORY_LIMIT = Math.max(5, Math.min(100, Number(process.env.GENERATION_HISTORY_LIMIT || 20)));
+const GENERATION_PENDING_STALE_MS = Math.max(30000, Number(process.env.GENERATION_PENDING_STALE_MS || 180000));
 const MAP_ENABLE_WIDE_ANSI = String(process.env.MAP_ENABLE_WIDE_ANSI || '0') === '1';
 const MARKET_GUARANTEE_GAP_TURNS = Math.max(1, Math.min(8, Number(process.env.MARKET_GUARANTEE_GAP_TURNS || 3)));
 const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(16, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 10)));
@@ -1601,6 +1602,23 @@ async function tryRecoverEventButtonsAfterFailure(interaction, userId) {
     .catch(() => null);
   if (!recoveryMsg) return false;
   trackActiveGameMessage(player, channel?.id, recoveryMsg.id);
+  return true;
+}
+
+async function tryRecoverMainMenuAfterFailure(interaction, userId) {
+  if (!interaction?.channel?.isThread?.()) return false;
+  const playerId = String(userId || '').trim();
+  if (!playerId) return false;
+  const player = CORE.loadPlayer(playerId);
+  if (!player) return false;
+  const fallbackPet = PET.loadPet(playerId);
+  const petResolved = resolvePlayerMainPet(player, { fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
+  if (!pet) return false;
+  if (petResolved?.changed) {
+    CORE.savePlayer(player);
+  }
+  await sendMainMenuToThread(interaction.channel, player, pet, null);
   return true;
 }
 
@@ -4170,6 +4188,26 @@ function ensurePlayerGenerationSchema(player) {
     loadingMessageId: rawState.loadingMessageId ? String(rawState.loadingMessageId) : null,
     attempts: Math.max(0, Number(rawState.attempts) || 0)
   };
+
+  if (normalizedState.status === 'pending') {
+    const now = Date.now();
+    const staleBase = Math.max(0, Number(normalizedState.updatedAt || normalizedState.startedAt || 0));
+    const elapsed = staleBase > 0 ? now - staleBase : 0;
+    if (elapsed > GENERATION_PENDING_STALE_MS) {
+      normalizedState.status = 'failed';
+      normalizedState.phase = 'stale_pending_recovered';
+      normalizedState.loadingMessageId = null;
+      normalizedState.lastError = {
+        message: `generation pending stale timeout (${elapsed}ms)`,
+        at: now,
+        phase: 'stale_pending_recovered'
+      };
+      normalizedState.updatedAt = now;
+      normalizedState.storySnapshot = normalizedState.storySnapshot || String(player.currentStory || '');
+      normalizedState.choicesSnapshot = cloneChoiceSnapshot(normalizedState.choicesSnapshot);
+      mutated = true;
+    }
+  }
 
   if (JSON.stringify(player.generationState || {}) !== JSON.stringify(normalizedState)) {
     player.generationState = normalizedState;
@@ -8336,7 +8374,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
       !isPetFlowButton &&
       !isInventoryFlowButton
     ) {
-      await lockPressedButtonImmediately(interaction);
+      // 不阻塞互動主流程，避免先鎖按鈕時超過 Discord 互動 3 秒時限
+      lockPressedButtonImmediately(interaction).catch(() => {});
     }
   }
 
@@ -9912,6 +9951,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
     try {
       if (String(customId || '').startsWith('event_')) {
         await tryRecoverEventButtonsAfterFailure(interaction, user?.id);
+      } else if (interaction?.isButton?.()) {
+        await tryRecoverMainMenuAfterFailure(interaction, user?.id);
       }
     } catch (_) {}
   }
