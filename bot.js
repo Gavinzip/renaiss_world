@@ -3089,6 +3089,17 @@ function createSoftMainlineGuideChoice(player) {
   const nextPrimary = ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
     ? String(ISLAND_STORY.getNextPrimaryLocation(location) || '').trim()
     : '';
+  const chapterTitle = ISLAND_STORY && typeof ISLAND_STORY.getStoryChapterTitle === 'function'
+    ? String(ISLAND_STORY.getStoryChapterTitle(location) || '島內篇章').trim()
+    : '島內篇章';
+  const roadmap = ISLAND_STORY && typeof ISLAND_STORY.getStoryRoadmap === 'function'
+    ? ISLAND_STORY.getStoryRoadmap(location, stageCount)
+    : [];
+  const stageIdx = Math.max(0, Math.min(Math.max(0, stageCount - 1), stage - 1));
+  const stageGoal = String(
+    (Array.isArray(roadmap) && roadmap[stageIdx]) || '先把當前線索做交叉比對，再決定下一步'
+  ).trim();
+  const safeProgressText = `地區進度 ${stage}/${stageCount}`;
 
   if (isCompleted && nextPrimary) {
     return {
@@ -3096,7 +3107,8 @@ function createSoftMainlineGuideChoice(player) {
       tag: '[📖主線導引]',
       name: '沿主線前往下一區',
       choice: `回到${location}主傳送門，準備前往${nextPrimary}繼續追查`,
-      desc: '你也可以先留在本區自由探索，稍後再傳送'
+      desc: `${chapterTitle}已收束，可先自由探索再傳送`,
+      mainlineNarrative: `你把${location}這段調查收束完成，下一步是經主傳送門前往${nextPrimary}。`
     };
   }
 
@@ -3104,8 +3116,11 @@ function createSoftMainlineGuideChoice(player) {
     action: 'main_story',
     tag: '[📖主線導引]',
     name: '回到核心線索',
-    choice: `沿著${location}的主線線索繼續追查來源與流向（地區進度 ${stage}/${stageCount}）`,
-    desc: '保留主線節奏，不影響你同時做支線或自由探索'
+    choice: `先處理本區關鍵：${stageGoal}`,
+    desc: `${safeProgressText}｜你也可同時做支線或自由探索`,
+    mainlineGoal: stageGoal,
+    mainlineProgress: safeProgressText,
+    mainlineNarrative: `你決定先把${location}的主線段落往前推進：${stageGoal}。`
   };
 }
 
@@ -7942,6 +7957,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId.startsWith('portal_jump_') ||
       customId.startsWith('map_goto_');
     const isShopFlowButton = customId.startsWith('shop_');
+    const isPetFlowButton =
+      customId === 'show_moves' ||
+      customId.startsWith('set_main_pet_') ||
+      customId.startsWith('alloc_hp_');
     // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
@@ -7949,7 +7968,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'open_friend_add_modal' ||
       customId === 'sync_wallet_now' ||
       customId.startsWith('claim_new_pet_element_');
-    if (!isMapFlowButton && !isModalLauncherButton && !isShopFlowButton) {
+    if (!isMapFlowButton && !isModalLauncherButton && !isShopFlowButton && !isPetFlowButton) {
       await lockPressedButtonImmediately(interaction);
     }
   }
@@ -11382,11 +11401,14 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
       .setDisabled(remainPoints <= 0)
   );
 
+  // Discord 訊息元件最多 5 列；若超過會導致 update 失敗並看起來像「按鈕消失」。
+  // 保留優先順序：寵物切換 > 上陣招式 > 學習晶片 > HP加點 > 取消學習 > 返回按鈕。
   const components = [rowPetSelect];
-  if (rowLearnChip) components.push(rowLearnChip);
-  if (rowUnlearnChip) components.push(rowUnlearnChip);
-  if (rowMoveAssign) components.push(rowMoveAssign);
-  components.push(rowAllocate);
+  const optionalRows = [rowMoveAssign, rowLearnChip, rowAllocate, rowUnlearnChip].filter(Boolean);
+  for (const row of optionalRows) {
+    if (components.length >= 4) break; // 保留最後一列 rowButtons（總列數 <= 5）
+    components.push(row);
+  }
   components.push(rowButtons);
   await interaction.update({ embeds: [embed], content: null, components });
 }
@@ -13359,14 +13381,20 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     await disableMessageComponents(interaction.channel, interaction.message?.id);
     return;
   } else if (event.action === 'main_story') {
+    const mainlineNarrative = String(event.mainlineNarrative || '').trim();
+    const mainlineGoal = String(event.mainlineGoal || '').trim();
+    const mainlineProgress = String(event.mainlineProgress || '').trim();
+    const fallbackMsg = String(event.desc || event.choice || '主線正在暗中推進。').trim();
+    const message = mainlineNarrative || fallbackMsg;
+    const messageWithProgress = mainlineProgress ? `${message}\n📌 ${mainlineProgress}` : message;
     result = {
       type: 'main_story',
-      message: String(event.desc || event.choice || '主線正在暗中推進。')
+      message: messageWithProgress
     };
     selectedChoice = String(event.choice || event.name || '主線推進');
     queueMemory({
       type: '主線',
-      content: '主線改為被動觸發，不需固定按鈕',
+      content: mainlineGoal || selectedChoice || '主線改為被動觸發，不需固定按鈕',
       importance: 1,
       tags: ['main_story']
     });
@@ -13793,6 +13821,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     islandProgressAfterTurn?.completed
   );
   const completedLocation = String(player.location || '').trim();
+  const completedChapterTitle = ISLAND_STORY && typeof ISLAND_STORY.getStoryChapterTitle === 'function'
+    ? String(ISLAND_STORY.getStoryChapterTitle(completedLocation) || '島內篇章').trim()
+    : '島內篇章';
   const nextIslandHint = islandCompletedNow && ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
     ? ISLAND_STORY.getNextPrimaryLocation(completedLocation)
     : '';
@@ -13812,7 +13843,10 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       player.location = regionPortalHub;
       syncLocationArcLocation(player);
       movedToPortalHub = true;
-      result.message = `${String(result.message || '').trim()}\n\n🧭 你沿著島內主線收束路徑前進，抵達 **${regionPortalHub}** 的主傳送門節點。`.trim();
+      const handoffLine = (getPlayerStoryTurns(player) % 2 === 0)
+        ? `🧭 你把「${completedChapterTitle}」收束後，順勢走到 **${regionPortalHub}** 主傳送門節點。`
+        : `🧭 ${completedLocation} 的關鍵段落告一段落，你跟著導引光帶抵達 **${regionPortalHub}** 主傳送門。`;
+      result.message = `${String(result.message || '').trim()}\n\n${handoffLine}`.trim();
       queueMemory({
         type: '移動',
         content: `地區收尾後前往主傳送門`,
@@ -13823,13 +13857,13 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     }
 
     const completedLine = nextPortalHubHint
-      ? `📍 你已完成 **${completedLocation}** 的島內篇章。主傳送門已啟動，建議前往 **${nextPortalHubHint}** 再推進下一區。`
+      ? `📍 ${completedChapterTitle}已完成：你可直接前往 **${nextPortalHubHint}** 接下一段，也可先在本區自由探索。`
       : (nextIslandHint
-        ? `📍 你已完成 **${completedLocation}** 的島內篇章。主傳送門已啟動，可考慮前往 **${nextIslandHint}**，或留在本地自由探索。`
-        : `📍 你已完成 **${completedLocation}** 的島內篇章。主傳送門已啟動，你可以留在本地自由探索，或前往下一個地區。`);
+        ? `📍 ${completedChapterTitle}已完成：下一步可朝 **${nextIslandHint}** 推進，或暫留本區整理線索。`
+        : `📍 ${completedChapterTitle}已完成：你可留在本區擴展支線，或自行挑選下一個地區。`);
     result.message = `${String(result.message || '').trim()}\n\n${completedLine}`.trim();
     if (!movedToPortalHub && regionPortalHub) {
-      result.message = `${String(result.message || '').trim()}\n\n🧭 你已走到 **${regionPortalHub}** 主傳送門旁，可立即傳送，也可繼續在本區遊走。`.trim();
+      result.message = `${String(result.message || '').trim()}\n\n🧭 你已靠近 **${regionPortalHub}** 主傳送門，可立刻跨區，也可先留在本區延伸支線。`.trim();
     }
     player.portalMenuOpen = true;
     player.forcePortalChoice = true;

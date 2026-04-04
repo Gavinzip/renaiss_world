@@ -36,14 +36,123 @@ function getCompletedLocationCount(player) {
   return Object.keys(completed).length;
 }
 
-function buildTravelGateHint(state, required, completed) {
+function pickVariant(lines = [], seed = 0) {
+  const arr = Array.isArray(lines) ? lines.filter(Boolean) : [];
+  if (arr.length === 0) return '';
+  const idx = Math.abs(Number(seed || 0)) % arr.length;
+  return String(arr[idx] || '').trim();
+}
+
+function getIslandContext(player, location = '') {
+  const loc = String(location || player?.location || '').trim() || '當前地區';
+  const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, loc)
+    : null;
+  const stageCount = Math.max(1, Number(islandState?.stageCount || 8));
+  const stage = Math.max(1, Number(islandState?.stage || 1));
+  const chapter = ISLAND_STORY && typeof ISLAND_STORY.getStoryChapterTitle === 'function'
+    ? String(ISLAND_STORY.getStoryChapterTitle(loc) || '島內篇章').trim()
+    : '島內篇章';
+  const roadmap = ISLAND_STORY && typeof ISLAND_STORY.getStoryRoadmap === 'function'
+    ? ISLAND_STORY.getStoryRoadmap(loc, stageCount)
+    : [];
+  const stageIdx = Math.max(0, Math.min(Math.max(0, stageCount - 1), stage - 1));
+  const stageGoal = String((Array.isArray(roadmap) && roadmap[stageIdx]) || '').trim();
+  const nextPrimary = ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
+    ? String(ISLAND_STORY.getNextPrimaryLocation(loc) || '').trim()
+    : '';
+  const nextPortalHub = nextPrimary ? String(getLocationPortalHub(nextPrimary) || '').trim() : '';
+
+  return {
+    location: loc,
+    chapter,
+    stage,
+    stageCount,
+    stageGoal,
+    nextPrimary,
+    nextPortalHub
+  };
+}
+
+function buildMainlineBeatText(player, state, beat, extras = {}) {
+  const ctx = getIslandContext(player, extras.location || player?.location || '');
+  const seed = Number(state?.eventCount || 0);
+  const goalLine = ctx.stageGoal ? `當前落點：${ctx.stageGoal}` : '';
+
+  switch (beat) {
+    case 'act1_anomaly':
+      return pickVariant([
+        `📖 **主線異動**：你在${ctx.location}發現一支「新手友善供應」隊伍正快速收客，開價低得不尋常。${goalLine ? `\n${goalLine}` : ''}`,
+        `📖 **主線異動**：${ctx.location}出現過度友善的低價服務，吸走了大量注意力。${goalLine ? `\n${goalLine}` : ''}`
+      ], seed);
+    case 'act2_whispers':
+      return pickVariant([
+        `📖 **主線異動**：${ctx.location}流言升溫，有人回報「上架很快、成交很慢」，低價供應線的貨流開始不對勁。`,
+        `📖 **主線異動**：你在${ctx.location}聽見相同傳聞反覆出現：價格漂亮，但實際流動性很差。`
+      ], seed);
+    case 'act3_marked':
+      return pickVariant([
+        `📖 **主線異動**：你追查到「宣稱有貨、實際無貨」的交易糾紛後，行蹤開始被人標記。`,
+        `📖 **主線異動**：你剛靠近供應鏈缺口，就察覺有人在記錄你的路線與停留節點。`
+      ], seed);
+    case 'act4_pressure':
+      return pickVariant([
+        `📖 **主線異動**：跟監壓力升高，對方開始試探你的節奏，還沒正面動手。`,
+        `📖 **主線異動**：你在${ctx.location}明顯感到尾隨存在，對手正在等你露出破口。`
+      ], seed);
+    case 'act4_probe':
+      return pickVariant([
+        `📖 **主線異動**：追兵已貼近，但仍停在試探距離；你有一個短窗口可先佈局。`,
+        `📖 **主線異動**：對方沒有立刻開戰，卻持續壓縮你的活動空間。`
+      ], seed);
+    case 'act4_side': {
+      const side = String(extras.side || '未定').trim();
+      return pickVariant([
+        `📖 **主線異動**：市場戰況升級，你目前的行動傾向被判定為「${side}」。`,
+        `📖 **主線異動**：你的決策軌跡已形成明顯立場：${side}。`
+      ], seed);
+    }
+    case 'act5_all_defeated':
+      return pickVariant([
+        '📖 **主線異動**：四巨頭已全數潰退，終章入口正在打開。',
+        '📖 **主線異動**：四巨頭戰線收束完成，最終抉擇階段即將展開。'
+      ], seed);
+    case 'act5_king_hunt': {
+      const king = String(extras.king || '目標').trim();
+      const cleared = Math.max(0, Number(extras.cleared || 0));
+      return pickVariant([
+        `📖 **主線異動**：四巨頭追擊戰鎖定「${king}」，目前擊破進度 ${cleared}/${DIGITAL_KINGS.length}。`,
+        `📖 **主線異動**：你鎖定四巨頭「${king}」活動區，戰線進度 ${cleared}/${DIGITAL_KINGS.length}。`
+      ], seed);
+    }
+    case 'act6_remaining_kings': {
+      const remaining = Array.isArray(extras.remaining) ? extras.remaining.filter(Boolean).join('、') : '';
+      return `📖 **主線線索**：終章前仍需清掉未完成目標：${remaining || '四巨頭殘餘'}。`;
+    }
+    case 'act6_ending': {
+      const ending = String(extras.ending || '未定').trim();
+      return `📖 **主線終局**：真相公開後，你把世界線收束到【${ending}】。`;
+    }
+    default:
+      return '';
+  }
+}
+
+function buildTravelGateHint(state, required, completed, player = null) {
   const need = Math.max(0, Number(required || 0) - Number(completed || 0));
   if (need <= 0) return '';
   const eventCount = Number(state?.eventCount || 0);
   const lastHintAt = Number(state?.lastTravelHintEventCount || -999);
   if (eventCount - lastHintAt < 2) return '';
   state.lastTravelHintEventCount = eventCount;
-  return `📖 **主線線索**：你已在此區取得關鍵線索，下一章需要跨區追查。請靠近傳送門前往新地區，再完成 ${need} 個地區篇章。`;
+  const ctx = getIslandContext(player, player?.location || '');
+  const portalTarget = ctx.nextPortalHub || ctx.nextPrimary || '下一個可用地區';
+  return [
+    `📖 **主線線索**：你在${ctx.location}已拿到可延伸線索，下一步需要跨區驗證。`,
+    ctx.stageGoal ? `當前落點：${ctx.stageGoal}` : '',
+    `請靠近主傳送門，朝「${portalTarget}」推進；尚需完成 ${need} 個地區篇章。`,
+    `${ctx.chapter}｜${ctx.stage}/${ctx.stageCount}`
+  ].filter(Boolean).join('\n');
 }
 
 function normalizeKingProgressState(state) {
@@ -245,14 +354,14 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act1_market' && count >= 2) {
     markNode(state, 1, 'act1_anomaly', 'Act1 -> 市場誘惑被看見');
-    triggered.appendText = '📖 **主線異動**：一支自稱「新手友善供應」的隊伍出現，報價看起來異常划算。';
+    triggered.appendText = buildMainlineBeatText(player, state, 'act1_anomaly');
     triggered.memory = '你注意到一股看似友善的新勢力正在搶占市場信任。';
     return triggered;
   }
 
   if (state.node === 'act1_anomaly' && count >= 4) {
     markNode(state, 2, 'act2_whispers', 'Act2 -> 流言啟動');
-    triggered.appendText = '📖 **主線異動**：市場流言升溫，開始有人反映「便宜貨上架很快、實際成交很慢」，那支熱心隊伍的貨流出現異常。';
+    triggered.appendText = buildMainlineBeatText(player, state, 'act2_whispers');
     triggered.announcement = '🗣️ 市場流言升溫：某支常幫新手的隊伍，帳本來源與實際成交量出現異常。';
     triggered.memory = '你聽見「某低價供應線看似熱賣、其實流動性很差」的傳言。';
     return triggered;
@@ -260,21 +369,21 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act2_whispers' && count >= 6) {
     if (completedLocations < 1) {
-      const travelHint = buildTravelGateHint(state, 1, completedLocations);
+      const travelHint = buildTravelGateHint(state, 1, completedLocations, player);
       if (!travelHint) return null;
       triggered.appendText = travelHint;
       triggered.memory = '你需要跨區追查，主線才會繼續推進。';
       return triggered;
     }
     markNode(state, 3, 'act3_marked', 'Act3 -> 被盯上');
-    triggered.appendText = '📖 **主線異動**：你在追查「友善供應」時被標記；黑市風聲指出，該線路近期大量掛單卻賣不動，甚至傳出「宣稱有貨、實際無貨」的交易糾紛。';
+    triggered.appendText = buildMainlineBeatText(player, state, 'act3_marked');
     triggered.memory = '你聽見低價供應鏈出現「流動性差、空單偽造」的風聲，並因此被對方注意到。';
     return triggered;
   }
 
   if (state.node === 'act3_marked' && count >= 8) {
     if (completedLocations < 1) {
-      const travelHint = buildTravelGateHint(state, 1, completedLocations);
+      const travelHint = buildTravelGateHint(state, 1, completedLocations, player);
       if (!travelHint) return null;
       triggered.appendText = travelHint;
       triggered.memory = '你仍在同一區，主線暫時卡在追查階段。';
@@ -282,7 +391,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
     }
     markNode(state, 4, 'act4_war', 'Act4 -> 蒙面狩獵觸發');
     state.lastAssassinPressureEventCount = count;
-    triggered.appendText = '📖 **主線異動**：你察覺自己被一路跟監，追兵開始試探你的路線與節奏。';
+    triggered.appendText = buildMainlineBeatText(player, state, 'act4_pressure');
     triggered.memory = '你被暗潮勢力盯上，追兵開始尾隨試探。';
     return triggered;
   }
@@ -296,7 +405,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
         triggered.announcement = `💀 ${player.name}遭遇了暗潮覆面獵手的狩獵測試。`;
         triggered.memory = '覆面獵手現身並發動了突襲。';
       } else {
-        triggered.appendText = '📖 **主線異動**：你察覺追兵近在咫尺，但對方仍在試探，尚未正面開戰。';
+        triggered.appendText = buildMainlineBeatText(player, state, 'act4_probe');
         triggered.memory = '追兵尚未開戰，但你確定自己正在被鎖定。';
       }
       return triggered;
@@ -305,7 +414,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act4_war' && count >= 10) {
     if (completedLocations < 2) {
-      const travelHint = buildTravelGateHint(state, 2, completedLocations);
+      const travelHint = buildTravelGateHint(state, 2, completedLocations, player);
       if (!travelHint) return null;
       triggered.appendText = travelHint;
       triggered.memory = '你需要走訪更多地區，市場戰爭才會升級。';
@@ -315,7 +424,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
       ? 'Digital（機變策略）'
       : 'Renaiss（秩序）';
     markNode(state, 5, 'act5_kings', `Act5 -> 市場戰爭立場：${state.side}`);
-    triggered.appendText = `📖 **主線異動**：市場戰爭升級，你目前傾向立場：${state.side}。`;
+    triggered.appendText = buildMainlineBeatText(player, state, 'act4_side', { side: state.side });
     triggered.announcement = `⚔️ 市場戰爭進入白熱化，${player.name}立場傾向 ${state.side}。`;
     triggered.memory = `你在市場戰爭中的傾向為 ${state.side}。`;
     return triggered;
@@ -323,7 +432,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act5_kings' && count >= 13) {
     if (completedLocations < 2) {
-      const travelHint = buildTravelGateHint(state, 2, completedLocations);
+      const travelHint = buildTravelGateHint(state, 2, completedLocations, player);
       if (!travelHint) return null;
       triggered.appendText = travelHint;
       triggered.memory = '你尚未累積足夠跨區戰績，四巨頭暫未現身。';
@@ -333,7 +442,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
     const remainingKings = getRemainingKings(state);
     if (remainingKings.length === 0) {
       markNode(state, 6, 'act6_winchman', 'Act6 前置 -> 四巨頭全滅');
-      triggered.appendText = '📖 **主線異動**：四巨頭已全數潰敗，Winchman 的最終抉擇即將展開。';
+      triggered.appendText = buildMainlineBeatText(player, state, 'act5_all_defeated');
       triggered.announcement = `🏁 ${player.name}已擊破四巨頭，最終章即將開啟。`;
       triggered.memory = '你已擊敗四巨頭，終章只差最後抉擇。';
       return triggered;
@@ -349,7 +458,10 @@ function maybeTriggerPassiveStory(player, context = {}) {
     state.lastKingEncounterEventCount = count;
     const kingData = buildKingEncounter(preferredKing);
     triggered.overrideResult = kingData.encounter;
-    triggered.appendText = `📖 **主線異動**：四巨頭追擊戰展開，目標「${kingData.king}」。目前擊破進度 ${(state.defeatedKings || []).length}/${DIGITAL_KINGS.length}。`;
+    triggered.appendText = buildMainlineBeatText(player, state, 'act5_king_hunt', {
+      king: kingData.king,
+      cleared: (state.defeatedKings || []).length
+    });
     triggered.announcement = `👑 ${player.name}遭遇四巨頭「${kingData.king}」的追擊。`;
     triggered.memory = `你與四巨頭 ${kingData.king} 交手。`;
     return triggered;
@@ -358,20 +470,19 @@ function maybeTriggerPassiveStory(player, context = {}) {
   if (state.node === 'act6_winchman' && count >= 16) {
     const remainingKings = getRemainingKings(state);
     if (remainingKings.length > 0) {
-      triggered.appendText = `📖 **主線線索**：仍有四巨頭未擊破（${remainingKings.join('、')}），請先完成剿滅。`;
+      triggered.appendText = buildMainlineBeatText(player, state, 'act6_remaining_kings', { remaining: remainingKings });
       triggered.memory = `你尚未擊敗全部四巨頭：${remainingKings.join('、')}。`;
       return triggered;
     }
     if (completedLocations < 3) {
-      const travelHint = buildTravelGateHint(state, 3, completedLocations);
+      const travelHint = buildTravelGateHint(state, 3, completedLocations, player);
       if (!travelHint) return null;
       triggered.appendText = travelHint;
       triggered.memory = '終局前仍需跨區蒐證，避免在單一地區收束主線。';
       return triggered;
     }
     const ending = finalizeEnding(state, player);
-    triggered.appendText =
-      `📖 **主線終局**：Winchman 揭露「必要混亂」真相，你的世界線收束為【${ending}】。`;
+    triggered.appendText = buildMainlineBeatText(player, state, 'act6_ending', { ending });
     triggered.announcement = `🌍 ${player.name}完成主線終局，世界偏向「${ending}」路徑。`;
     triggered.memory = `你完成主線並走向「${ending}」結局。`;
     return triggered;
@@ -399,8 +510,12 @@ function recordCombatOutcome(player, context = {}) {
   const cleared = state.defeatedKings.length;
   const remainingKings = getRemainingKings(state);
 
+  const progressLines = [
+    `👑 **四巨頭進度更新**：你擊破了「${defeatedKing}」，戰線推進到 ${cleared}/${DIGITAL_KINGS.length}。`,
+    `👑 **四巨頭進度更新**：目標「${defeatedKing}」已被你壓制，累積進度 ${cleared}/${DIGITAL_KINGS.length}。`
+  ];
   const triggered = {
-    appendText: `👑 **四巨頭進度更新**：你擊破了「${defeatedKing}」。（${cleared}/${DIGITAL_KINGS.length}）`,
+    appendText: pickVariant(progressLines, Number(state?.eventCount || 0) + cleared),
     announcement: `👑 ${player?.name || '玩家'}擊破四巨頭「${defeatedKing}」。（${cleared}/${DIGITAL_KINGS.length}）`,
     memory: `你擊敗四巨頭 ${defeatedKing}，目前進度 ${cleared}/${DIGITAL_KINGS.length}。`
   };
