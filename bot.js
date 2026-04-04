@@ -7930,6 +7930,13 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton() && !interaction.isModalSubmit() && !interaction.isStringSelectMenu()) return;
   
   const { customId, user } = interaction;
+  try {
+    if (String(customId || '').startsWith('event_')) {
+      console.log(
+        `[Interaction] event button received cid=${customId} user=${String(user?.id || '')} ` +
+        `channel=${String(interaction.channelId || '')} msg=${String(interaction.message?.id || '')}`
+      );
+    }
 
   if (await rejectIfNotThreadOwner(interaction, user.id)) {
     return;
@@ -9536,6 +9543,20 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (customId.startsWith('name_modal_')) {
     await handleNameSubmit(interaction, user);
     return;
+  }
+  } catch (err) {
+    console.error(
+      `[Interaction] handler failed cid=${String(customId || '')} user=${String(user?.id || '')}:`,
+      err?.stack || err?.message || err
+    );
+    const failMsg = '❌ 互動處理失敗，請再按一次；若持續發生請回報你按的按鈕。';
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({ content: failMsg, ephemeral: true }).catch(() => {});
+      } else {
+        await interaction.reply({ content: failMsg, ephemeral: true }).catch(() => {});
+      }
+    } catch (_) {}
   }
 });
 

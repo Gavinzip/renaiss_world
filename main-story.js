@@ -6,6 +6,7 @@
 const { sanitizeWorldObject } = require('./style-sanitizer');
 const BATTLE = require('./battle-system');
 const ISLAND_STORY = require('./island-story');
+const { getLocationPortalHub } = require('./world-map');
 
 const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',
