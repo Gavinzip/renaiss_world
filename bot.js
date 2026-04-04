@@ -368,6 +368,559 @@ function getThreadOwnerUserId(threadId) {
   return null;
 }
 
+function normalizeFriendId(value = '') {
+  const id = String(value || '').trim();
+  if (!/^\d{15,22}$/.test(id)) return '';
+  return id;
+}
+
+function ensurePlayerFriendState(player) {
+  if (!player || typeof player !== 'object') {
+    return { friends: [], friendRequestsIncoming: [], friendRequestsOutgoing: [] };
+  }
+  if (!player.social || typeof player.social !== 'object' || Array.isArray(player.social)) {
+    player.social = {};
+  }
+  const social = player.social;
+  const selfId = String(player.id || '').trim();
+  const normalizeList = (arr) => {
+    const out = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(arr) ? arr : []) {
+      const id = normalizeFriendId(raw);
+      if (!id || id === selfId || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  };
+  social.friends = normalizeList(social.friends);
+  social.friendRequestsIncoming = normalizeList(social.friendRequestsIncoming).filter((id) => !social.friends.includes(id));
+  social.friendRequestsOutgoing = normalizeList(social.friendRequestsOutgoing).filter((id) => !social.friends.includes(id));
+  return social;
+}
+
+function removeFriendIdFromList(list, friendId) {
+  const target = String(friendId || '').trim();
+  const source = Array.isArray(list) ? list : [];
+  return source.filter((id) => String(id || '').trim() !== target);
+}
+
+function getPlayerDisplayNameById(playerId = '') {
+  const id = String(playerId || '').trim();
+  if (!id) return '未知玩家';
+  const p = CORE.loadPlayer(id);
+  if (!p) return `玩家(${id})`;
+  return String(p.name || '').trim() || `玩家(${id})`;
+}
+
+function isMutualFriend(player, targetId = '') {
+  if (!player || typeof player !== 'object') return false;
+  const id = String(targetId || '').trim();
+  if (!id) return false;
+  const social = ensurePlayerFriendState(player);
+  return social.friends.includes(id);
+}
+
+function finalizeMutualFriendship(playerA, playerB) {
+  const socialA = ensurePlayerFriendState(playerA);
+  const socialB = ensurePlayerFriendState(playerB);
+  const idA = String(playerA?.id || '').trim();
+  const idB = String(playerB?.id || '').trim();
+  if (!idA || !idB || idA === idB) return;
+  if (!socialA.friends.includes(idB)) socialA.friends.push(idB);
+  if (!socialB.friends.includes(idA)) socialB.friends.push(idA);
+  socialA.friendRequestsIncoming = removeFriendIdFromList(socialA.friendRequestsIncoming, idB);
+  socialA.friendRequestsOutgoing = removeFriendIdFromList(socialA.friendRequestsOutgoing, idB);
+  socialB.friendRequestsIncoming = removeFriendIdFromList(socialB.friendRequestsIncoming, idA);
+  socialB.friendRequestsOutgoing = removeFriendIdFromList(socialB.friendRequestsOutgoing, idA);
+}
+
+function createFriendRequest(fromUserId, targetUserId) {
+  const fromId = normalizeFriendId(fromUserId);
+  const targetId = normalizeFriendId(targetUserId);
+  if (!fromId || !targetId) return { ok: false, code: 'invalid_id' };
+  if (fromId === targetId) return { ok: false, code: 'self' };
+  const fromPlayer = CORE.loadPlayer(fromId);
+  const targetPlayer = CORE.loadPlayer(targetId);
+  if (!fromPlayer) return { ok: false, code: 'from_not_found' };
+  if (!targetPlayer) return { ok: false, code: 'target_not_found' };
+
+  const fromSocial = ensurePlayerFriendState(fromPlayer);
+  const targetSocial = ensurePlayerFriendState(targetPlayer);
+  if (fromSocial.friends.includes(targetId) && targetSocial.friends.includes(fromId)) {
+    return { ok: false, code: 'already_friends', targetName: getPlayerDisplayNameById(targetId) };
+  }
+
+  const reversePending = fromSocial.friendRequestsIncoming.includes(targetId) || targetSocial.friendRequestsOutgoing.includes(fromId);
+  if (reversePending) {
+    finalizeMutualFriendship(fromPlayer, targetPlayer);
+    CORE.savePlayer(fromPlayer);
+    CORE.savePlayer(targetPlayer);
+    return { ok: true, code: 'auto_accepted', targetName: getPlayerDisplayNameById(targetId) };
+  }
+
+  if (fromSocial.friendRequestsOutgoing.includes(targetId)) {
+    return { ok: false, code: 'already_requested', targetName: getPlayerDisplayNameById(targetId) };
+  }
+
+  fromSocial.friendRequestsOutgoing.push(targetId);
+  targetSocial.friendRequestsIncoming.push(fromId);
+  CORE.savePlayer(fromPlayer);
+  CORE.savePlayer(targetPlayer);
+  return { ok: true, code: 'requested', targetName: getPlayerDisplayNameById(targetId) };
+}
+
+function acceptFriendRequest(receiverUserId, requesterUserId) {
+  const receiverId = normalizeFriendId(receiverUserId);
+  const requesterId = normalizeFriendId(requesterUserId);
+  if (!receiverId || !requesterId) return { ok: false, code: 'invalid_id' };
+  const receiver = CORE.loadPlayer(receiverId);
+  const requester = CORE.loadPlayer(requesterId);
+  if (!receiver || !requester) return { ok: false, code: 'player_not_found' };
+  const receiverSocial = ensurePlayerFriendState(receiver);
+  const requesterSocial = ensurePlayerFriendState(requester);
+  const hasPending = receiverSocial.friendRequestsIncoming.includes(requesterId) || requesterSocial.friendRequestsOutgoing.includes(receiverId);
+  if (!hasPending && !(receiverSocial.friends.includes(requesterId) && requesterSocial.friends.includes(receiverId))) {
+    return { ok: false, code: 'request_not_found', requesterName: getPlayerDisplayNameById(requesterId) };
+  }
+  finalizeMutualFriendship(receiver, requester);
+  CORE.savePlayer(receiver);
+  CORE.savePlayer(requester);
+  return { ok: true, code: 'accepted', requesterName: getPlayerDisplayNameById(requesterId) };
+}
+
+function cancelOutgoingFriendRequest(fromUserId, targetUserId) {
+  const fromId = normalizeFriendId(fromUserId);
+  const targetId = normalizeFriendId(targetUserId);
+  if (!fromId || !targetId) return { ok: false, code: 'invalid_id' };
+  const fromPlayer = CORE.loadPlayer(fromId);
+  const targetPlayer = CORE.loadPlayer(targetId);
+  if (!fromPlayer || !targetPlayer) return { ok: false, code: 'player_not_found' };
+  const fromSocial = ensurePlayerFriendState(fromPlayer);
+  const targetSocial = ensurePlayerFriendState(targetPlayer);
+  const had = fromSocial.friendRequestsOutgoing.includes(targetId) || targetSocial.friendRequestsIncoming.includes(fromId);
+  fromSocial.friendRequestsOutgoing = removeFriendIdFromList(fromSocial.friendRequestsOutgoing, targetId);
+  targetSocial.friendRequestsIncoming = removeFriendIdFromList(targetSocial.friendRequestsIncoming, fromId);
+  CORE.savePlayer(fromPlayer);
+  CORE.savePlayer(targetPlayer);
+  if (!had) return { ok: false, code: 'request_not_found', targetName: getPlayerDisplayNameById(targetId) };
+  return { ok: true, code: 'cancelled', targetName: getPlayerDisplayNameById(targetId) };
+}
+
+function ensureFriendBattleStatsMap(player) {
+  const social = ensurePlayerFriendState(player);
+  if (!social.friendBattleStats || typeof social.friendBattleStats !== 'object' || Array.isArray(social.friendBattleStats)) {
+    social.friendBattleStats = {};
+  }
+  return social.friendBattleStats;
+}
+
+function getFriendBattleRecord(player, friendId = '') {
+  const id = String(friendId || '').trim();
+  const map = ensureFriendBattleStatsMap(player);
+  if (!map[id] || typeof map[id] !== 'object') {
+    map[id] = { wins: 0, losses: 0, total: 0, lastResult: '', lastAt: 0 };
+  }
+  const row = map[id];
+  row.wins = Math.max(0, Math.floor(Number(row.wins || 0)));
+  row.losses = Math.max(0, Math.floor(Number(row.losses || 0)));
+  row.total = Math.max(0, Math.floor(Number(row.total || (row.wins + row.losses))));
+  row.lastResult = String(row.lastResult || '').trim();
+  row.lastAt = Math.max(0, Number(row.lastAt || 0));
+  return row;
+}
+
+function applyFriendBattleResult(player, friendId = '', didWin = false) {
+  if (!player || typeof player !== 'object') return null;
+  const id = String(friendId || '').trim();
+  if (!id) return null;
+  const record = getFriendBattleRecord(player, id);
+  if (didWin) record.wins += 1;
+  else record.losses += 1;
+  record.total = record.wins + record.losses;
+  record.lastResult = didWin ? 'win' : 'loss';
+  record.lastAt = Date.now();
+  return record;
+}
+
+function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
+  const petName = String(friendPet?.name || '夥伴').trim() || '夥伴';
+  const ownerName = String(friendPlayer?.name || '好友').trim() || '好友';
+  const sourceMoves = Array.isArray(friendPet?.moves) ? friendPet.moves : [];
+  const moves = sourceMoves
+    .slice(0, 6)
+    .map((m) => ({
+      id: String(m?.id || '').trim(),
+      name: String(m?.name || '普通攻擊').trim(),
+      element: String(m?.element || '普通').trim(),
+      tier: Math.max(1, Math.min(3, Number(m?.tier || 1))),
+      baseDamage: Math.max(1, Number(m?.baseDamage ?? m?.damage ?? 10) || 10),
+      damage: Math.max(1, Number(m?.baseDamage ?? m?.damage ?? 10) || 10),
+      effect: (m?.effect && typeof m.effect === 'object') ? { ...m.effect } : {},
+      desc: String(m?.desc || '').trim()
+    }))
+    .filter((m) => m.name);
+
+  const fallbackMove = {
+    id: 'friend_duel_strike',
+    name: '友誼試探',
+    element: '普通',
+    tier: 1,
+    baseDamage: Math.max(8, Number(friendPet?.attack || 12)),
+    damage: Math.max(8, Number(friendPet?.attack || 12)),
+    effect: {},
+    desc: '以穩定節奏測試彼此實力'
+  };
+
+  return {
+    id: `friend_duel_${String(friendPlayer?.id || 'unknown').trim()}`,
+    name: `${ownerName} 的 ${petName}`,
+    hp: Math.max(1, Number(friendPet?.hp || friendPet?.maxHp || 100)),
+    maxHp: Math.max(1, Number(friendPet?.maxHp || friendPet?.hp || 100)),
+    attack: Math.max(8, Number(friendPet?.attack || 20)),
+    defense: Math.max(1, Number(friendPet?.defense || 12)),
+    moves: moves.length > 0 ? moves : [fallbackMove],
+    reward: { gold: [0, 0] },
+    isMonster: false,
+    nonLethal: true
+  };
+}
+
+function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = false) {
+  const battleState = player?.battleState || {};
+  const duel = battleState?.friendDuel || {};
+  const rivalId = String(duel.friendId || '').trim();
+  const rivalName = String(duel.friendName || '好友').trim() || '好友';
+  const sourceChoice = String(battleState?.sourceChoice || '').trim();
+  const preBattleStory = String(battleState?.preBattleStory || player?.currentStory || '').trim();
+
+  const rivalPlayer = rivalId ? CORE.loadPlayer(rivalId) : null;
+  if (rivalPlayer) {
+    applyFriendBattleResult(rivalPlayer, String(player.id || '').trim(), !didWin);
+    CORE.savePlayer(rivalPlayer);
+  }
+  const myRecord = applyFriendBattleResult(player, rivalId, didWin);
+
+  if (pet && Number(pet.hp || 0) <= 0) {
+    pet.hp = 1;
+    pet.status = '正常';
+    pet.reviveAt = null;
+    pet.reviveTurnsRemaining = 0;
+    PET.savePet(pet);
+  }
+  if (combatant?.isHuman && Number(player?.stats?.生命 || 0) <= 0) {
+    player.stats.生命 = 1;
+  }
+
+  rememberPlayer(player, {
+    type: '好友友誼戰',
+    content: `與 ${rivalName} 進行友誼戰`,
+    outcome: didWin ? '勝利' : '落敗',
+    importance: 2,
+    tags: ['friend_duel', didWin ? 'win' : 'loss']
+  });
+
+  const summaryLine = `目前對 ${rivalName} 戰績：${myRecord?.wins || 0} 勝 / ${myRecord?.losses || 0} 敗`;
+  player.currentStory = composePostBattleStory(
+    player,
+    didWin
+      ? `🤝 你在與好友 **${rivalName}** 的友誼戰中勝出。`
+      : `🤝 你在與好友 **${rivalName}** 的友誼戰中落敗，但也看見下一步能精進的方向。`,
+    detailText,
+    `${summaryLine}\n你們相約下次再戰，這場切磋不影響生死與通緝。`,
+    sourceChoice,
+    preBattleStory
+  );
+  queuePendingStoryTrigger(player, {
+    name: '好友友誼戰結果',
+    choice: sourceChoice || `與${rivalName}友誼戰`,
+    desc: `${rivalName} 的切磋已告一段落`,
+    action: 'friend_duel_result',
+    outcome: `${didWin ? '勝利' : '落敗'}｜${summaryLine}`
+  });
+  player.battleState = null;
+  player.eventChoices = [];
+  CORE.savePlayer(player);
+  return {
+    rivalName,
+    record: myRecord,
+    summaryLine
+  };
+}
+
+async function startFriendDuel(interaction, user, friendId = '') {
+  const challenger = CORE.loadPlayer(user.id);
+  const targetId = normalizeFriendId(friendId);
+  if (!challenger || !targetId) {
+    await interaction.reply({ content: '❌ 無法發起友誼戰。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const social = ensurePlayerFriendState(challenger);
+  if (!social.friends.includes(targetId)) {
+    await showFriendsMenu(interaction, user, '你們尚未互加好友，無法發起友誼戰。');
+    return;
+  }
+  if (challenger.battleState?.enemy) {
+    await interaction.reply({ content: '⚠️ 你目前正在戰鬥中，請先結束再發起友誼戰。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const targetPlayer = CORE.loadPlayer(targetId);
+  if (!targetPlayer) {
+    await showFriendsMenu(interaction, user, '該好友資料不存在，無法發起對戰。');
+    return;
+  }
+  const targetSocial = ensurePlayerFriendState(targetPlayer);
+  if (!targetSocial.friends.includes(String(challenger.id || '').trim())) {
+    await showFriendsMenu(interaction, user, '對方尚未與你互加成功，請重新確認。');
+    return;
+  }
+
+  const myPetFallback = PET.loadPet(user.id);
+  const myPetResolved = resolvePlayerMainPet(challenger, { fallbackPet: myPetFallback });
+  const myPet = myPetResolved?.pet || myPetFallback;
+  if (myPetResolved?.changed) CORE.savePlayer(challenger);
+  const targetPetFallback = PET.loadPet(targetId);
+  const targetPetResolved = resolvePlayerMainPet(targetPlayer, { fallbackPet: targetPetFallback });
+  const targetPet = targetPetResolved?.pet || targetPetFallback;
+  if (targetPetResolved?.changed) CORE.savePlayer(targetPlayer);
+  if (!myPet || !myPet.hatched) {
+    await interaction.reply({ content: '⚠️ 你尚未完成寵物孵化，無法友誼戰。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (!targetPet || !targetPet.hatched) {
+    await showFriendsMenu(interaction, user, `${targetPlayer.name} 尚未準備好寵物，暫時不能友誼戰。`);
+    return;
+  }
+
+  const enemy = buildFriendDuelEnemyFromPlayer(targetPlayer, targetPet);
+  const fighterType = CORE.canPetFight(myPet) ? 'pet' : 'player';
+  const sourceChoice = `向好友 ${targetPlayer.name} 發起友誼戰`;
+  const preBattleStory = composeActionBridgeStory(challenger, sourceChoice, `你鎖定了 ${targetPlayer.name} 的夥伴 ${targetPet.name || '夥伴'}，準備切磋。`);
+  const estimate = estimateBattleOutcome(challenger, myPet, enemy, fighterType);
+  const fighterLabel = fighterType === 'pet'
+    ? `🐾 ${myPet.name}`
+    : `🧍 ${challenger.name}(ATK 10)`;
+
+  challenger.battleState = {
+    enemy,
+    fighter: fighterType,
+    mode: null,
+    fleeAttempts: 0,
+    energy: 2,
+    turn: 1,
+    startedAt: Date.now(),
+    sourceChoice,
+    preBattleStory,
+    humanState: null,
+    petState: null,
+    activePetId: String(myPet?.id || '').trim() || null,
+    petStates: {},
+    friendDuel: {
+      friendId: targetId,
+      friendName: String(targetPlayer.name || '').trim() || `玩家(${targetId})`,
+      friendPetName: String(targetPet?.name || '').trim() || '夥伴',
+      startedTurn: getPlayerStoryTurns(challenger)
+    }
+  };
+  challenger.currentStory = `你向好友 ${targetPlayer.name} 發起友誼戰，雙方約定點到為止。`;
+  rememberPlayer(challenger, {
+    type: '好友友誼戰',
+    content: `向 ${targetPlayer.name} 發起友誼戰`,
+    outcome: '等待開戰',
+    importance: 2,
+    tags: ['friend_duel', 'battle_start']
+  });
+  CORE.savePlayer(challenger);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🤝 好友友誼戰：${challenger.name} vs ${targetPlayer.name}`)
+    .setColor(0x8b5cf6)
+    .setDescription(
+      `**友誼戰即將開始！**\n\n` +
+      `對手：${enemy.name}\n` +
+      `❤️ 對手 HP：${enemy.hp}/${enemy.maxHp}\n` +
+      `⚔️ 對手攻擊：${enemy.attack}\n` +
+      `${fighterLabel} 出戰\n` +
+      `⚡ 戰鬥能量規則：每回合 +2，可結轉\n` +
+      `🤝 友誼戰規則：不影響生死、無通緝、無金幣掉落\n` +
+      `📊 勝率預估：${estimate.rank}（約 ${estimate.winRate}%）\n\n` +
+      `請選擇戰鬥模式：`
+    );
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('battle_mode_manual').setLabel('⚔️ 手動戰鬥').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 AI戰鬥').setStyle(ButtonStyle.Primary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
+function trimButtonLabel(text = '', maxLen = 18) {
+  const source = String(text || '').trim();
+  if (!source) return '未知';
+  return source.length > maxLen ? `${source.slice(0, Math.max(1, maxLen - 1))}…` : source;
+}
+
+async function showFriendAddModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('friend_add_modal')
+    .setTitle('🤝 新增好友');
+
+  const input = new TextInputBuilder()
+    .setCustomId('friend_target_id')
+    .setLabel('輸入對方 Discord User ID')
+    .setPlaceholder('例如：1051129116419702784')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(15)
+    .setMaxLength(22);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  await interaction.showModal(modal);
+}
+
+async function showFriendsMenu(interaction, user, notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  const social = ensurePlayerFriendState(player);
+  CORE.savePlayer(player);
+
+  const friends = social.friends
+    .map((id) => ({ id, name: getPlayerDisplayNameById(id) }))
+    .filter((row) => normalizeFriendId(row.id));
+  const incoming = social.friendRequestsIncoming
+    .map((id) => ({ id, name: getPlayerDisplayNameById(id) }))
+    .filter((row) => normalizeFriendId(row.id));
+  const outgoing = social.friendRequestsOutgoing
+    .map((id) => ({ id, name: getPlayerDisplayNameById(id) }))
+    .filter((row) => normalizeFriendId(row.id));
+
+  const formatList = (rows, emptyText, limit = 6) => {
+    if (!Array.isArray(rows) || rows.length === 0) return emptyText;
+    const head = rows.slice(0, limit).map((row) => `• ${row.name}`);
+    const extra = rows.length > limit ? `\n…還有 ${rows.length - limit} 位` : '';
+    return `${head.join('\n')}${extra}`;
+  };
+
+  const embed = new EmbedBuilder()
+    .setTitle('🤝 好友系統')
+    .setColor(0x4caf50)
+    .setDescription(`${notice ? `📢 ${notice}\n\n` : ''}使用 Discord User ID 發送好友申請；雙方互加（同意）後，才能查看對方資訊。`)
+    .addFields(
+      { name: '👥 我的好友', value: `${friends.length} 位`, inline: true },
+      { name: '📨 待我同意', value: `${incoming.length} 位`, inline: true },
+      { name: '📤 我已送出', value: `${outgoing.length} 位`, inline: true },
+      { name: '好友名單（顯示遊戲名）', value: formatList(friends, '目前沒有好友'), inline: false },
+      { name: '待同意申請', value: formatList(incoming, '目前沒有待同意申請'), inline: false },
+      { name: '已送出申請', value: formatList(outgoing, '目前沒有送出的申請'), inline: false }
+    );
+
+  const rows = [];
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('open_friend_add_modal').setLabel('➕ 新增好友').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('friend_refresh').setLabel('🔄 重新整理').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('main_menu').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary)
+    )
+  );
+
+  if (friends.length > 0 && rows.length < 5) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        friends.slice(0, 5).map((row) =>
+          new ButtonBuilder()
+            .setCustomId(`friend_view_${row.id}`)
+            .setLabel(`👤 ${trimButtonLabel(row.name, 14)}`)
+            .setStyle(ButtonStyle.Secondary)
+        )
+      )
+    );
+  }
+
+  if (incoming.length > 0 && rows.length < 5) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        incoming.slice(0, 5).map((row) =>
+          new ButtonBuilder()
+            .setCustomId(`friend_accept_${row.id}`)
+            .setLabel(`✅ 同意 ${trimButtonLabel(row.name, 10)}`)
+            .setStyle(ButtonStyle.Success)
+        )
+      )
+    );
+  }
+
+  if (outgoing.length > 0 && rows.length < 5) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        outgoing.slice(0, 5).map((row) =>
+          new ButtonBuilder()
+            .setCustomId(`friend_cancel_${row.id}`)
+            .setLabel(`❌ 撤回 ${trimButtonLabel(row.name, 10)}`)
+            .setStyle(ButtonStyle.Danger)
+        )
+      )
+    );
+  }
+
+  await interaction.update({ embeds: [embed], components: rows });
+}
+
+async function showFriendCharacter(interaction, user, friendId = '') {
+  const viewer = CORE.loadPlayer(user.id);
+  if (!viewer) {
+    await interaction.update({ content: '❌ 找不到角色！', embeds: [], components: [] }).catch(() => {});
+    return;
+  }
+  ensurePlayerFriendState(viewer);
+  const targetId = normalizeFriendId(friendId);
+  if (!targetId || !isMutualFriend(viewer, targetId)) {
+    await showFriendsMenu(interaction, user, '你們尚未互加好友，無法查看對方資料。');
+    return;
+  }
+
+  const target = CORE.loadPlayer(targetId);
+  if (!target) {
+    const social = ensurePlayerFriendState(viewer);
+    social.friends = removeFriendIdFromList(social.friends, targetId);
+    CORE.savePlayer(viewer);
+    await showFriendsMenu(interaction, user, '該玩家資料不存在，已自動從好友名單移除。');
+    return;
+  }
+  const targetPet = PET.loadPet(targetId);
+  const duelRecord = getFriendBattleRecord(viewer, targetId);
+  const hp = `${Number(target?.stats?.生命 || 0)}/${Number(target?.maxStats?.生命 || 100)}`;
+  const energy = `${Number(target?.stats?.能量 || 0)}/${Number(target?.maxStats?.能量 || 100)}`;
+  const petText = targetPet
+    ? `${targetPet.name || '未命名'}（${targetPet.type || '未知'}） HP ${targetPet.hp || 0}/${targetPet.maxHp || 100}`
+    : '尚無寵物資料';
+
+  const embed = new EmbedBuilder()
+    .setTitle(`👤 好友資訊：${target.name}`)
+    .setColor(0x3f51b5)
+    .setDescription('僅互加好友可見')
+    .addFields(
+      { name: '🏷️ 稱號', value: String(target.title || '冒險者'), inline: false },
+      { name: '📍 位置', value: String(target.location || '未知'), inline: true },
+      { name: '📊 等級', value: String(target.level || 1), inline: true },
+      { name: '💰 Rns', value: String(Math.max(0, Number(target?.stats?.財富 || 0))), inline: true },
+      { name: '❤️ 生命', value: hp, inline: true },
+      { name: '⚡ 能量', value: energy, inline: true },
+      { name: '📊 你對TA戰績', value: `${duelRecord.wins} 勝 / ${duelRecord.losses} 敗`, inline: true },
+      { name: '🐾 夥伴', value: petText, inline: false }
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`friend_duel_${targetId}`).setLabel('⚔️ 發起友誼戰').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 返回好友').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel('🔙 返回主選單').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
 async function rejectIfNotThreadOwner(interaction, userId) {
   if (!interaction.channel?.isThread?.()) return false;
   const ownerId = getThreadOwnerUserId(interaction.channelId);
@@ -580,6 +1133,8 @@ const MAINLINE_CUE_PATTERN = /(可疑|供應隊|帳本|來源|流向|封存艙|�
 const LOCATION_ENTRY_GATE_ENABLED = String(process.env.LOCATION_ENTRY_GATE_ENABLED || '1') !== '0';
 const LOCATION_ENTRY_MIN_WINRATE = Math.max(1, Math.min(99, Number(process.env.LOCATION_ENTRY_MIN_WINRATE || 50)));
 const AGGRESSIVE_CHOICE_TARGET_RATE = Math.max(0, Math.min(1, Number(process.env.AGGRESSIVE_CHOICE_TARGET_RATE || 0.9)));
+const BATTLE_CADENCE_TURNS = Math.max(3, Math.min(10, Number(process.env.BATTLE_CADENCE_TURNS || 5)));
+const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 3)));
 const SHOP_HEAL_CRYSTAL_COST = 200;
 const SHOP_HEAL_CRYSTAL_RECOVER = Math.max(10, Number(process.env.SHOP_HEAL_CRYSTAL_RECOVER || 30));
 const SHOP_ENERGY_CRYSTAL_COST = 2000;
@@ -904,11 +1459,11 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
   const map = {
     'zh-TW': {
       inventory: '🎒 背包',
-      moves: '📜 招式',
+      moves: '🐾 寵物',
       character: '👤 個人',
-      profile: '💳 檔案',
+      settings: '⚙️ 設定',
+      friends: '🤝 好友',
       codex: '📚 圖鑑',
-      memoryCheck: '🧠 記憶檢查',
       gacha: '🎰 抽獎',
       map: '🗺️ 地圖',
       quickShopReady: '🏪 鑑價站',
@@ -916,11 +1471,11 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
     },
     'zh-CN': {
       inventory: '🎒 背包',
-      moves: '📜 招式',
+      moves: '🐾 宠物',
       character: '👤 个人',
-      profile: '💳 档案',
+      settings: '⚙️ 设置',
+      friends: '🤝 好友',
       codex: '📚 图鉴',
-      memoryCheck: '🧠 记忆检查',
       gacha: '🎰 抽奖',
       map: '🗺️ 地图',
       quickShopReady: '🏪 鉴价站',
@@ -928,11 +1483,11 @@ function getUtilityButtonLabels(lang = 'zh-TW') {
     },
     en: {
       inventory: '🎒 Bag',
-      moves: '📜 Moves',
+      moves: '🐾 Pet',
       character: '👤 Character',
-      profile: '💳 Profile',
+      settings: '⚙️ Settings',
+      friends: '🤝 Friends',
       codex: '📚 Codex',
-      memoryCheck: '🧠 Memory',
       gacha: '🎰 Draw',
       map: '🗺️ Map',
       quickShopReady: '🏪 Appraisal',
@@ -950,9 +1505,9 @@ function appendMainMenuUtilityButtons(buttons = [], player = null) {
     new ButtonBuilder().setCustomId('show_inventory').setLabel(labels.inventory).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('show_moves').setLabel(labels.moves).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_character').setLabel(labels.character).setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('open_profile').setLabel(labels.profile).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_settings').setLabel(labels.settings).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_friends').setLabel(labels.friends).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('show_codex').setLabel(labels.codex).setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('show_memory_audit').setLabel(labels.memoryCheck).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_gacha').setLabel(labels.gacha).setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_map').setLabel(labels.map).setStyle(ButtonStyle.Secondary),
     buildQuickShopButton(player)
@@ -1935,9 +2490,51 @@ function chooseMentorTeachTemplatesFromSeed(seed = '') {
   return picked.slice(0, 3);
 }
 
+function normalizeNpcAlignTag(npc = null) {
+  const alignRaw = String(npc?.align || '').trim().toLowerCase();
+  if (alignRaw === 'evil' || alignRaw === 'villain' || alignRaw === 'bad') return 'evil';
+  if (alignRaw === 'good' || alignRaw === 'hero') return 'good';
+  if (alignRaw === 'neutral') return 'neutral';
+  const identity = [npc?.sect || '', npc?.title || '', npc?.name || ''].join(' ');
+  if (/(digital|暗潮|黑市|滲透|叛徒|賊|匪|殺手|刺客|掠奪|敵對)/iu.test(identity)) return 'evil';
+  if (/(導師|守護|醫生|工程|巡察|主導|皇室|公會|守備|聯盟)/u.test(identity)) return 'good';
+  return 'neutral';
+}
+
+function isNpcHostileByProfile(npc = null) {
+  if (!npc || typeof npc !== 'object') return false;
+  if (normalizeNpcAlignTag(npc) === 'evil') return true;
+  const identity = [npc?.sect || '', npc?.title || '', npc?.name || ''].join(' ');
+  return /(digital|暗潮|黑市|滲透|叛徒|賊|匪|殺手|刺客|掠奪)/iu.test(identity);
+}
+
+function getPlayerWantedPressure(player = null) {
+  if (!player || typeof player !== 'object') return 0;
+  const localWanted = Math.max(0, Number(player?.wanted || 0));
+  const playerId = String(player?.id || '').trim();
+  let worldWanted = 0;
+  if (playerId && CORE && typeof CORE.getPlayerWantedLevel === 'function') {
+    worldWanted = Math.max(0, Number(CORE.getPlayerWantedLevel(playerId) || 0));
+  }
+  return Math.max(localWanted, worldWanted);
+}
+
+function getBattleCadenceInfo(player = null) {
+  const turns = getPlayerStoryTurns(player);
+  const span = BATTLE_CADENCE_TURNS;
+  const step = (turns % span) + 1;
+  return {
+    turns,
+    span,
+    step,
+    nearConflict: step >= Math.max(2, span - 1),
+    dueConflict: step === span
+  };
+}
+
 function isEligibleNearbyMentorNpc(npc = null) {
   if (!npc || typeof npc !== 'object') return false;
-  const align = String(npc.align || '').trim().toLowerCase();
+  const align = normalizeNpcAlignTag(npc);
   if (align === 'evil') return false;
   const sect = String(npc.sect || npc.title || '').trim();
   if (MENTOR_BLOCKED_SECT_PATTERN.test(sect)) return false;
@@ -2101,9 +2698,7 @@ function buildStoryBattleEnemyFromNpc(npc = null, player = null) {
         maxHp: Math.max(24, Number(npc.petTemplate.maxHp || npc.petTemplate.hp || 58))
       }
     : false;
-  const align = String(npc?.align || 'neutral').trim().toLowerCase();
-  const sectText = [npc?.sect || '', npc?.title || '', npc?.name || ''].join(' ');
-  const villain = align === 'evil' || /(digital|暗潮|黑市|滲透|叛徒|賊|匪|殺手|刺客|掠奪)/iu.test(sectText);
+  const villain = isNpcHostileByProfile(npc);
   const rewardMin = Math.max(36, 22 + difficulty * 18 + Math.floor((curve.attack + attack) * 1.4));
   const rewardMax = rewardMin + 80 + difficulty * 8;
   return {
@@ -2145,7 +2740,7 @@ function getNearbyStoryBattleNpcCandidates(player) {
 
 function scoreStoryBattleNpcCandidate(npc = null) {
   if (!npc || typeof npc !== 'object') return -999;
-  const align = String(npc.align || '').trim().toLowerCase();
+  const align = normalizeNpcAlignTag(npc);
   const battle = Number(npc?.stats?.戰力 || 0);
   const sect = [npc.sect || '', npc.title || '', npc.name || ''].join(' ');
   let score = battle;
@@ -2221,12 +2816,17 @@ function scoreStoryBindingForNpc(npc = null, storyText = '', speakerHints = new 
 
 function resolveLocationStoryBattleTarget(player, storyText = '', options = {}) {
   const allowLooseSelection = options?.allowLooseSelection === true;
+  const wantedLevel = Math.max(0, Number(options?.wantedLevel || 0));
+  const preferVillain = Boolean(options?.preferVillain) || wantedLevel >= WANTED_AMBUSH_MIN_LEVEL;
   const speakerHints = collectRecentStorySpeakerHints(player, storyText);
-  const candidates = getNearbyStoryBattleNpcCandidates(player)
+  const baseCandidates = getNearbyStoryBattleNpcCandidates(player)
     .map((npc) => {
       const baseScore = scoreStoryBattleNpcCandidate(npc);
       const bindScore = scoreStoryBindingForNpc(npc, storyText, speakerHints);
-      return { npc, baseScore, bindScore, total: baseScore + bindScore };
+      const hostileBoost = isNpcHostileByProfile(npc) && wantedLevel > 0
+        ? Math.min(120, wantedLevel * 18)
+        : 0;
+      return { npc, baseScore, bindScore, total: baseScore + bindScore + hostileBoost };
     })
     .sort((a, b) => {
       const bindGap = Number(b.bindScore || 0) - Number(a.bindScore || 0);
@@ -2235,12 +2835,21 @@ function resolveLocationStoryBattleTarget(player, storyText = '', options = {}) 
       if (totalGap !== 0) return totalGap;
       return String(a?.npc?.id || '').localeCompare(String(b?.npc?.id || ''));
     });
+  let candidates = baseCandidates;
+  if (preferVillain) {
+    const villains = candidates.filter((row) => isNpcHostileByProfile(row?.npc));
+    if (villains.length > 0) {
+      candidates = villains;
+    } else if (wantedLevel >= WANTED_AMBUSH_MIN_LEVEL) {
+      return null;
+    }
+  }
   const pickedRow = candidates[0];
   if (!pickedRow) return null;
 
   const hasBoundCandidate = candidates.some((row) => Number(row.bindScore || 0) > 0);
   const threatScore = computeStoryThreatScore(storyText);
-  const allowThreatDrivenSelection = threatScore >= Math.max(18, STORY_THREAT_SCORE_THRESHOLD - 8);
+  const allowThreatDrivenSelection = threatScore >= Math.max(18, STORY_THREAT_SCORE_THRESHOLD - 8) || wantedLevel >= WANTED_AMBUSH_MIN_LEVEL;
   if (!hasBoundCandidate && !allowLooseSelection && !allowThreatDrivenSelection) {
     return null;
   }
@@ -2260,16 +2869,31 @@ function resolveLocationStoryBattleTarget(player, storyText = '', options = {}) 
   return null;
 }
 
-function createGuaranteedLocationStoryBattleChoice(player, storyText = '') {
-  const target = resolveLocationStoryBattleTarget(player, storyText, { allowLooseSelection: false });
+function createGuaranteedLocationStoryBattleChoice(player, storyText = '', options = {}) {
+  const wantedLevel = Math.max(0, Number(options?.wantedLevel || getPlayerWantedPressure(player) || 0));
+  const target = resolveLocationStoryBattleTarget(player, storyText, {
+    allowLooseSelection: Boolean(options?.allowLooseSelection),
+    preferVillain: Boolean(options?.preferVillain),
+    wantedLevel
+  });
   if (!target?.enemy) return null;
   const location = String(player?.location || '附近據點').trim();
+  const displayNpcName = /匿名滲透者/u.test(String(target.npcName || ''))
+    ? '可疑尾隨者'
+    : String(target.npcName || '可疑敵手');
+  const reason = String(options?.reason || 'story').trim();
+  const choiceText = reason === 'wanted'
+    ? `察覺${location}周邊有人盯上你的動向，鎖定${displayNpcName}先發制人（會進入戰鬥）`
+    : `察覺${location}氣氛不對勁，鎖定${displayNpcName}動向先發制人（會進入戰鬥）`;
+  const descText = reason === 'wanted'
+    ? `通緝熱度吸引敵對勢力主動接近：${displayNpcName}`
+    : `地區篇章關鍵戰：對手來自${location}在地勢力`;
   return {
     action: 'location_story_battle',
     tag: '[⚔️會戰鬥]',
-    name: `攔截 ${target.npcName}`,
-    choice: `察覺${location}氣氛不對勁，鎖定${target.npcName}動向先發制人（會進入戰鬥）`,
-    desc: `地區篇章關鍵戰：對手來自${location}在地勢力`,
+    name: `攔截 ${displayNpcName}`,
+    choice: choiceText,
+    desc: descText,
     npcId: target.npcId,
     npcName: target.npcName,
     enemy: target.enemy,
@@ -2284,13 +2908,26 @@ function ensureLocationStoryBattleChoiceAvailability(player, choices = []) {
 
   const state = syncLocationArcLocation(player);
   const turnsInLocation = Number(state?.turnsInLocation || 0);
-  if (turnsInLocation < LOCATION_STORY_BATTLE_MIN_TURNS) return list;
+  const cadence = getBattleCadenceInfo(player);
+  const wantedPressure = getPlayerWantedPressure(player);
+  const wantedDriven = wantedPressure >= WANTED_AMBUSH_MIN_LEVEL;
+  if (!wantedDriven && turnsInLocation < LOCATION_STORY_BATTLE_MIN_TURNS) return list;
   if (list.some((choice) => String(choice?.action || '').trim() === 'location_story_battle')) return list;
 
   const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
   const threatScore = computeStoryThreatScore(storyText);
-  if (threatScore < Math.max(14, STORY_THREAT_SCORE_THRESHOLD - 12)) return list;
-  const injected = createGuaranteedLocationStoryBattleChoice(player, storyText);
+  if (!wantedDriven && threatScore < Math.max(14, STORY_THREAT_SCORE_THRESHOLD - 12)) return list;
+  if (wantedDriven) {
+    const allowWantedImmediateBattle = cadence.dueConflict || threatScore >= Math.max(20, STORY_THREAT_SCORE_THRESHOLD - 6);
+    // 高通緝不代表每回合都立刻開戰：僅在節奏點/高威脅時才注入即時戰鬥
+    if (!allowWantedImmediateBattle) return list;
+  }
+  const injected = createGuaranteedLocationStoryBattleChoice(player, storyText, {
+    allowLooseSelection: wantedDriven,
+    preferVillain: wantedDriven,
+    wantedLevel: wantedPressure,
+    reason: wantedDriven ? 'wanted' : 'story'
+  });
   if (!injected) return list;
 
   const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'custom_input']);
@@ -2323,6 +2960,62 @@ function createGuaranteedAggressiveChoice(player) {
     choice: `沿著${location}外圍強行追擊可疑目標，逼對方現身`,
     desc: '高風險突進，可能引發埋伏或連續衝突'
   };
+}
+
+function createCadenceConflictPrepChoice(player) {
+  const location = String(player?.location || '附近區域').trim() || '附近區域';
+  return {
+    action: 'conflict',
+    tag: '[⚔️會戰鬥]',
+    name: '先行佈防追蹤',
+    choice: `在${location}提前布置觀測點，追蹤可疑勢力下一步動向`,
+    desc: '衝突節奏升溫中：先備戰，必要時再立刻交戰'
+  };
+}
+
+function ensureBattleCadenceChoiceAvailability(player, choices = []) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
+  if (!player || list.length === 0) return list;
+  if (list.some(isAggressiveChoice)) return list;
+
+  const cadence = getBattleCadenceInfo(player);
+  if (!cadence.nearConflict) return list;
+
+  const wantedPressure = getPlayerWantedPressure(player);
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  let injected = null;
+  if (cadence.dueConflict) {
+    injected = createGuaranteedLocationStoryBattleChoice(player, storyText, {
+      allowLooseSelection: true,
+      preferVillain: wantedPressure >= WANTED_AMBUSH_MIN_LEVEL,
+      wantedLevel: wantedPressure,
+      reason: 'cadence'
+    });
+    if (!injected) {
+      const location = String(player?.location || '附近區域').trim() || '附近區域';
+      injected = {
+        action: 'fight',
+        tag: '[⚔️會戰鬥]',
+        name: '主動迎擊可疑勢力',
+        choice: `在${location}主動攔截尾隨你的可疑勢力（會進入戰鬥）`,
+        desc: `戰鬥節奏點 ${cadence.step}/${cadence.span}：將衝突拉到正面對決`
+      };
+    }
+  } else {
+    injected = createCadenceConflictPrepChoice(player);
+  }
+  if (!injected) return list;
+
+  const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'custom_input', 'mentor_spar']);
+  let replaceIdx = list.length - 1;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (!protectedActions.has(String(list[i]?.action || ''))) {
+      replaceIdx = i;
+      break;
+    }
+  }
+  list[replaceIdx] = injected;
+  return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
 
 function ensureAggressiveChoiceAvailability(player, choices = []) {
@@ -2502,6 +3195,7 @@ function applyChoicePolicy(player, choices = []) {
   list = ensureWishPoolChoiceAvailability(player, list);
   list = ensureMarketChoiceAvailability(player, list);
   list = ensureLocationStoryBattleChoiceAvailability(player, list);
+  list = ensureBattleCadenceChoiceAvailability(player, list);
   list = ensureAggressiveChoiceAvailability(player, list);
   list = ensureEarlyGameIncomeChoice(player, list);
   list = ensureSingleMainlineGuideChoice(player, list);
@@ -4362,15 +5056,98 @@ function buildHumanCombatant(player) {
   };
 }
 
+function resolvePlayerMainPet(player, options = {}) {
+  if (!player || typeof player !== 'object') return { pet: null, changed: false };
+  const ownedPets = getPlayerOwnedPets(player.id);
+  if (ownedPets.length <= 0) return { pet: null, changed: false };
+
+  const fallbackPet = options?.fallbackPet && typeof options.fallbackPet === 'object'
+    ? options.fallbackPet
+    : null;
+  const desiredIds = [
+    String(options?.preferBattle ? (player?.battleState?.activePetId || '') : '').trim(),
+    String(player?.activePetId || '').trim(),
+    String(fallbackPet?.id || '').trim()
+  ].filter(Boolean);
+
+  let selected = null;
+  for (const id of desiredIds) {
+    const found = ownedPets.find((p) => String(p?.id || '') === id);
+    if (found) {
+      selected = found;
+      break;
+    }
+  }
+  if (!selected) selected = ownedPets[0];
+
+  let changed = false;
+  if (String(player?.activePetId || '').trim() !== String(selected?.id || '').trim()) {
+    player.activePetId = selected.id;
+    changed = true;
+  }
+  if (options?.preferBattle && player?.battleState && String(player.battleState.activePetId || '').trim() !== String(selected?.id || '').trim()) {
+    player.battleState.activePetId = selected.id;
+    changed = true;
+  }
+  return { pet: selected, changed };
+}
+
+function getBattlePetStateSnapshot(player, petId = '') {
+  const battle = player?.battleState || {};
+  const id = String(petId || '').trim();
+  const map = (battle.petStates && typeof battle.petStates === 'object' && !Array.isArray(battle.petStates))
+    ? battle.petStates
+    : {};
+  if (id && map[id] && typeof map[id] === 'object') return map[id];
+  return (battle.petState && typeof battle.petState === 'object') ? battle.petState : {};
+}
+
+function setBattlePetStateSnapshot(player, petId = '', snapshot = {}) {
+  if (!player?.battleState) return;
+  if (!player.battleState.petStates || typeof player.battleState.petStates !== 'object' || Array.isArray(player.battleState.petStates)) {
+    player.battleState.petStates = {};
+  }
+  const id = String(petId || '').trim();
+  const safeSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  if (id) {
+    player.battleState.petStates[id] = safeSnapshot;
+    player.battleState.activePetId = id;
+  }
+  player.battleState.petState = safeSnapshot;
+}
+
+const PET_SWAP_LOCK_KEYS = Object.freeze([
+  'burn', 'poison', 'trap', 'bleed', 'dot',
+  'stun', 'freeze', 'bind', 'slow',
+  'fear', 'confuse', 'blind', 'missNext'
+]);
+
+function hasPetSwapBlockingStatus(status = {}) {
+  if (!status || typeof status !== 'object') return false;
+  return PET_SWAP_LOCK_KEYS.some((key) => Number(status?.[key] || 0) > 0);
+}
+
+function getBattleSwitchCandidates(player, currentPetId = '') {
+  const owned = getPlayerOwnedPets(player?.id);
+  const currentId = String(currentPetId || '').trim();
+  return owned.filter((pet) => {
+    const id = String(pet?.id || '').trim();
+    if (!id || id === currentId) return false;
+    return CORE.canPetFight(pet);
+  });
+}
+
 function getActiveCombatant(player, pet) {
   const fighterType = getBattleFighterType(player, pet);
   if (fighterType === 'player') return buildHumanCombatant(player);
-  const saved = player?.battleState?.petState || {};
+  const preferred = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet: pet }).pet || pet;
+  if (!preferred) return null;
+  const saved = getBattlePetStateSnapshot(player, preferred.id);
   const hpFromState = Number(saved?.hp);
-  const hpFromPet = Number(pet?.hp || 0);
+  const hpFromPet = Number(preferred?.hp || 0);
   const resolvedHp = Number.isFinite(hpFromState) ? hpFromState : hpFromPet;
   return {
-    ...pet,
+    ...preferred,
     hp: Math.max(0, resolvedHp),
     isHuman: false,
     status: cloneStatusState(saved?.status)
@@ -4379,7 +5156,128 @@ function getActiveCombatant(player, pet) {
 
 function getPlayerOwnedPets(ownerId) {
   const allPets = PET.loadAllPets();
-  return Object.values(allPets).filter((p) => p?.ownerId === ownerId);
+  return Object.values(allPets)
+    .filter((p) => p?.ownerId === ownerId)
+    .sort((a, b) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0));
+}
+
+function getPetCapacityForUser(userId = '') {
+  const walletData = WALLET.getWalletData(String(userId || '').trim()) || {};
+  const cardFMV = Math.max(0, Number(walletData.cardFMV || 0));
+  const cardCount = Math.max(0, Number(walletData.cardCount || 0));
+  const maxPets = Math.max(1, Number(WALLET.getMaxPetsByFMV(cardFMV) || 1));
+  const ownedPets = getPlayerOwnedPets(String(userId || '').trim());
+  const currentPets = ownedPets.length;
+  const availableSlots = Math.max(0, maxPets - currentPets);
+  return {
+    cardFMV,
+    cardCount,
+    maxPets,
+    currentPets,
+    availableSlots
+  };
+}
+
+function createAdditionalPetForPlayer(userId = '', element = '水', petName = '') {
+  const player = CORE.loadPlayer(String(userId || '').trim());
+  if (!player) return { success: false, reason: '找不到角色。' };
+
+  const capacity = getPetCapacityForUser(userId);
+  if (capacity.availableSlots <= 0) {
+    return {
+      success: false,
+      reason: `寵物欄位已滿（${capacity.currentPets}/${capacity.maxPets}）。請先提升卡片 FMV。`
+    };
+  }
+
+  const normalizedElement = normalizePetElementCode(element || '水');
+  const finalPetName = normalizePetName(petName || '', normalizedElement);
+  const selectedMove = rollStarterMoveForElement(normalizedElement);
+  if (!selectedMove) {
+    return { success: false, reason: '目前找不到可用招式池，請稍後再試。' };
+  }
+
+  const pet = PET.createPetEgg(userId, normalizedElement);
+  pet.hatched = true;
+  pet.status = '正常';
+  pet.waitingForName = false;
+  pet.name = finalPetName;
+  pet.reviveAt = null;
+  pet.reviveTurnsRemaining = 0;
+  pet.moves = [
+    { ...PET.INITIAL_MOVES[0], currentProficiency: 0 },
+    { ...PET.INITIAL_MOVES[1], currentProficiency: 0 },
+    {
+      id: selectedMove.id,
+      name: selectedMove.name,
+      element: selectedMove.element,
+      tier: selectedMove.tier,
+      type: 'elemental',
+      baseDamage: selectedMove.baseDamage,
+      effect: selectedMove.effect,
+      desc: selectedMove.desc,
+      currentProficiency: 0
+    }
+  ];
+  PET.updateAppearance(pet);
+  PET.savePet(pet);
+
+  player.petElement = player.petElement || normalizedElement;
+  CORE.savePlayer(player);
+
+  const latest = getPetCapacityForUser(userId);
+  return {
+    success: true,
+    pet,
+    selectedMove,
+    capacity: latest
+  };
+}
+
+async function showClaimPetElementPanel(interaction, user, notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', embeds: [], components: [] }).catch(() => {});
+    return;
+  }
+
+  const capacity = getPetCapacityForUser(user.id);
+  const embed = new EmbedBuilder()
+    .setTitle('🐾 領取新寵物')
+    .setColor(0x22c55e)
+    .setDescription(
+      `${notice ? `${notice}\n\n` : ''}` +
+      `請先選擇要領取的寵物屬性。\n` +
+      `目前欄位：${capacity.currentPets}/${capacity.maxPets}（可再領取 ${capacity.availableSlots} 隻）\n` +
+      `卡片 FMV：$${capacity.cardFMV.toFixed(2)} USD（${capacity.cardCount} 張）`
+    );
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('claim_new_pet_element_water').setLabel('💧 水屬性').setStyle(ButtonStyle.Primary).setDisabled(capacity.availableSlots <= 0),
+    new ButtonBuilder().setCustomId('claim_new_pet_element_fire').setLabel('🔥 火屬性').setStyle(ButtonStyle.Danger).setDisabled(capacity.availableSlots <= 0),
+    new ButtonBuilder().setCustomId('claim_new_pet_element_grass').setLabel('🌿 草屬性').setStyle(ButtonStyle.Success).setDisabled(capacity.availableSlots <= 0)
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], content: null, components: [row1, row2] });
+}
+
+async function showClaimPetNameModal(interaction, element = '水') {
+  const modal = new ModalBuilder()
+    .setCustomId('claim_new_pet_name_modal')
+    .setTitle(`🐾 新寵物命名（${getPetElementDisplayName(element)}）`);
+
+  const input = new TextInputBuilder()
+    .setCustomId('claim_pet_name')
+    .setLabel('寵物名字（可留空）')
+    .setPlaceholder('例如：潮光、烈芯、森紋')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false)
+    .setMaxLength(20);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  await interaction.showModal(modal);
 }
 
 function getPetAttackMoves(pet) {
@@ -4638,15 +5536,25 @@ function persistCombatantState(player, pet, combatant) {
     }
     return;
   }
-  if (pet) {
-    pet.hp = Math.max(0, combatant.hp);
-    if (player.battleState) {
-      player.battleState.petState = {
-        hp: pet.hp,
-        status: statusSnapshot
-      };
-    }
+  const combatantPetId = String(combatant?.id || '').trim();
+  let targetPet = null;
+  if (combatantPetId && typeof PET.getPetById === 'function') {
+    const found = PET.getPetById(combatantPetId);
+    if (found && String(found.ownerId || '') === String(player.id || '')) targetPet = found;
   }
+  if (!targetPet && pet && String(pet?.ownerId || '') === String(player.id || '')) {
+    targetPet = pet;
+  }
+  if (!targetPet) return;
+
+  targetPet.hp = Math.max(0, combatant.hp);
+  if (player.battleState) {
+    setBattlePetStateSnapshot(player, targetPet.id, {
+      hp: targetPet.hp,
+      status: statusSnapshot
+    });
+  }
+  return targetPet;
 }
 
 function cloneCombatantForEstimate(combatant) {
@@ -6817,7 +7725,9 @@ async function handleStart(interaction, user) {
   
   // 檢查是否有存檔
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
 
   // Bug Fix: 新 thread 啟動時清除舊的 activeMessageId，避免新按鈕被判斷為過期
   if (player) {
@@ -6922,7 +7832,9 @@ async function handleStart(interaction, user) {
 // ============== 主選單 ==============
 async function handlePlay(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   
   if (!player) {
     await interaction.reply({ content: '❌ 請先 /start 創建角色！', ephemeral: true });
@@ -7033,7 +7945,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
     // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
-      customId === 'open_profile';
+      customId === 'open_profile' ||
+      customId === 'open_friend_add_modal' ||
+      customId === 'sync_wallet_now' ||
+      customId.startsWith('claim_new_pet_element_');
     if (!isMapFlowButton && !isModalLauncherButton && !isShopFlowButton) {
       await lockPressedButtonImmediately(interaction);
     }
@@ -7041,6 +7956,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   // ===== 招式配置下拉 =====
   if (interaction.isStringSelectMenu()) {
+    if (customId === 'battle_switch_select') {
+      const targetPetId = String(interaction.values?.[0] || '').trim();
+      await handleBattleSwitchSelect(interaction, user, targetPetId);
+      return;
+    }
+
     if (customId === 'map_region_move_select') {
       const player = CORE.loadPlayer(user.id);
       const uiLang = getPlayerUILang(player);
@@ -7404,10 +8325,95 @@ CLIENT.on('interactionCreate', async (interaction) => {
     await handleWalletSyncNow(interaction, user);
     return;
   }
+
+  if (customId === 'claim_new_pet_start') {
+    await showClaimPetElementPanel(interaction, user);
+    return;
+  }
+
+  if (customId.startsWith('claim_new_pet_element_')) {
+    const key = String(customId || '').replace('claim_new_pet_element_', '').trim();
+    const element = key === 'fire' ? '火' : key === 'grass' ? '草' : '水';
+    const capacity = getPetCapacityForUser(user.id);
+    if (capacity.availableSlots <= 0) {
+      await interaction.reply({
+        content: `⚠️ 目前寵物欄位已滿（${capacity.currentPets}/${capacity.maxPets}）。`,
+        ephemeral: true
+      }).catch(() => {});
+      return;
+    }
+    setPlayerTempData(user.id, 'claimPetElement', element);
+    await showClaimPetNameModal(interaction, element);
+    return;
+  }
   
   // ===== 錢包綁定 Modal =====
   if (customId === 'wallet_bind_modal') {
     await handleWalletBind(interaction, user);
+    return;
+  }
+
+  if (customId === 'claim_new_pet_name_modal') {
+    const element = normalizePetElementCode(getPlayerTempData(user.id, 'claimPetElement') || '水');
+    const petName = normalizePetName(interaction.fields.getTextInputValue('claim_pet_name') || '', element);
+    const outcome = createAdditionalPetForPlayer(user.id, element, petName);
+    if (!outcome?.success) {
+      await interaction.reply({ content: `❌ ${outcome?.reason || '領取失敗。'}`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    setPlayerTempData(user.id, 'claimPetElement', null);
+    const pet = outcome.pet;
+    const move = outcome.selectedMove;
+    const cap = outcome.capacity || getPetCapacityForUser(user.id);
+    const msg =
+      `✅ 已領取新寵物：**${pet.name}**（${getPetElementDisplayName(pet.type)}）\n` +
+      `✨ 初始天賦：${move?.name || '未知'}\n` +
+      `📦 目前寵物額度：${cap.currentPets}/${cap.maxPets}`;
+    await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  if (customId === 'friend_add_modal') {
+    const targetIdRaw = interaction.fields.getTextInputValue('friend_target_id');
+    const targetId = normalizeFriendId(targetIdRaw);
+    if (!targetId) {
+      await interaction.reply({ content: '❌ ID 格式錯誤，請輸入有效的 Discord User ID。', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const result = createFriendRequest(user.id, targetId);
+    let notice = '處理失敗。';
+    if (result.ok && result.code === 'requested') {
+      notice = `已送出好友申請給 ${result.targetName}。`;
+    } else if (result.ok && result.code === 'auto_accepted') {
+      notice = `${result.targetName} 也曾送出申請，已自動互加成功。`;
+    } else if (result.code === 'already_friends') {
+      notice = `你和 ${result.targetName} 已是好友。`;
+    } else if (result.code === 'already_requested') {
+      notice = `你已經送出申請給 ${result.targetName}，等待對方同意。`;
+    } else if (result.code === 'target_not_found') {
+      notice = '找不到該玩家（對方可能尚未建立角色）。';
+    } else if (result.code === 'self') {
+      notice = '不能把自己加為好友。';
+    } else if (result.code === 'invalid_id') {
+      notice = 'ID 格式不正確。';
+    }
+
+    const base = CORE.loadPlayer(user.id);
+    if (!base) {
+      await interaction.reply({ content: `⚠️ ${notice}`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    const social = ensurePlayerFriendState(base);
+    CORE.savePlayer(base);
+    const friends = social.friends
+      .slice(0, 6)
+      .map((id) => `• ${getPlayerDisplayNameById(id)}`)
+      .join('\n') || '目前沒有好友';
+    await interaction.reply({
+      content: `✅ ${notice}\n\n目前好友：\n${friends}\n\n回到面板請按「🤝 好友」。`,
+      ephemeral: true
+    }).catch(() => {});
     return;
   }
 
@@ -7582,6 +8588,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     if (player?.activeMessageId) {
       await disableMessageComponents(interaction.channel, player.activeMessageId);
     }
+    await showSettingsHub(interaction, user);
+    return;
+  }
+
+  if (customId === 'open_settings_system') {
     await showSettings(interaction, user);
     return;
   }
@@ -7632,22 +8643,58 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   // ===== Bug 2 Fix: Settings back button - restore game message =====
   if (customId === 'settings_back') {
-    const player = CORE.loadPlayer(user.id);
-    const pet = PET.loadPet(user.id);
-    const uiLang = getPlayerUILang(player);
-    const tx = getSettingsText(uiLang);
-    if (player && pet && interaction.channel?.isThread()) {
-      // Restore the game message by calling sendMainMenuToThread
-      await sendMainMenuToThread(interaction.channel, player, pet, interaction);
-    } else {
-      await interaction.update({ content: tx.btnBackAdventure, components: [] });
-    }
+    await showSettingsHub(interaction, user);
     return;
   }
   
   // ===== 角色資訊 =====
   if (customId === 'open_character') {
     await showCharacter(interaction, user);
+    return;
+  }
+
+  if (customId === 'open_friends') {
+    await showFriendsMenu(interaction, user);
+    return;
+  }
+
+  if (customId === 'friend_refresh') {
+    await showFriendsMenu(interaction, user);
+    return;
+  }
+
+  if (customId === 'open_friend_add_modal') {
+    await showFriendAddModal(interaction);
+    return;
+  }
+
+  if (customId.startsWith('friend_accept_')) {
+    const requesterId = customId.replace('friend_accept_', '').trim();
+    const result = acceptFriendRequest(user.id, requesterId);
+    const name = getPlayerDisplayNameById(requesterId);
+    const notice = result.ok ? `你已與 ${name} 成為好友。` : `無法同意申請：${name}`;
+    await showFriendsMenu(interaction, user, notice);
+    return;
+  }
+
+  if (customId.startsWith('friend_cancel_')) {
+    const targetId = customId.replace('friend_cancel_', '').trim();
+    const result = cancelOutgoingFriendRequest(user.id, targetId);
+    const name = getPlayerDisplayNameById(targetId);
+    const notice = result.ok ? `已撤回給 ${name} 的好友申請。` : `沒有可撤回的申請：${name}`;
+    await showFriendsMenu(interaction, user, notice);
+    return;
+  }
+
+  if (customId.startsWith('friend_view_')) {
+    const targetId = customId.replace('friend_view_', '').trim();
+    await showFriendCharacter(interaction, user, targetId);
+    return;
+  }
+
+  if (customId.startsWith('friend_duel_')) {
+    const targetId = customId.replace('friend_duel_', '').trim();
+    await startFriendDuel(interaction, user, targetId);
     return;
   }
 
@@ -7848,6 +8895,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
     await handleBattleWait(interaction, user);
     return;
   }
+
+  if (customId === 'battle_switch_pet') {
+    await handleBattleSwitchOpen(interaction, user);
+    return;
+  }
+
+  if (customId === 'battle_switch_cancel') {
+    await handleBattleSwitchCancel(interaction, user);
+    return;
+  }
   
   // ===== 逃跑 =====
   if (customId.startsWith('flee_')) {
@@ -7859,6 +8916,20 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // ===== 顯示招式列表 =====
   if (customId === 'show_moves') {
     await showMovesList(interaction, user);
+    return;
+  }
+
+  if (customId.startsWith('set_main_pet_')) {
+    const petId = String(customId || '').replace('set_main_pet_', '').trim();
+    const player = CORE.loadPlayer(user.id);
+    const pet = petId ? PET.getPetById(petId) : null;
+    if (!player || !pet || String(pet.ownerId || '') !== String(user.id || '')) {
+      await interaction.reply({ content: '⚠️ 找不到可設定的寵物。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    player.activePetId = pet.id;
+    CORE.savePlayer(player);
+    await showMovesList(interaction, user, pet.id, `已設定主上場寵物：${pet.name}`);
     return;
   }
   
@@ -8366,10 +9437,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 顯示檔案 =====
   if (customId === 'open_profile') {
-    if (!WALLET.isWalletBound(user.id)) {
-      await showWalletBindModal(interaction);
-      return;
-    }
     await showProfile(interaction, user);
     return;
   }
@@ -8503,6 +9570,9 @@ async function handleWalletBind(interaction, user) {
 }
 
 async function handleWalletSyncNow(interaction, user) {
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferUpdate().catch(() => {});
+  }
   try {
     const assets = await syncWalletAndApplyNow(user.id);
     const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
@@ -8522,13 +9592,14 @@ async function handleWalletSyncNow(interaction, user) {
       );
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('open_settings').setLabel('⚙️ 設定').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success)
     );
 
-    await interaction.update({ embeds: [embed], components: [row] });
+    await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
   } catch (e) {
-    await interaction.update({
+    await updateInteractionMessage(interaction, {
       embeds: [
         new EmbedBuilder()
           .setTitle('⚠️ 同步失敗')
@@ -8537,7 +9608,9 @@ async function handleWalletSyncNow(interaction, user) {
       ],
       components: [
         new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('settings_back').setLabel('🔙 返回').setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('open_settings').setLabel('⚙️ 設定').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Secondary)
         )
       ]
     });
@@ -9087,7 +10160,20 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     await interaction.deferUpdate().catch(() => {});
   }
 
+  const fallbackPet = pet || PET.loadPet(player?.id);
+  const mainPetResolved = resolvePlayerMainPet(player, { fallbackPet });
+  pet = mainPetResolved?.pet || fallbackPet;
+  if (!pet) {
+    if (interaction && !interaction.deferred && !interaction.replied) {
+      await interaction.reply({ content: '❌ 找不到可用寵物，請重新 /start。', ephemeral: true }).catch(() => {});
+    } else {
+      await thread.send({ content: '❌ 找不到可用寵物，請重新 /start。' }).catch(() => {});
+    }
+    return;
+  }
+
   let stateMutated = ensurePlayerGenerationSchema(player);
+  if (mainPetResolved?.changed) stateMutated = true;
   if (recordNearbyNpcEncounters(player, 8)) stateMutated = true;
   syncLocationArcLocation(player);
   if (restoreStoryFromGenerationState(player)) stateMutated = true;
@@ -9558,6 +10644,51 @@ async function showMainMenu(interaction, player, pet) {
   }
 }
 
+function getSettingsHubText(lang = 'zh-TW') {
+  const code = normalizeLangCode(lang);
+  const map = {
+    'zh-TW': {
+      title: '⚙️ 設定中心',
+      desc: '設定語言、錢包同步與記憶檢查。',
+      btnMemory: '🧠 記憶檢查',
+      btnSystem: '🛠️ 系統設定',
+      btnBack: '🔙 返回主選單'
+    },
+    'zh-CN': {
+      title: '⚙️ 设置中心',
+      desc: '设置语言、钱包同步与记忆检查。',
+      btnMemory: '🧠 记忆检查',
+      btnSystem: '🛠️ 系统设置',
+      btnBack: '🔙 返回主选单'
+    },
+    en: {
+      title: '⚙️ Settings Hub',
+      desc: 'Language, wallet sync, and memory audit settings.',
+      btnMemory: '🧠 Memory Audit',
+      btnSystem: '🛠️ System Settings',
+      btnBack: '🔙 Back to Menu'
+    }
+  };
+  return map[code] || map['zh-TW'];
+}
+
+async function showSettingsHub(interaction, user, notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const tx = getSettingsHubText(uiLang);
+  const embed = new EmbedBuilder()
+    .setTitle(tx.title)
+    .setColor(0x64748b)
+    .setDescription(`${notice ? `${notice}\n\n` : ''}${tx.desc}`);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('show_memory_audit').setLabel(tx.btnMemory).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_settings_system').setLabel(tx.btnSystem).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.btnBack).setStyle(ButtonStyle.Secondary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
 // ============== 設置選單 ==============
 async function showSettings(interaction, user) {
   const player = CORE.loadPlayer(user.id);
@@ -9644,6 +10775,7 @@ async function showProfile(interaction, user) {
   
   const profile = GACHA.getPlayerProfile(player);
   const gachaConfig = GACHA.GACHA_CONFIG;
+  const petCapacity = getPetCapacityForUser(user.id);
   const walletBound = WALLET.isWalletBound(user.id);
   const walletData = WALLET.getWalletData(user.id);
   const walletStatus = walletBound
@@ -9670,28 +10802,32 @@ async function showProfile(interaction, user) {
       { name: '🐾 寵物', value: String(profile.currentPets), inline: true },
       { name: '📍 位置', value: player.location, inline: true }
     )
+    .addFields(
+      { name: '📦 卡片 FMV', value: `$${petCapacity.cardFMV.toFixed(2)} USD（${petCapacity.cardCount} 張）`, inline: true },
+      { name: '🐾 寵物額度', value: `${petCapacity.currentPets}/${petCapacity.maxPets}`, inline: true },
+      { name: '🆕 可領取', value: `${petCapacity.availableSlots} 隻`, inline: true }
+    )
+    .addFields({ name: '📏 額度規則', value: '>100U 可 2 隻｜>1000U 可 3 隻', inline: false })
     .addFields({ name: '💳 錢包', value: walletStatus, inline: false })
     .addFields({ name: '🐾 寵物列表', value: petsList, inline: false });
   
-  // 每隻寵物一個分配按鈕
-  const petButtons = profile.pets.map(p => 
-    new ButtonBuilder()
-      .setCustomId(`alloc_hp_${p.id}`)
-      .setLabel(`❤️ ${p.name} +${gachaConfig.hpPerPoint}HP`)
-      .setStyle(ButtonStyle.Success)
-  );
-  
   const rows = [];
-  for (let i = 0; i < petButtons.length; i += 3) {
-    rows.push(new ActionRowBuilder().addComponents(petButtons.slice(i, i + 3)));
-  }
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(walletBound ? 'sync_wallet_now' : 'open_wallet_modal')
       .setLabel(walletBound ? '🔄 同步資產' : '💳 綁定錢包')
       .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 好友').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('show_moves').setLabel('🐾 寵物').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰 去開包').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel('返回').setStyle(ButtonStyle.Secondary)
+  ));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('claim_new_pet_start')
+      .setLabel(`🆕 領取新寵物（剩${petCapacity.availableSlots}）`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(petCapacity.availableSlots <= 0)
   ));
   
   await interaction.update({ embeds: [embed], components: rows });
@@ -9836,7 +10972,7 @@ async function handleGachaResult(interaction, user, count) {
     .setDescription(`💰 花費 ${result.cost} Rns 代幣\n💡 拉霸規則：三格相同 = 5% 大獎（不改原本機率）\n\n**開到以下招式：**\n${resultsText}\n\n**總價值：${result.totalValue} Rns 代幣**\n**⭐ 獲得升級點數：+${result.earnedPoints} 點**\n**📊 已開包數：${result.totalDraws} 包**`)
     .addFields(
       { name: '📚 本次獲取技能晶片', value: `${gainedChips.length} 枚\n${String(chipSummary).slice(0, 1000)}`, inline: false },
-      { name: '📌 學習規則', value: '抽到的是技能晶片；請到「📜 去配置招式」頁面用下拉選單學習/取消學習。', inline: false },
+      { name: '📌 學習規則', value: '抽到的是技能晶片；請到「🐾 寵物」頁面用下拉選單學習/取消學習。', inline: false },
       { name: '📦 販賣規則', value: '商店掛賣時，會以「技能晶片」名稱販賣。', inline: false }
     );
 
@@ -9859,7 +10995,7 @@ async function handleGachaResult(interaction, user, count) {
 
   const rowAction = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('open_gacha').setLabel('繼續抽').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('show_moves').setLabel('📜 去配置招式').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('show_moves').setLabel('🐾 前往寵物').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Primary)
   );
   const finalRows = [rowAction];
@@ -9885,30 +11021,16 @@ async function handleAllocateHP(interaction, user, petId) {
   const result = GACHA.allocateUpgradePoint(user.id, petId, 1);
   
   if (!result.success) {
-    const embed = new EmbedBuilder()
-      .setTitle('⚠️ 升級失敗')
-      .setColor(0xffa500)
-      .setDescription(`❌ ${result.reason}`);
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Secondary)
-    );
-    await interaction.update({ embeds: [embed], content: null, components: [row] });
+    await showMovesList(interaction, user, petId, `⚠️ 升級失敗：${result.reason}`);
     return;
   }
-  
-  const embed = new EmbedBuilder()
-    .setTitle(`✅ 升級成功！`)
-    .setColor(0x00ff00)
-    .setDescription(`**${result.petName}** 的 HP 增加了 **+${result.hpGain}**！\n\n` +
-      `使用點數：${result.pointsUsed}\n剩餘點數：${result.remaining}`);
-  
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Secondary)
+
+  await showMovesList(
+    interaction,
+    user,
+    petId,
+    `✅ ${result.petName} HP +${result.hpGain}（已用 ${result.pointsUsed} 點，剩餘 ${result.remaining} 點）`
   );
-  
-  await interaction.update({ embeds: [embed], components: [row] });
 }
 
 // ============== 角色資訊 ==============
@@ -9959,6 +11081,8 @@ async function showCharacter(interaction, user) {
   }
   
   const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 檔案').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 好友').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('show_finance_ledger').setLabel('💸 資金流水').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
@@ -10042,6 +11166,9 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
   }
   const selectedLoadout = normalizePetMoveLoadout(selectedPet, false);
   const selectedSet = new Set(selectedLoadout.activeMoveIds);
+  const activePetResolved = resolvePlayerMainPet(player, { fallbackPet: selectedPet });
+  const activePetId = String(activePetResolved?.pet?.id || player?.activePetId || '').trim();
+  if (activePetResolved?.changed) CORE.savePlayer(player);
   const allChipEntries = getLearnableSkillChipEntries(player, selectedPet);
   const learnableChips = allChipEntries.filter((entry) => Boolean(entry?.canLearn));
   const allChipTotal = allChipEntries.reduce((sum, item) => sum + Number(item?.count || 0), 0);
@@ -10077,18 +11204,24 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
       .join('\n')
     : '（背包目前沒有技能晶片）';
 
+  const noticeLine = notice
+    ? (String(notice).startsWith('✅') || String(notice).startsWith('⚠️') ? String(notice) : `✅ ${notice}`)
+    : '';
+
   const description = [
-    notice ? `✅ ${notice}` : '',
+    noticeLine,
     `**目前管理：${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）`,
     `學習入口：請用下拉選單「學習技能晶片」`,
     `取消學習：會退回技能晶片到背包，可拿去賣`,
     `可攜帶上陣招式：**${PET_MOVE_LOADOUT_LIMIT}**（逃跑技能固定，不占名額）`,
     `已解鎖招式：${selectedPet.moves.length}`,
-    `背包晶片：${allChipTotal} 枚｜可學：${learnableChipTotal} 枚 / ${learnableChips.length} 種`
+    `背包晶片：${allChipTotal} 枚｜可學：${learnableChipTotal} 枚 / ${learnableChips.length} 種`,
+    `升級點數：${Number(player?.upgradePoints || 0)} 點（每點 +${Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 0.2)} HP）`,
+    `主上場寵物：${activePetResolved?.pet?.name || selectedPet.name}`
   ].filter(Boolean).join('\n');
 
   const embed = new EmbedBuilder()
-    .setTitle(`📜 寵物招式配置`)
+    .setTitle(`🐾 寵物管理`)
     .setColor(getPetElementColor(selectedPet.type))
     .setDescription(description)
     .addFields(
@@ -10168,8 +11301,20 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '')
     rowMoveAssign = new ActionRowBuilder().addComponents(moveSelect);
   }
 
+  const remainPoints = Math.max(0, Number(player?.upgradePoints || 0));
+  const hpPerPoint = Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 0.2);
   const rowButtons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`set_main_pet_${selectedPet.id}`)
+      .setLabel(activePetId === String(selectedPet.id) ? '✅ 主上場' : '🎯 設主上場')
+      .setStyle(activePetId === String(selectedPet.id) ? ButtonStyle.Success : ButtonStyle.Primary)
+      .setDisabled(activePetId === String(selectedPet.id)),
+    new ButtonBuilder()
+      .setCustomId(`alloc_hp_${selectedPet.id}`)
+      .setLabel(`❤️ +${hpPerPoint}HP（剩${remainPoints}）`)
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(remainPoints <= 0),
+    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 檔案').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
 
@@ -11286,7 +12431,7 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
   if (draft.options.length <= 0) {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('show_moves').setLabel('📜 寵物招式配置').setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId('show_moves').setLabel('🐾 寵物管理').setStyle(ButtonStyle.Primary)
     );
     await interaction.update({ embeds: [embed], components: [row] });
     return;
@@ -11307,7 +12452,7 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
   const row1 = new ActionRowBuilder().addComponents(select);
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('show_moves').setLabel('📜 寵物招式配置').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('show_moves').setLabel('🐾 寵物管理').setStyle(ButtonStyle.Primary)
   );
   await interaction.update({ embeds: [embed], components: [row1, row2] });
 }
@@ -11940,7 +13085,9 @@ async function showSkillCodex(interaction, user) {
 // ============== 處理事件 ==============
 async function handleEvent(interaction, user, eventIndex, options = {}) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   const respondError = async (content) => {
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp({ content, ephemeral: true }).catch(() => {});
@@ -11962,6 +13109,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   if (!player || !pet) {
     await respondError('❌ 請重新開始！');
     return;
+  }
+  if (petResolved?.changed) {
+    CORE.savePlayer(player);
   }
   if (ensurePlayerGenerationSchema(player)) {
     CORE.savePlayer(player);
@@ -12709,6 +13859,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       preBattleStory,
       humanState: null,
       petState: null,
+      activePetId: String(pet?.id || '').trim() || null,
+      petStates: {},
       mentorSpar: mentorSparState
     };
     queueMemory({
@@ -13129,8 +14281,11 @@ function buildBattleActionRows(player, pet, combatant, options = {}) {
       : [new ButtonBuilder().setCustomId('no_attack_moves').setLabel('無可用攻擊招式').setStyle(ButtonStyle.Secondary).setDisabled(true)]
   );
   const fleeTry = battleState.fleeAttempts || 0;
+  const swapBlocked = hasPetSwapBlockingStatus(combatant?.status || {});
+  const canSwap = !disableAll && !combatant?.isHuman && !swapBlocked && getBattleSwitchCandidates(player, combatant?.id).length > 0;
   const actionRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('battle_wait').setLabel('⚡ 蓄能待機').setStyle(ButtonStyle.Primary).setDisabled(disableAll),
+    new ButtonBuilder().setCustomId('battle_switch_pet').setLabel('🔁 換寵物').setStyle(ButtonStyle.Secondary).setDisabled(!canSwap),
     new ButtonBuilder()
       .setCustomId(`flee_${fleeTry}`)
       .setLabel(`🏃 逃跑 70%（失敗 ${fleeTry}/2）`)
@@ -13333,6 +14488,43 @@ function buildManualBattlePayload(player, pet, options = {}) {
   };
 }
 
+function buildBattleSwitchPayload(player, currentPet, notice = '') {
+  const enemy = player?.battleState?.enemy;
+  const combatant = getActiveCombatant(player, currentPet);
+  const state = ensureBattleEnergyState(player);
+  const board = buildManualBattleBoard(enemy, combatant, state);
+  const candidates = getBattleSwitchCandidates(player, combatant?.id);
+  const options = candidates.slice(0, 25).map((p) => ({
+    label: `${p.name}`.slice(0, 100),
+    description: `${getPetElementDisplayName(p.type)}｜HP ${p.hp}/${p.maxHp}`.slice(0, 100),
+    value: String(p.id || '')
+  }));
+
+  const rows = [];
+  if (options.length > 0) {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('battle_switch_select')
+      .setPlaceholder('選擇要換上的寵物')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(options);
+    rows.push(new ActionRowBuilder().addComponents(menu));
+  }
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('battle_switch_cancel').setLabel('↩️ 取消換寵').setStyle(ButtonStyle.Secondary)
+  ));
+
+  return {
+    content:
+      `⚔️ **戰鬥中：🐾 ${combatant?.name || '寵物'} vs ${enemy?.name || '敵人'}**\n` +
+      `${board}\n` +
+      `${notice ? `${notice}\n` : ''}` +
+      `請選擇要換上的寵物：`,
+    embeds: [],
+    components: rows
+  };
+}
+
 async function renderManualBattle(interaction, player, pet, roundMessage = '', options = {}) {
   const enemy = player?.battleState?.enemy;
   if (!enemy) {
@@ -13354,6 +14546,80 @@ async function renderManualBattle(interaction, player, pet, roundMessage = '', o
     notice: options?.notice || ''
   });
   await sendBattleMessage(interaction, payload, mode);
+}
+
+async function handleBattleSwitchOpen(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const currentPet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet }).pet;
+  const combatant = getActiveCombatant(player, currentPet);
+  const enemy = player?.battleState?.enemy;
+  if (!player || !currentPet || !combatant || !enemy) {
+    await interaction.reply({ content: '❌ 目前不在可換寵的戰鬥狀態。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (combatant.isHuman) {
+    await renderManualBattle(interaction, player, currentPet, '⚠️ 目前是玩家本人上場，無法切換寵物。');
+    return;
+  }
+  if (hasPetSwapBlockingStatus(combatant.status || {})) {
+    await renderManualBattle(interaction, player, currentPet, '⚠️ 目前有持續效果（如中毒/灼燒/束縛），本回合不能換寵物。');
+    return;
+  }
+  const candidates = getBattleSwitchCandidates(player, combatant.id);
+  if (candidates.length <= 0) {
+    await renderManualBattle(interaction, player, currentPet, '⚠️ 沒有可切換的寵物（其他寵物可能倒下或不存在）。');
+    return;
+  }
+  const payload = buildBattleSwitchPayload(player, currentPet, '🔁 你可以在本回合改派其他寵物上場。');
+  await interaction.update(payload);
+}
+
+async function handleBattleSwitchCancel(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const currentPet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet }).pet;
+  if (!player || !currentPet || !player?.battleState?.enemy) {
+    await interaction.reply({ content: '❌ 目前不在戰鬥狀態。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  await renderManualBattle(interaction, player, currentPet, '↩️ 已取消換寵，繼續由目前寵物作戰。');
+}
+
+async function handleBattleSwitchSelect(interaction, user, targetPetId = '') {
+  const player = CORE.loadPlayer(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const currentPet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet }).pet;
+  const enemy = player?.battleState?.enemy;
+  const combatant = getActiveCombatant(player, currentPet);
+  const targetPet = targetPetId ? PET.getPetById(targetPetId) : null;
+  if (!player || !currentPet || !combatant || !enemy || !targetPet || String(targetPet.ownerId || '') !== String(user.id || '')) {
+    await interaction.reply({ content: '⚠️ 換寵資料失效，請重新操作。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (combatant.isHuman) {
+    await renderManualBattle(interaction, player, currentPet, '⚠️ 目前是玩家本人上場，無法切換寵物。');
+    return;
+  }
+  if (hasPetSwapBlockingStatus(combatant.status || {})) {
+    await renderManualBattle(interaction, player, currentPet, '⚠️ 目前有持續效果（如中毒/灼燒/束縛），本回合不能換寵物。');
+    return;
+  }
+  if (!CORE.canPetFight(targetPet)) {
+    await renderManualBattle(interaction, player, currentPet, `⚠️ ${targetPet.name} 目前無法上場。`);
+    return;
+  }
+  if (String(targetPet.id || '') === String(combatant.id || '')) {
+    await renderManualBattle(interaction, player, currentPet, '⚠️ 目前已是這隻寵物上場。');
+    return;
+  }
+
+  const savedPet = persistCombatantState(player, currentPet, combatant);
+  if (savedPet) PET.savePet(savedPet);
+  player.battleState.activePetId = targetPet.id;
+  player.battleState.fighter = 'pet';
+  CORE.savePlayer(player);
+  await renderManualBattle(interaction, player, targetPet, `🔁 已切換上場寵物：${targetPet.name}`);
 }
 
 async function showTrueGameOver(interaction, user, detailText, mode = 'update') {
@@ -13422,12 +14688,15 @@ async function showPetDefeatedTransition(interaction, player, pet, battleDetail 
 
 async function continueBattleWithHuman(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   const enemy = player?.battleState?.enemy;
   if (!player || !pet || !enemy) {
     await interaction.update({ content: '❌ 找不到可續戰的戰鬥。', components: [] });
     return;
   }
+  if (petResolved?.changed) CORE.savePlayer(player);
 
   player.battleState.fighter = 'player';
   player.battleState.mode = 'manual';
@@ -13454,7 +14723,9 @@ async function continueBattleWithHuman(interaction, user) {
 
 async function startManualBattle(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   if (!player || !pet) {
     await interaction.update({ content: '❌ 沒有可用招式，無法開始戰鬥。', components: [] });
     return;
@@ -13473,7 +14744,9 @@ async function startManualBattle(interaction, user) {
       sourceChoice: '突發戰鬥',
       preBattleStory: String(player?.currentStory || '').trim(),
       humanState: null,
-      petState: null
+      petState: null,
+      activePetId: String(pet?.id || '').trim() || null,
+      petStates: {}
     };
     createdBattle = true;
   } else {
@@ -13494,13 +14767,16 @@ async function startManualBattle(interaction, user) {
     publishBattleWorldEvent(player, player.battleState.enemy.name, 'battle_start');
   }
   ensureBattleEnergyState(player);
+  if (petResolved?.changed) CORE.savePlayer(player);
   CORE.savePlayer(player);
   await handleFight(interaction, user);
 }
 
 async function startAutoBattle(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   const uiLang = getPlayerUILang(player);
   if (!player || !pet) {
     await interaction.update({ content: '❌ 沒有可用招式，無法開始 AI 戰鬥。', components: [] });
@@ -13521,7 +14797,9 @@ async function startAutoBattle(interaction, user) {
       sourceChoice: '突發戰鬥',
       preBattleStory: String(player?.currentStory || '').trim(),
       humanState: null,
-      petState: null
+      petState: null,
+      activePetId: String(pet?.id || '').trim() || null,
+      petStates: {}
     };
     createdBattle = true;
   } else {
@@ -13542,6 +14820,7 @@ async function startAutoBattle(interaction, user) {
     publishBattleWorldEvent(player, player.battleState.enemy.name, 'battle_start');
   }
   ensureBattleEnergyState(player);
+  if (petResolved?.changed) CORE.savePlayer(player);
   CORE.savePlayer(player);
 
   const enemy = player.battleState.enemy;
@@ -13571,7 +14850,7 @@ async function startAutoBattle(interaction, user) {
       enemy,
       selectedMove,
       enemyMove,
-      player?.battleState?.mentorSpar ? { nonLethal: true } : undefined
+      (player?.battleState?.mentorSpar || player?.battleState?.friendDuel) ? { nonLethal: true } : undefined
     );
     const roundResult = maybeResolveMentorSparResult(player, enemy, roundResultRaw);
     const nextEnergy = Math.max(0, energyBefore - energyCost) + 2;
@@ -13596,11 +14875,30 @@ async function startAutoBattle(interaction, user) {
     }
   }
 
-  persistCombatantState(player, pet, combatant);
-  PET.savePet(pet);
+  {
+    const savedPet = persistCombatantState(player, pet, combatant);
+    if (savedPet) PET.savePet(savedPet);
+  }
   CORE.savePlayer(player);
 
   if (finalResult?.victory === true) {
+    if (player?.battleState?.friendDuel) {
+      const detail = buildAIBattleStory(rounds, combatant, enemy, finalResult);
+      const duel = finalizeFriendDuel(player, pet, combatant, detail, true);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰勝利')
+        .setColor(0x8b5cf6)
+        .setDescription(`**AI 已完成好友友誼戰**\n\n${detail}\n\n${duel.summaryLine}`)
+        .addFields(
+          { name: '🤝 對手', value: duel.rivalName, inline: true },
+          { name: '🩸 戰後 HP', value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await interaction.update({ embeds: [embed], content: null, components: [row] });
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const detail = buildAIBattleStory(rounds, combatant, enemy, finalResult);
       const mentorVictory = finalizeMentorSparVictory(player, pet, detail);
@@ -13682,6 +14980,19 @@ async function startAutoBattle(interaction, user) {
   }
 
   if (finalResult?.victory === false || combatant.hp <= 0) {
+    if (player?.battleState?.friendDuel) {
+      const detail = buildAIBattleStory(rounds, combatant, enemy, finalResult);
+      const duel = finalizeFriendDuel(player, pet, combatant, detail, false);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰落敗')
+        .setColor(0x8b5cf6)
+        .setDescription(`${detail}\n\n${duel.summaryLine}`);
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await interaction.update({ embeds: [embed], content: null, components: [row] });
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const detail = buildAIBattleStory(rounds, combatant, enemy, finalResult);
       const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, detail);
@@ -13715,7 +15026,9 @@ async function startAutoBattle(interaction, user) {
 
 async function handleFight(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
 
   if (!player || !pet) {
     await interaction.update({ content: '❌ 沒有招式！', components: [] });
@@ -13735,7 +15048,9 @@ async function handleFight(interaction, user) {
       sourceChoice: '突發戰鬥',
       preBattleStory: String(player?.currentStory || '').trim(),
       humanState: null,
-      petState: null
+      petState: null,
+      activePetId: String(pet?.id || '').trim() || null,
+      petStates: {}
     };
     createdBattle = true;
   } else if (player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
@@ -13748,6 +15063,7 @@ async function handleFight(interaction, user) {
     publishBattleWorldEvent(player, player.battleState?.enemy?.name || '哥布林', 'battle_start');
   }
 
+  if (petResolved?.changed) CORE.savePlayer(player);
   CORE.savePlayer(player);
   await renderManualBattle(interaction, player, pet);
 }
@@ -13755,7 +15071,9 @@ async function handleFight(interaction, user) {
 // ============== 使用招式 ==============
 async function handleUseMove(interaction, user, moveIndex) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   const uiLang = getPlayerUILang(player);
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, pet);
@@ -13766,6 +15084,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     await interaction.update({ content: '❌ 招式不存在！', components: [] });
     return;
   }
+  if (petResolved?.changed) CORE.savePlayer(player);
   ECON.ensurePlayerEconomy(player);
   const state = ensureBattleEnergyState(player);
   const energyCost = BATTLE.getMoveEnergyCost(chosenMove);
@@ -13784,7 +15103,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     return;
   }
 
-  const battleOptions = player?.battleState?.mentorSpar ? { nonLethal: true } : undefined;
+  const battleOptions = (player?.battleState?.mentorSpar || player?.battleState?.friendDuel) ? { nonLethal: true } : undefined;
   const enemyMove = BATTLE.enemyChooseMove(enemy);
   const playerPhaseRaw = BATTLE.executeBattlePlayerPhase(
     player,
@@ -13795,11 +15114,29 @@ async function handleUseMove(interaction, user, moveIndex) {
   );
   const playerPhase = maybeResolveMentorSparResult(player, enemy, playerPhaseRaw);
 
-  persistCombatantState(player, pet, combatant);
-  PET.savePet(pet);
+  {
+    const savedPet = persistCombatantState(player, pet, combatant);
+    if (savedPet) PET.savePet(savedPet);
+  }
   CORE.savePlayer(player);
 
   if (playerPhase.victory === true) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message, true);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰勝利')
+        .setColor(0x8b5cf6)
+        .setDescription(`${playerPhase.message}\n\n${duel.summaryLine}`)
+        .addFields(
+          { name: '🤝 對手', value: duel.rivalName, inline: true },
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorVictory = finalizeMentorSparVictory(player, pet, playerPhase.message);
       const embed = new EmbedBuilder()
@@ -13880,6 +15217,18 @@ async function handleUseMove(interaction, user, moveIndex) {
   }
 
   if (playerPhase.victory === false) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message, false);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰落敗')
+        .setColor(0x8b5cf6)
+        .setDescription(`${playerPhase.message}\n\n${duel.summaryLine}`);
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, playerPhase.message);
       const embed = new EmbedBuilder()
@@ -13928,11 +15277,29 @@ async function handleUseMove(interaction, user, moveIndex) {
     ? [...combinedLines, enemyPhase.outcomeText].join('\n')
     : combinedLines.join('\n');
 
-  persistCombatantState(player, pet, combatant);
-  PET.savePet(pet);
+  {
+    const savedPet = persistCombatantState(player, pet, combatant);
+    if (savedPet) PET.savePet(savedPet);
+  }
   CORE.savePlayer(player);
 
   if (enemyPhase.victory === true) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage, true);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰勝利')
+        .setColor(0x8b5cf6)
+        .setDescription(`${combinedMessage}\n\n${duel.summaryLine}`)
+        .addFields(
+          { name: '🤝 對手', value: duel.rivalName, inline: true },
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorVictory = finalizeMentorSparVictory(player, pet, combinedMessage);
       const embed = new EmbedBuilder()
@@ -14011,6 +15378,18 @@ async function handleUseMove(interaction, user, moveIndex) {
   }
 
   if (enemyPhase.victory === false) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage, false);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰落敗')
+        .setColor(0x8b5cf6)
+        .setDescription(`${combinedMessage}\n\n${duel.summaryLine}`);
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, combinedMessage);
       const embed = new EmbedBuilder()
@@ -14050,7 +15429,9 @@ async function handleUseMove(interaction, user, moveIndex) {
 
 async function handleBattleWait(interaction, user) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   const uiLang = getPlayerUILang(player);
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, pet);
@@ -14059,11 +15440,12 @@ async function handleBattleWait(interaction, user) {
     await interaction.update({ content: '❌ 目前不在有效戰鬥狀態。', components: [] });
     return;
   }
+  if (petResolved?.changed) CORE.savePlayer(player);
 
   const state = ensureBattleEnergyState(player);
   const beforeEnergy = state.energy;
   const enemyMove = BATTLE.enemyChooseMove(enemy);
-  const battleOptions = player?.battleState?.mentorSpar ? { nonLethal: true } : undefined;
+  const battleOptions = (player?.battleState?.mentorSpar || player?.battleState?.friendDuel) ? { nonLethal: true } : undefined;
   const playerPhaseRaw = BATTLE.executeBattlePlayerPhase(
     player,
     combatant,
@@ -14073,11 +15455,29 @@ async function handleBattleWait(interaction, user) {
   );
   const playerPhase = maybeResolveMentorSparResult(player, enemy, playerPhaseRaw);
 
-  persistCombatantState(player, pet, combatant);
-  PET.savePet(pet);
+  {
+    const savedPet = persistCombatantState(player, pet, combatant);
+    if (savedPet) PET.savePet(savedPet);
+  }
   CORE.savePlayer(player);
 
   if (playerPhase.victory === true) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message, true);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰勝利')
+        .setColor(0x8b5cf6)
+        .setDescription(`${playerPhase.message}\n\n${duel.summaryLine}`)
+        .addFields(
+          { name: '🤝 對手', value: duel.rivalName, inline: true },
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorVictory = finalizeMentorSparVictory(player, pet, playerPhase.message);
       const embed = new EmbedBuilder()
@@ -14155,6 +15555,18 @@ async function handleBattleWait(interaction, user) {
   }
 
   if (playerPhase.victory === false || combatant.hp <= 0) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`, false);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰落敗')
+        .setColor(0x8b5cf6)
+        .setDescription(`${playerPhase.message || ''}\n\n${duel.summaryLine}`.trim());
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, playerPhase.message || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`);
       const embed = new EmbedBuilder()
@@ -14206,10 +15618,28 @@ async function handleBattleWait(interaction, user) {
     ? [...combinedLines, enemyPhase.outcomeText].join('\n')
     : combinedLines.join('\n');
 
-  persistCombatantState(player, pet, combatant);
-  PET.savePet(pet);
+  {
+    const savedPet = persistCombatantState(player, pet, combatant);
+    if (savedPet) PET.savePet(savedPet);
+  }
 
   if (enemyPhase.victory === true) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage, true);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰勝利')
+        .setColor(0x8b5cf6)
+        .setDescription(`${combinedMessage}\n\n${duel.summaryLine}`)
+        .addFields(
+          { name: '🤝 對手', value: duel.rivalName, inline: true },
+          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, 'edit');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorVictory = finalizeMentorSparVictory(player, pet, combinedMessage);
       const embed = new EmbedBuilder()
@@ -14287,6 +15717,18 @@ async function handleBattleWait(interaction, user) {
   }
 
   if (enemyPhase.victory === false || combatant.hp <= 0) {
+    if (player?.battleState?.friendDuel) {
+      const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`, false);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 好友友誼戰落敗')
+        .setColor(0x8b5cf6)
+        .setDescription(`${combinedMessage || ''}\n\n${duel.summaryLine}`.trim());
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      return;
+    }
     if (player?.battleState?.mentorSpar) {
       const mentorDefeat = finalizeMentorSparDefeat(player, pet, combatant, combinedMessage || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`);
       const embed = new EmbedBuilder()
@@ -14331,7 +15773,9 @@ async function handleBattleWait(interaction, user) {
 // ============== 逃跑 ==============
 async function handleFlee(interaction, user, attemptNum) {
   const player = CORE.loadPlayer(user.id);
-  const pet = PET.loadPet(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
   const uiLang = getPlayerUILang(player);
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, pet);
@@ -14340,13 +15784,16 @@ async function handleFlee(interaction, user, attemptNum) {
     await interaction.update({ content: '❌ 目前不在戰鬥狀態。', components: [] });
     return;
   }
+  if (petResolved?.changed) CORE.savePlayer(player);
 
   const currentAttempt = (player.battleState.fleeAttempts || 0) + 1;
   const result = BATTLE.attemptFlee(player, pet, enemy, currentAttempt, combatant);
 
   if (result.blocked) {
-    persistCombatantState(player, pet, combatant);
-    PET.savePet(pet);
+    {
+      const savedPet = persistCombatantState(player, pet, combatant);
+      if (savedPet) PET.savePet(savedPet);
+    }
     CORE.savePlayer(player);
     await renderManualBattle(interaction, player, pet, result.message);
     return;

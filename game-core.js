@@ -11,6 +11,7 @@ const https = require('https');
 const MEMORY_INDEX = require('./memory-index');
 const FACTION_DIRECTOR = require('./faction-war-director');
 const { sanitizeWorldText } = require('./style-sanitizer');
+const PET = require('./pet-system');
 const {
   MAP_LOCATIONS,
   LOCATION_PROFILES,
@@ -116,10 +117,16 @@ const MAX_WORLD_EVENTS = 5;
 const DIGITAL_ROAMER_TOTAL = 20;
 const DIGITAL_ROAMER_GROUPS = Object.freeze(['Nemo', 'Wolf', 'Adaloc', 'Hom']);
 const DIGITAL_ROAMER_GROUP_MOVES = Object.freeze({
-  Nemo: ['silver_snake', 'seven_step_poison', 'soul_drain', 'ice_toxin'],
-  Wolf: ['hell_fire', 'bone_dissolver', 'explosive_pill', 'iron_thorn'],
-  Adaloc: ['mud_fire_lotus', 'hot_sand_hell', 'plague_cloud', 'soul_scatter'],
-  Hom: ['ultimate_dark', 'silver_snake', 'hell_fire', 'arhat_kick']
+  Nemo: ['golden_needle', 'ice_palm', 'flood_torrent', 'silver_snake'],
+  Wolf: ['blaze_sky', 'hell_fire', 'thunder_crash', 'explosive_pill'],
+  Adaloc: ['spider_silk', 'plague_cloud', 'bone_dissolver', 'rejuvenation'],
+  Hom: ['ultimate_dark', 'hot_sand_hell', 'ghost_fire', 'shadow_lock']
+});
+const DIGITAL_ROAMER_GROUP_ELEMENT = Object.freeze({
+  Nemo: '水',
+  Wolf: '火',
+  Adaloc: '草',
+  Hom: '火'
 });
 const DIGITAL_ROAMER_GROUP_BASE = Object.freeze({
   Nemo: { battle: 34, hp: 160, attack: 28, defense: 16, petAttack: 22, petHp: 84 },
@@ -127,6 +134,402 @@ const DIGITAL_ROAMER_GROUP_BASE = Object.freeze({
   Adaloc: { battle: 38, hp: 176, attack: 31, defense: 18, petAttack: 25, petHp: 92 },
   Hom: { battle: 40, hp: 184, attack: 33, defense: 18, petAttack: 26, petHp: 96 }
 });
+const LOCATION_NPC_MIN_COUNT = Math.max(1, Math.min(3, Number(process.env.LOCATION_NPC_MIN_COUNT || 2)));
+const MENTOR_MASTER_MOVE_IDS = Object.freeze(['ultimate_dark', 'blaze_sky', 'thunder_crash', 'flood_torrent', 'ghost_fire']);
+const MENTOR_MASTER_BLUEPRINTS = Object.freeze([
+  { id: 'mentor_winchman', name: 'Winchman', title: '前線總導師', element: '火', battle: 98, hp: 240, energy: 120, wealth: 95 },
+  { id: 'mentor_tom', name: 'Tom', title: '航道戰術導師', element: '水', battle: 95, hp: 232, energy: 116, wealth: 88 },
+  { id: 'mentor_harry', name: 'Harry', title: '機動壓制導師', element: '火', battle: 96, hp: 236, energy: 118, wealth: 84 },
+  { id: 'mentor_kathy', name: 'Kathy', title: '修復與反制導師', element: '草', battle: 93, hp: 228, energy: 122, wealth: 82 },
+  { id: 'mentor_yuzu', name: 'Yuzu', title: '節點追跡導師', element: '水', battle: 94, hp: 230, energy: 120, wealth: 80 },
+  { id: 'mentor_leslie', name: 'Leslie', title: '前哨守備導師', element: '火', battle: 97, hp: 238, energy: 118, wealth: 86 }
+]);
+const PERSISTENT_NPC_BOSS_IDS = new Set(['bandit_king', 'traitor', 'chamberlain', 'shadow_assassin']);
+
+const NPC_COMBAT_PROFILES = Object.freeze({
+  lin_engineer: { element: '火', petName: '齒輪熔芯豹', moveIds: ['iron_palm', 'flame_armor', 'thunder_crash', 'blaze_sky'] },
+  su_doctor: { element: '水', petName: '淨潮醫療狐', moveIds: ['willow_water', 'mist_step', 'ice_palm', 'golden_needle'] },
+  shadow_merchant: { element: '草', petName: '暗藤帳簿鼠', moveIds: ['shadow_lock', 'spider_silk', 'curse_word', 'minor_poison'] },
+  crown_prince: { element: '水', petName: '皇庭潮紋獅', moveIds: ['golden_needle', 'willow_water', 'mist_step', 'thunder_crash'] },
+  general_wang: { element: '火', petName: '鋼炎戰騎', moveIds: ['iron_palm', 'arhat_kick', 'flame_armor', 'wind_fire_blade'] },
+  spy_q: { element: '草', petName: '裂幕潛行隼', moveIds: ['shadow_lock', 'soul_scatter', 'spider_silk', 'silver_snake'] },
+  peony_lady: { element: '草', petName: '牡丹靈芯蝶', moveIds: ['grass_cloak', 'heavenly_flowers', 'spider_net', 'rejuvenation'] },
+  storyteller_zhang: { element: '水', petName: '書海潮鳶', moveIds: ['mist_step', 'golden_needle', 'quicksand', 'willow_water'] },
+  bounty_hunter_lei: { element: '火', petName: '裂火追跡狼', moveIds: ['iron_palm', 'blaze_sky', 'thunder_crash', 'explosive_pill'] },
+  abu_trader: { element: '水', petName: '駝鈴潮行獸', moveIds: ['mist_step', 'quicksand', 'water_splash', 'willow_water'] },
+  dunhuang_guardian: { element: '草', petName: '壁畫守靈龜', moveIds: ['golden_bell', 'rock_trap', 'rejuvenation', 'arhat_kick'] },
+  sand_bandit_leader: { element: '火', petName: '炙砂掠奪鷹', moveIds: ['hot_sand_hell', 'bone_dissolver', 'hell_fire', 'explosive_pill'] },
+  island_master: { element: '草', petName: '島核混相龍', moveIds: ['flood_torrent', 'wind_fire_blade', 'ultimate_dark', 'rejuvenation'] },
+  dragon_wood_master: { element: '水', petName: '潮木試煉麟', moveIds: ['flood_torrent', 'thunder_crash', 'golden_bell', 'ice_toxin'] },
+  ice_queen: { element: '水', petName: '霜冠冰棱狐', moveIds: ['ice_palm', 'flood_torrent', 'mist_step', 'willow_water'] },
+  hunter_old_chen: { element: '草', petName: '雪林追痕犬', moveIds: ['rock_trap', 'spider_silk', 'needle_rain', 'quicksand'] },
+  chief_son: { element: '火', petName: '草原赤騎虎', moveIds: ['arhat_kick', 'wind_fire_blade', 'iron_palm', 'flame_armor'] },
+  wandering_poet: { element: '水', petName: '吟潮風琴鳥', moveIds: ['mist_step', 'willow_water', 'golden_needle', 'soul_scatter'] },
+  bandit_king: { element: '火', petName: '蹄焰劫掠馬', moveIds: ['hell_fire', 'hot_sand_hell', 'bone_dissolver', 'ultimate_dark'] },
+  ming_emperor: { element: '火', petName: '聖焰光翼獅', moveIds: ['blaze_sky', 'flame_armor', 'wind_fire_blade', 'thunder_crash'] },
+  flame_ember: { element: '火', petName: '燼紋突擊鷹', moveIds: ['fire_lotus', 'blaze_sky', 'hell_fire', 'iron_palm'] },
+  traitor: { element: '草', petName: '墮光噬影蛇', moveIds: ['ultimate_dark', 'shadow_slash', 'soul_scatter', 'ghost_fire'] },
+  chamberlain: { element: '草', petName: '暗議裂脈蛛', moveIds: ['ultimate_dark', 'soul_drain', 'shadow_lock', 'silver_snake'] },
+  shadow_assassin: { element: '火', petName: '夜焰絕命豹', moveIds: ['shadow_slash', 'silver_snake', 'explosive_pill', 'ghost_fire'] },
+  double_agent: { element: '水', petName: '鏡潮雙棲狐', moveIds: ['mist_step', 'shadow_lock', 'curse_word', 'soul_scatter'] },
+  mentor_winchman: { element: '火', petName: '熾核導師獸', moveIds: ['blaze_sky', 'thunder_crash', 'ultimate_dark', 'ghost_fire'] },
+  mentor_tom: { element: '水', petName: '潮汐導師獸', moveIds: ['flood_torrent', 'golden_needle', 'mist_step', 'thunder_crash'] },
+  mentor_harry: { element: '火', petName: '裂焰導師獸', moveIds: ['hell_fire', 'blaze_sky', 'wind_fire_blade', 'thunder_crash'] },
+  mentor_kathy: { element: '草', petName: '纖維導師獸', moveIds: ['rejuvenation', 'spider_silk', 'ultimate_dark', 'golden_bell'] },
+  mentor_yuzu: { element: '水', petName: '鏡潮導師獸', moveIds: ['flood_torrent', 'mist_step', 'golden_needle', 'ice_palm'] },
+  mentor_leslie: { element: '火', petName: '守備導師獸', moveIds: ['blaze_sky', 'thunder_crash', 'flame_armor', 'ultimate_dark'] }
+});
+const NPC_MOVE_TIER_PLAN_BY_DIFFICULTY = Object.freeze({
+  1: [1, 1, 1, 2],
+  2: [1, 1, 2, 2],
+  3: [1, 2, 2, 3],
+  4: [2, 2, 3, 3],
+  5: [2, 3, 3, 3]
+});
+const NPC_PET_BASELINE_BY_DIFFICULTY = Object.freeze({
+  1: { attack: 12, defense: 7, hp: 64 },
+  2: { attack: 16, defense: 9, hp: 80 },
+  3: { attack: 21, defense: 12, hp: 98 },
+  4: { attack: 27, defense: 16, hp: 124 },
+  5: { attack: 34, defense: 20, hp: 152 }
+});
+
+function normalizePetElement(value = '') {
+  if (PET && typeof PET.normalizePetElement === 'function') {
+    return PET.normalizePetElement(value);
+  }
+  const text = String(value || '').trim();
+  if (text === '火') return '火';
+  if (text === '草') return '草';
+  return '水';
+}
+
+function sanitizeLocationIdPart(value = '') {
+  const source = String(value || '').trim().toLowerCase();
+  if (!source) return 'loc';
+  const safe = source.replace(/[^\w\u4e00-\u9fff]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return safe || 'loc';
+}
+
+function getMoveTemplateById(moveId = '') {
+  const id = String(moveId || '').trim();
+  if (!id) return null;
+  if (PET && typeof PET.getMoveById === 'function') {
+    return PET.getMoveById(id);
+  }
+  const fallback = [
+    ...(Array.isArray(PET?.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : []),
+    ...(Array.isArray(PET?.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : []),
+    ...(Array.isArray(PET?.INITIAL_MOVES) ? PET.INITIAL_MOVES : [])
+  ];
+  return fallback.find((m) => String(m?.id || '').trim() === id) || null;
+}
+
+function getMovePoolByElement(element = '') {
+  if (PET && typeof PET.getMovesByElement === 'function') {
+    return PET.getMovesByElement(element);
+  }
+  return [];
+}
+
+function buildNpcSkillDictFromMoveIds(moveIds = []) {
+  const out = {};
+  const realmByTier = { 1: '精通', 2: '大師', 3: '頂尖' };
+  let idx = 0;
+  for (const moveId of Array.isArray(moveIds) ? moveIds : []) {
+    const tpl = getMoveTemplateById(moveId);
+    if (!tpl?.name) continue;
+    const tier = Math.max(1, Math.min(3, Number(tpl.tier || 1)));
+    out[tpl.name] = {
+      realm: realmByTier[tier] || '精通',
+      proficiency: 260 + tier * 90 + idx * 35
+    };
+    idx += 1;
+    if (idx >= 4) break;
+  }
+  return out;
+}
+
+function ensureNpcCombatProfile(npc = null, index = 0) {
+  if (!npc || typeof npc !== 'object') return npc;
+  const profile = NPC_COMBAT_PROFILES[String(npc.id || '').trim()] || {};
+  const element = normalizePetElement(profile.element || npc.petElement || (npc.align === 'evil' ? '火' : '水'));
+  const pool = getMovePoolByElement(element);
+  const fallbackIds = pool.map((m) => String(m?.id || '').trim()).filter(Boolean);
+  const allowedIds = new Set(fallbackIds);
+  const moveTierById = new Map(pool.map((m) => [String(m?.id || '').trim(), Math.max(1, Math.min(3, Number(m?.tier || 1)))]));
+  const tierBuckets = { 1: [], 2: [], 3: [] };
+  for (const id of fallbackIds) {
+    const tier = moveTierById.get(id) || 1;
+    if (!tierBuckets[tier]) tierBuckets[tier] = [];
+    tierBuckets[tier].push(id);
+  }
+  const locationDifficulty = Math.max(1, Math.min(5, Number(getLocationDifficulty(String(npc.loc || '')) || 3)));
+  const tierPlan = Array.isArray(NPC_MOVE_TIER_PLAN_BY_DIFFICULTY[locationDifficulty])
+    ? NPC_MOVE_TIER_PLAN_BY_DIFFICULTY[locationDifficulty]
+    : NPC_MOVE_TIER_PLAN_BY_DIFFICULTY[3];
+  const chosen = [];
+  const used = new Set();
+
+  const preferredByTier = { 1: [], 2: [], 3: [] };
+  for (const moveId of Array.isArray(profile.moveIds) ? profile.moveIds : []) {
+    const id = String(moveId || '').trim();
+    if (!id || !allowedIds.has(id) || used.has(id)) continue;
+    const tier = moveTierById.get(id) || 1;
+    if (!preferredByTier[tier]) preferredByTier[tier] = [];
+    preferredByTier[tier].push(id);
+  }
+
+  let cursor = Math.max(0, Number(index || 0));
+  const pickForTier = (tier = 1) => {
+    const preferred = preferredByTier[tier] || [];
+    for (const id of preferred) {
+      if (!id || used.has(id)) continue;
+      used.add(id);
+      return id;
+    }
+    const bucket = tierBuckets[tier] || [];
+    while (bucket.length > 0) {
+      const id = bucket[cursor % bucket.length];
+      cursor += 1;
+      if (!id || used.has(id)) continue;
+      used.add(id);
+      return id;
+    }
+    return null;
+  };
+
+  const fallbackTierOrder = {
+    1: [1, 2, 3],
+    2: [2, 1, 3],
+    3: [3, 2, 1]
+  };
+
+  for (const wantedTier of tierPlan) {
+    const order = fallbackTierOrder[wantedTier] || [wantedTier, 2, 1, 3];
+    let picked = null;
+    for (const t of order) {
+      picked = pickForTier(t);
+      if (picked) break;
+    }
+    if (picked) chosen.push(picked);
+  }
+
+  while (chosen.length < 4 && fallbackIds.length > 0) {
+    const id = fallbackIds[cursor % fallbackIds.length];
+    cursor += 1;
+    if (!id || used.has(id)) continue;
+    used.add(id);
+    chosen.push(id);
+  }
+  if (chosen.length === 0 && fallbackIds.length > 0) {
+    chosen.push(...fallbackIds.slice(0, 4));
+  }
+
+  const battle = Math.max(10, Number(npc?.stats?.戰力 || 20));
+  const life = Math.max(40, Number(npc?.stats?.生命 || 80));
+  const energy = Math.max(10, Number(npc?.stats?.能量 || 24));
+  const baseline = NPC_PET_BASELINE_BY_DIFFICULTY[locationDifficulty] || NPC_PET_BASELINE_BY_DIFFICULTY[3];
+  const hp = Math.max(48, Math.floor(baseline.hp + life * 0.18));
+  const petAttack = Math.max(9, Math.floor(baseline.attack + battle * 0.14));
+  const petDefense = Math.max(6, Math.floor(baseline.defense + energy * 0.08));
+
+  npc.petElement = element;
+  npc.npcDifficulty = locationDifficulty;
+  npc.battleMoveIds = chosen.slice(0, 5);
+  npc.skills = buildNpcSkillDictFromMoveIds(npc.battleMoveIds);
+  npc.petTemplate = {
+    name: String(profile.petName || `${npc.name}的伴寵`),
+    element,
+    attack: petAttack,
+    defense: petDefense,
+    speed: Math.max(12, Math.floor((Number(npc?.stats?.能量 || 30) + petAttack) * 0.24)),
+    hp,
+    maxHp: hp,
+    moveIds: npc.battleMoveIds.slice(0, 4)
+  };
+  return npc;
+}
+
+function pickMentorMasterInitialLocation(index = 0) {
+  if (!Array.isArray(MAP_LOCATIONS) || MAP_LOCATIONS.length === 0) return '襄陽城';
+  const idx = Math.abs(Number(index || 0)) % MAP_LOCATIONS.length;
+  return String(MAP_LOCATIONS[idx] || MAP_LOCATIONS[0] || '襄陽城');
+}
+
+function createMentorMasterAgent(profile = {}, index = 0) {
+  const element = normalizePetElement(profile.element || '火');
+  const moveIds = MENTOR_MASTER_MOVE_IDS.slice(0, 4);
+  const loc = pickMentorMasterInitialLocation(index);
+  return {
+    id: String(profile.id || `mentor_master_${index + 1}`),
+    name: String(profile.name || `導師${index + 1}`),
+    title: String(profile.title || '前線導師'),
+    sect: 'Renaiss',
+    loc,
+    align: 'good',
+    mentorMaster: true,
+    roaming: true,
+    personality: '巡行各地，擅長以高強度友誼賽磨練新手。',
+    stats: {
+      戰力: Math.max(88, Number(profile.battle || 92)),
+      生命: Math.max(220, Number(profile.hp || 232)),
+      能量: Math.max(100, Number(profile.energy || 116)),
+      智商: 92,
+      魅力: 88,
+      運氣: 84,
+      財富: Math.max(75, Number(profile.wealth || 82))
+    },
+    skills: buildNpcSkillDictFromMoveIds(moveIds),
+    inventory: ['導師徽章', '前線通行碼'],
+    relationships: {},
+    memory: [],
+    petElement: element,
+    battleMoveIds: moveIds,
+    npcDifficulty: 5,
+    petTemplate: {
+      name: `${String(profile.name || '導師')}伴寵`,
+      element,
+      attack: 42,
+      defense: 24,
+      speed: 28,
+      hp: 186,
+      maxHp: 186,
+      moveIds: moveIds.slice(0, 4)
+    },
+    alive: true,
+    exp: 0,
+    party: null,
+    status: '巡行'
+  };
+}
+
+function ensureMentorMasters(targetAgents = []) {
+  if (!Array.isArray(targetAgents)) return false;
+  let changed = false;
+  const validLocSet = new Set(Array.isArray(MAP_LOCATIONS) ? MAP_LOCATIONS : []);
+
+  for (let i = 0; i < MENTOR_MASTER_BLUEPRINTS.length; i++) {
+    const blueprint = MENTOR_MASTER_BLUEPRINTS[i];
+    const idx = targetAgents.findIndex((agent) => String(agent?.id || '') === String(blueprint.id || ''));
+    if (idx < 0) {
+      targetAgents.push(createMentorMasterAgent(blueprint, i));
+      changed = true;
+      continue;
+    }
+    const current = targetAgents[idx] || {};
+    const loc = validLocSet.has(String(current.loc || '').trim())
+      ? String(current.loc || '').trim()
+      : pickMentorMasterInitialLocation(i);
+    const merged = {
+      ...current,
+      name: String(blueprint.name || current.name || `導師${i + 1}`),
+      title: String(blueprint.title || current.title || '前線導師'),
+      sect: 'Renaiss',
+      align: 'good',
+      mentorMaster: true,
+      roaming: true,
+      loc,
+      personality: String(current.personality || '巡行各地，擅長以高強度友誼賽磨練新手。'),
+      stats: {
+        ...(current.stats || {}),
+        戰力: Math.max(Number(current?.stats?.戰力 || 0), Math.max(88, Number(blueprint.battle || 92))),
+        生命: Math.max(Number(current?.stats?.生命 || 0), Math.max(220, Number(blueprint.hp || 232))),
+        能量: Math.max(Number(current?.stats?.能量 || 0), Math.max(100, Number(blueprint.energy || 116))),
+        智商: Math.max(Number(current?.stats?.智商 || 0), 90),
+        魅力: Math.max(Number(current?.stats?.魅力 || 0), 86),
+        運氣: Math.max(Number(current?.stats?.運氣 || 0), 82),
+        財富: Math.max(Number(current?.stats?.財富 || 0), Math.max(75, Number(blueprint.wealth || 82)))
+      },
+      alive: current?.alive !== false,
+      status: current?.status || '巡行'
+    };
+    if (JSON.stringify(current) !== JSON.stringify(merged)) {
+      targetAgents[idx] = merged;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function buildLocationAnchorAgent(location = '', slot = 1) {
+  const loc = String(location || '').trim() || '襄陽城';
+  const index = Math.max(1, Math.min(3, Number(slot || 1)));
+  const locDiff = getLocationDifficultyValue(loc);
+  const element = normalizePetElement(index % 3 === 0 ? '草' : (locDiff >= 4 ? '火' : '水'));
+  const baseBattle = 16 + locDiff * 5 + index;
+  const baseHp = 86 + locDiff * 18 + index * 6;
+  const baseEnergy = 30 + locDiff * 8 + index * 2;
+  const safeLoc = sanitizeLocationIdPart(loc);
+  const id = `loc_anchor_${safeLoc}_${index}`;
+  return {
+    id,
+    name: `${loc}聯絡員${index}`,
+    title: `${loc}在地聯絡員`,
+    sect: '中立',
+    loc,
+    align: 'neutral',
+    localAnchor: true,
+    roaming: false,
+    personality: '熟悉地區動線與風險，會在關鍵時刻介入。',
+    stats: {
+      戰力: Math.max(18, baseBattle),
+      生命: Math.max(90, baseHp),
+      能量: Math.max(32, baseEnergy),
+      智商: 72 + locDiff,
+      魅力: 65 + index,
+      運氣: 60 + locDiff,
+      財富: 45 + locDiff * 4
+    },
+    skills: {},
+    inventory: ['地區通行證', '便攜檢測貼片'],
+    relationships: {},
+    memory: [],
+    petElement: element,
+    alive: true,
+    exp: 0,
+    party: null,
+    status: '駐守'
+  };
+}
+
+function ensureLocationNpcCoverage(targetAgents = []) {
+  if (!Array.isArray(targetAgents) || !Array.isArray(MAP_LOCATIONS)) return false;
+  let changed = false;
+
+  const isDigitalRoamer = (agent) => Boolean(agent?.roaming) && String(agent?.id || '').startsWith('digital_roamer_');
+
+  for (const location of MAP_LOCATIONS) {
+    const loc = String(location || '').trim();
+    if (!loc) continue;
+    const aliveHere = targetAgents.filter((agent) => {
+      if (!agent || !agent.id) return false;
+      if (String(agent.loc || '').trim() !== loc) return false;
+      if (agent.alive === false) return false;
+      if (isDigitalRoamer(agent)) return false;
+      return true;
+    });
+
+    const currentCount = aliveHere.length;
+    if (currentCount >= LOCATION_NPC_MIN_COUNT) continue;
+
+    for (let slot = 1; slot <= LOCATION_NPC_MIN_COUNT; slot++) {
+      const anchor = buildLocationAnchorAgent(loc, slot);
+      const idx = targetAgents.findIndex((agent) => String(agent?.id || '') === String(anchor.id || ''));
+      if (idx >= 0) {
+        const merged = { ...targetAgents[idx], ...anchor, alive: true, status: String(targetAgents[idx]?.status || '駐守') };
+        if (JSON.stringify(targetAgents[idx]) !== JSON.stringify(merged)) {
+          targetAgents[idx] = merged;
+          changed = true;
+        }
+      } else {
+        targetAgents.push(anchor);
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
 
 function deepClone(value) {
   try {
@@ -396,6 +799,7 @@ function createDigitalRoamerBlueprint(index = 0, group = 'Nemo') {
   const safeGroup = DIGITAL_ROAMER_GROUPS.includes(group) ? group : DIGITAL_ROAMER_GROUPS[0];
   const base = DIGITAL_ROAMER_GROUP_BASE[safeGroup] || DIGITAL_ROAMER_GROUP_BASE.Nemo;
   const moveIds = DIGITAL_ROAMER_GROUP_MOVES[safeGroup] || DIGITAL_ROAMER_GROUP_MOVES.Nemo;
+  const petElement = normalizePetElement(DIGITAL_ROAMER_GROUP_ELEMENT[safeGroup] || '水');
   const serial = String(index + 1).padStart(2, '0');
   const loc = pickDigitalRoamerSpawnLocation();
 
@@ -419,15 +823,14 @@ function createDigitalRoamerBlueprint(index = 0, group = 'Nemo') {
       運氣: 55 + (index % 4) * 3,
       財富: 70 + (index % 5) * 6
     },
-    skills: {
-      '偽裝滲透': { realm: '精通', proficiency: 260 + (index % 5) * 15 },
-      '交易話術': { realm: '精通', proficiency: 240 + (index % 5) * 12 }
-    },
+    skills: buildNpcSkillDictFromMoveIds(moveIds),
     inventory: ['偽裝徽章', '干擾發射器'],
     relationships: {},
     memory: [],
+    petElement,
     petTemplate: {
-      name: '無名伴寵',
+      name: `${safeGroup}影獸`,
+      element: petElement,
       attack: base.petAttack + (index % 3),
       hp: base.petHp + (index % 4) * 4,
       maxHp: base.petHp + (index % 4) * 4,
@@ -476,6 +879,8 @@ function ensureDigitalRoamers(targetAgents = []) {
       hiddenName: true,
       digitalGroup: blueprint.digitalGroup,
       personality: blueprint.personality,
+      petElement: blueprint.petElement,
+      skills: buildNpcSkillDictFromMoveIds(blueprint.petTemplate?.moveIds || []),
       petTemplate: deepClone(blueprint.petTemplate),
       alive: current?.alive !== false,
       status: current?.status || '游走'
@@ -520,6 +925,24 @@ function stepDigitalRoamerMovement(stepCount = 1) {
       if (!nextLoc || nextLoc === agent.loc) continue;
       agent.loc = nextLoc;
       agent.status = '游走';
+      moved += 1;
+    }
+  }
+  return moved;
+}
+
+function stepMentorMasterMovement(stepCount = 1) {
+  const steps = Math.max(1, Math.floor(Number(stepCount || 1)));
+  let moved = 0;
+  for (let step = 0; step < steps; step++) {
+    for (const agent of agents) {
+      if (!agent?.mentorMaster || agent?.roaming !== true) continue;
+      if (agent.alive === false) continue;
+      if (Math.random() > 0.36) continue;
+      const nextLoc = pickDigitalRoamerDestination(agent.loc);
+      if (!nextLoc || nextLoc === agent.loc) continue;
+      agent.loc = nextLoc;
+      agent.status = '巡行';
       moved += 1;
     }
   }
@@ -597,6 +1020,7 @@ function buildRoamingDigitalEncounterEnemy(location, options = {}) {
       isMonster: false,
       companionPet: {
         name: String(petTemplate.name || '無名伴寵'),
+        element: normalizePetElement(petTemplate.element || source.petElement || '水'),
         attack: petAttack,
         hp: petHp,
         maxHp: petHp
@@ -608,13 +1032,17 @@ function buildRoamingDigitalEncounterEnemy(location, options = {}) {
 
 function advanceRoamingDigitalVillains(options = {}) {
   const steps = Math.max(1, Math.floor(Number(options.steps || 1)));
-  const changedByEnsure = ensureDigitalRoamers(agents);
-  const moved = stepDigitalRoamerMovement(steps);
-  const changed = changedByEnsure || moved > 0;
+  const changedByRoamerEnsure = ensureDigitalRoamers(agents);
+  const changedByMentorEnsure = ensureMentorMasters(agents);
+  const changedByCoverage = ensureLocationNpcCoverage(agents);
+  const movedDigital = stepDigitalRoamerMovement(steps);
+  const movedMentor = stepMentorMasterMovement(steps);
+  const moved = movedDigital + movedMentor;
+  const changed = changedByRoamerEnsure || changedByMentorEnsure || changedByCoverage || moved > 0;
   if (changed && options.persist !== false) {
     saveWorld();
   }
-  return { changed, moved };
+  return { changed, moved, movedDigital, movedMentor };
 }
 
 const FACTION_WAR_CONFIG = {
@@ -1531,6 +1959,8 @@ function formatNpcSemanticRecallLine(item) {
 function getNearbyNpcIds(location, limit = 2) {
   const loc = String(location || '').trim();
   if (!loc) return [];
+  ensureMentorMasters(agents);
+  ensureLocationNpcCoverage(agents);
   const maxItems = Math.max(1, Number(limit) || 2);
   const sourceAgents = Array.isArray(agents) ? agents : [];
   const candidates = [];
@@ -1555,7 +1985,7 @@ function getNearbyNpcIds(location, limit = 2) {
     }
     return copy;
   };
-  const merged = [...shuffle(digital), ...shuffle(others)];
+  const merged = [...shuffle(others), ...shuffle(digital)];
   return merged.slice(0, maxItems).map((agent) => agent.id);
 }
 
@@ -1767,26 +2197,39 @@ function isNPCAlive(npcId) {
 function killNPC(npcId, killerId, isMonster = false) {
   initNPCStatus(npcId);
   const status = world.npcStatus[npcId];
-  
-  status.alive = false;
-  status.killedBy = killerId;
-  status.killedAt = Date.now();
-  status.respawnAt = Date.now() + (RESPAWN_HOURS * 60 * 60 * 1000);
-  
-  // 加入世界事件
+  const key = String(npcId || '').trim();
+  const persistDeath = Boolean(isMonster) || PERSISTENT_NPC_BOSS_IDS.has(key);
   const npc = getNPCById(npcId);
   const npcName = npc ? npc.name : npcId;
-  const typeLabel = isMonster ? '怪物' : 'NPC';
+  const killerPlayer = loadPlayer(killerId);
+  const killerDisplayName = String(killerPlayer?.name || '某位冒險者').trim();
   
-  pushWorldEvent({
-    day: world.day,
-    type: isMonster ? 'monster_death' : 'npc_death',
-    message: `💀 ${typeLabel} ${npcName} 已被玩家 ${killerId} 擊殺！預計 ${RESPAWN_HOURS} 小時後重生。`,
-    timestamp: Date.now()
-  });
-  
-  // 玩家被通緝
-  addWantedLevel(killerId, isMonster ? 1 : 3); // NPC = 3級, 怪物 = 1級
+  if (persistDeath) {
+    status.alive = false;
+    status.killedBy = killerId;
+    status.killedAt = Date.now();
+    status.respawnAt = Date.now() + (RESPAWN_HOURS * 60 * 60 * 1000);
+    const typeLabel = isMonster ? '怪物' : 'NPC';
+    pushWorldEvent({
+      day: world.day,
+      type: isMonster ? 'monster_death' : 'npc_death',
+      message: `💀 ${typeLabel} ${npcName} 已被 ${killerDisplayName} 擊殺！預計 ${RESPAWN_HOURS} 小時後重生。`,
+      timestamp: Date.now()
+    });
+    addWantedLevel(killerId, isMonster ? 1 : 3); // NPC = 3級, 怪物 = 1級
+  } else {
+    status.alive = true;
+    status.killedBy = null;
+    status.killedAt = null;
+    status.respawnAt = null;
+    pushWorldEvent({
+      day: world.day,
+      type: 'npc_defeat',
+      message: `⚔️ NPC ${npcName} 被 ${killerDisplayName} 擊退，已撤離現場。`,
+      timestamp: Date.now()
+    });
+    addWantedLevel(killerId, 2);
+  }
   
   saveWorld();
   return true;
@@ -2062,8 +2505,11 @@ const NPC_AGENTS = [
     relationships: { "總管太監": 50, "賞金獵人雷": 60 },
     memory: [] }
 ];
+NPC_AGENTS.forEach((npc, idx) => ensureNpcCombatProfile(npc, idx));
 let agents = NPC_AGENTS.map(a => ({ ...a, alive: true, exp: 0, party: null, status: "自由" }));
 ensureDigitalRoamers(agents);
+ensureMentorMasters(agents);
+ensureLocationNpcCoverage(agents);
 
 function getNPCById(npcId) {
   if (!npcId) return null;
@@ -2448,6 +2894,28 @@ function addEvent(msg) {
   pushWorldEvent(`[Day ${world.day}] ${msg}`);
 }
 
+function recordWorldEvent(message, type = 'player_action', extra = {}) {
+  const text = String(message || '').trim();
+  if (!text) return null;
+  const eventObj = {
+    day: Number(world?.day || 1),
+    type: String(type || 'player_action').trim() || 'player_action',
+    message: text.slice(0, 280),
+    timestamp: Date.now()
+  };
+  if (extra && typeof extra === 'object') {
+    const allowed = ['location', 'actor', 'target', 'impact'];
+    for (const key of allowed) {
+      const value = extra[key];
+      if (value === undefined || value === null) continue;
+      eventObj[key] = String(value).slice(0, 120);
+    }
+  }
+  pushWorldEvent(eventObj);
+  saveWorld();
+  return eventObj;
+}
+
 function saveWorld() {
   fs.writeFileSync(WORLD_FILE, JSON.stringify({ 
     world, 
@@ -2464,11 +2932,22 @@ function loadWorld() {
       const data = JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8'));
       world = data.world || world;
       agents = data.agents || agents;
+      if (!Array.isArray(agents)) {
+        agents = NPC_AGENTS.map(a => ({ ...a, alive: true, exp: 0, party: null, status: "自由" }));
+        changed = true;
+      }
       agentMemories = data.agentMemories || {};
       agentInventories = data.agentInventories || {};
     } catch (e) {}
   }
+  if (ensureMentorMasters(agents)) changed = true;
+  if (ensureLocationNpcCoverage(agents)) changed = true;
+  if (Array.isArray(agents)) {
+    agents.forEach((npc, idx) => ensureNpcCombatProfile(npc, idx));
+  }
   if (ensureDigitalRoamers(agents)) changed = true;
+  if (ensureMentorMasters(agents)) changed = true;
+  if (ensureLocationNpcCoverage(agents)) changed = true;
   if (!Array.isArray(world.events)) {
     world.events = [];
     changed = true;
@@ -2574,6 +3053,12 @@ function createPlayer(discordId, name, gender, sect) {
     companions: [],
     
     relationships: {},
+    social: {
+      friends: [],
+      friendRequestsIncoming: [],
+      friendRequestsOutgoing: [],
+      friendBattleStats: {}
+    },
 
     mainStory: {
       act: 1,
@@ -2608,6 +3093,14 @@ function createPlayer(discordId, name, gender, sect) {
     starterRewards: {
       fivePullClaimed: false,
       claimedAt: 0
+    },
+    codex: {
+      npcEncountered: {},
+      drawnMoves: {},
+      npcEncounterTotal: 0,
+      drawTotalCount: 0,
+      lastNpcEncounterAt: 0,
+      lastDrawAt: 0
     },
     
     // 狀態效果
@@ -2657,12 +3150,73 @@ function normalizeEnergyStatSchema(player) {
   delete player.maxStats.內力;
 }
 
+function normalizeFriendSocialSchema(player) {
+  if (!player || typeof player !== 'object') return;
+  const selfId = String(player.id || '').trim();
+  if (!player.social || typeof player.social !== 'object' || Array.isArray(player.social)) {
+    player.social = {};
+  }
+  const social = player.social;
+
+  const normalizeIdList = (list) => {
+    const out = [];
+    const seen = new Set();
+    const source = Array.isArray(list) ? list : [];
+    for (const raw of source) {
+      const id = String(raw || '').trim();
+      if (!id || id === selfId) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  };
+
+  const legacyFriends = Array.isArray(player.friends) ? player.friends : [];
+  const legacyIncoming = Array.isArray(player.friendRequestsIncoming) ? player.friendRequestsIncoming : [];
+  const legacyOutgoing = Array.isArray(player.friendRequestsOutgoing) ? player.friendRequestsOutgoing : [];
+
+  social.friends = normalizeIdList([...(Array.isArray(social.friends) ? social.friends : []), ...legacyFriends]);
+  social.friendRequestsIncoming = normalizeIdList([
+    ...(Array.isArray(social.friendRequestsIncoming) ? social.friendRequestsIncoming : []),
+    ...legacyIncoming
+  ]).filter((id) => !social.friends.includes(id));
+  social.friendRequestsOutgoing = normalizeIdList([
+    ...(Array.isArray(social.friendRequestsOutgoing) ? social.friendRequestsOutgoing : []),
+    ...legacyOutgoing
+  ]).filter((id) => !social.friends.includes(id));
+
+  if (!social.friendBattleStats || typeof social.friendBattleStats !== 'object' || Array.isArray(social.friendBattleStats)) {
+    social.friendBattleStats = {};
+  }
+  const normalizedStats = {};
+  for (const [rawId, rawStats] of Object.entries(social.friendBattleStats || {})) {
+    const id = String(rawId || '').trim();
+    if (!id || id === selfId) continue;
+    if (!social.friends.includes(id)) continue;
+    const stats = rawStats && typeof rawStats === 'object' ? rawStats : {};
+    normalizedStats[id] = {
+      wins: Math.max(0, Math.floor(Number(stats.wins || 0))),
+      losses: Math.max(0, Math.floor(Number(stats.losses || 0))),
+      total: Math.max(0, Math.floor(Number(stats.total || 0))),
+      lastResult: String(stats.lastResult || '').trim().slice(0, 24),
+      lastAt: Math.max(0, Number(stats.lastAt || 0))
+    };
+  }
+  social.friendBattleStats = normalizedStats;
+
+  delete player.friends;
+  delete player.friendRequestsIncoming;
+  delete player.friendRequestsOutgoing;
+}
+
 function savePlayer(player) {
   const playerDir = path.join(DATA_DIR, 'players');
   if (!fs.existsSync(playerDir)) fs.mkdirSync(playerDir, { recursive: true });
   if (player && typeof player === 'object') {
     player.alignment = normalizeAlignmentValue(player.alignment);
     normalizeEnergyStatSchema(player);
+    normalizeFriendSocialSchema(player);
   }
   normalizePlayerMemorySchema(player);
   ensureLongTermMemoryDigest(player, true);
@@ -2676,6 +3230,7 @@ function loadPlayer(discordId) {
     const player = JSON.parse(fs.readFileSync(playerFile, 'utf8'));
     player.alignment = normalizeAlignmentValue(player.alignment);
     normalizeEnergyStatSchema(player);
+    normalizeFriendSocialSchema(player);
     normalizePlayerMemorySchema(player);
     ensureLongTermMemoryDigest(player, false);
     ensurePlayerMemoryIndexed(player);
@@ -2692,6 +3247,7 @@ function getAllPlayers() {
     const player = normalizePlayerMemorySchema(JSON.parse(fs.readFileSync(path.join(playerDir, f), 'utf8')));
     player.alignment = normalizeAlignmentValue(player.alignment);
     normalizeEnergyStatSchema(player);
+    normalizeFriendSocialSchema(player);
     ensureLongTermMemoryDigest(player, false);
     ensurePlayerMemoryIndexed(player);
     return player;
@@ -3026,6 +3582,7 @@ module.exports = {
   getNPCDeathInfo,
   getRecentWorldEvents,
   getRespawnTime,
+  recordWorldEvent,
   
   // 通緝系統
   getPlayerWantedLevel,

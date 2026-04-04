@@ -260,9 +260,13 @@ function generateNarrative(result, attacker, defender, atkMove, defMove, context
     ? (defender.name || '防禦者') 
     : (attacker.name || '攻擊者');
   
+  const isPositiveNarrativeType = (rawType = '') => {
+    const text = String(rawType || '').trim();
+    return text === '正派' || text === '水' || text === '草';
+  };
   const winStyles = isAttackerWinner 
-    ? (attacker.type === '正派' ? NARRATIVE_STYLES.positive_win : NARRATIVE_STYLES.negative_win)
-    : (defender.type === '正派' ? NARRATIVE_STYLES.positive_win : NARRATIVE_STYLES.negative_win);
+    ? (isPositiveNarrativeType(attacker.type) ? NARRATIVE_STYLES.positive_win : NARRATIVE_STYLES.negative_win)
+    : (isPositiveNarrativeType(defender.type) ? NARRATIVE_STYLES.positive_win : NARRATIVE_STYLES.negative_win);
   
   narrative += '🏆 **裁判判定：** ' + winnerName + '勝利！\n\n';
   narrative += '📖 ' + winStyles[Math.floor(Math.random() * winStyles.length)] + '\n\n';
@@ -290,7 +294,11 @@ function generateReversalNarrative(result, attacker, defender) {
     ? (attacker.name || '攻擊者') 
     : (defender.name || '防禦者');
   
-  const winStyles = winner.type === '正派' 
+  const isPositiveNarrativeType = (rawType = '') => {
+    const text = String(rawType || '').trim();
+    return text === '正派' || text === '水' || text === '草';
+  };
+  const winStyles = isPositiveNarrativeType(winner.type)
     ? NARRATIVE_STYLES.positive_win 
     : NARRATIVE_STYLES.negative_win;
   

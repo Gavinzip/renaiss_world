@@ -52,6 +52,49 @@ const GACHA_CONFIG = {
   hpPerPoint: 0.2   // 每點 = 0.2 HP
 };
 
+function ensurePlayerCodexSchema(player) {
+  if (!player || typeof player !== 'object') return;
+  if (!player.codex || typeof player.codex !== 'object') player.codex = {};
+  if (!player.codex.drawnMoves || typeof player.codex.drawnMoves !== 'object') {
+    player.codex.drawnMoves = {};
+  }
+  if (!Number.isFinite(Number(player.codex.drawTotalCount))) {
+    player.codex.drawTotalCount = 0;
+  }
+  if (!Number.isFinite(Number(player.codex.lastDrawAt))) {
+    player.codex.lastDrawAt = 0;
+  }
+}
+
+function recordDrawMovesToCodex(player, draws = []) {
+  ensurePlayerCodexSchema(player);
+  if (!Array.isArray(draws) || draws.length === 0) return;
+  const now = Date.now();
+  const bucket = player.codex.drawnMoves;
+  let addedCount = 0;
+  for (const item of draws) {
+    const move = item?.move;
+    const moveId = String(move?.id || '').trim();
+    if (!moveId) continue;
+    const existing = bucket[moveId] && typeof bucket[moveId] === 'object' ? bucket[moveId] : {};
+    const prevCount = Math.max(0, Number(existing.count || 0));
+    bucket[moveId] = {
+      id: moveId,
+      name: String(move?.name || existing.name || moveId),
+      tier: Math.max(1, Math.min(3, Number(move?.tier || item?.tier || existing.tier || 1))),
+      element: String(move?.element || existing.element || '未知'),
+      count: prevCount + 1,
+      firstAt: prevCount > 0 ? Number(existing.firstAt || now) : now,
+      lastAt: now
+    };
+    addedCount += 1;
+  }
+  if (addedCount > 0) {
+    player.codex.drawTotalCount = Math.max(0, Number(player.codex.drawTotalCount || 0)) + addedCount;
+    player.codex.lastDrawAt = now;
+  }
+}
+
 // ============== 扭蛋抽招 ==============
 function drawMovesCore(player, count = 1, options = {}) {
   const cost = Number(options.cost || 0);
@@ -75,6 +118,8 @@ function drawMovesCore(player, count = 1, options = {}) {
   for (let i = 0; i < count; i++) {
     results.push(drawSingleMove(player));
   }
+
+  recordDrawMovesToCodex(player, results);
   
   // 計算總價值
   const totalValue = results.reduce((sum, r) => sum + getMoveValue(r.move), 0);

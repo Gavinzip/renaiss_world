@@ -510,9 +510,10 @@ async function getPlayerWalletAssets(discordUserId) {
 
 // ============== 根據 FMV 計算可擁有寵物數 ==============
 function getMaxPetsByFMV(cardFMV) {
-  if (cardFMV >= 5000) return 3;   // FMV 5000+ → 3 隻
-  if (cardFMV >= 1000) return 2;  // FMV 1000+ → 2 隻
-  return 1;                         // < 1000 → 1 隻
+  const fmv = Number(cardFMV || 0);
+  if (fmv > 1000) return 3; // > 1000U → 3 隻
+  if (fmv > 100) return 2;  // > 100U  → 2 隻
+  return 1;                 // 其餘 → 1 隻
 }
 
 // ============== 根據 RNS 計算可擁有寵物數（向後兼容）==============

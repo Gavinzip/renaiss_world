@@ -252,9 +252,9 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act1_anomaly' && count >= 4) {
     markNode(state, 2, 'act2_whispers', 'Act2 -> 流言啟動');
-    triggered.appendText = '📖 **主線異動**：市場流言升溫，大家開始質疑那支「熱心隊伍」的貨源。';
-    triggered.announcement = '🗣️ 市場流言升溫：某支常幫新手的隊伍，帳本來源出現異常。';
-    triggered.memory = '你聽見關於「友善供應隊伍」貨源異常的傳言。';
+    triggered.appendText = '📖 **主線異動**：市場流言升溫，開始有人反映「便宜貨上架很快、實際成交很慢」，那支熱心隊伍的貨流出現異常。';
+    triggered.announcement = '🗣️ 市場流言升溫：某支常幫新手的隊伍，帳本來源與實際成交量出現異常。';
+    triggered.memory = '你聽見「某低價供應線看似熱賣、其實流動性很差」的傳言。';
     return triggered;
   }
 
@@ -267,8 +267,8 @@ function maybeTriggerPassiveStory(player, context = {}) {
       return triggered;
     }
     markNode(state, 3, 'act3_marked', 'Act3 -> 被盯上');
-    triggered.appendText = '📖 **主線異動**：你在追查「友善供應」的真相時被標記，暗潮勢力已注意到你。';
-    triggered.memory = '你在追查友善供應鏈時，被暗潮勢力列入觀察名單。';
+    triggered.appendText = '📖 **主線異動**：你在追查「友善供應」時被標記；黑市風聲指出，該線路近期大量掛單卻賣不動，甚至傳出「宣稱有貨、實際無貨」的交易糾紛。';
+    triggered.memory = '你聽見低價供應鏈出現「流動性差、空單偽造」的風聲，並因此被對方注意到。';
     return triggered;
   }
 

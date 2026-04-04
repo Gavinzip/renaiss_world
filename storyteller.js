@@ -72,8 +72,11 @@ const CHOICE_TIMEOUT_MS = Math.max(12000, Number(process.env.CHOICE_TIMEOUT_MS |
 const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(10000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000) * 2);
 const CHOICE_MAX_TOKENS = Math.max(700, Number(process.env.CHOICE_MAX_TOKENS || 3000));
 const CHOICE_OUTPUT_COUNT = 5;
+const BATTLE_CADENCE_TURNS = Math.max(3, Math.min(10, Number(process.env.BATTLE_CADENCE_TURNS || 5)));
+const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 3)));
+const RIVAL_NAME_REVEAL_ACT = Math.max(1, Math.min(6, Number(process.env.RIVAL_NAME_REVEAL_ACT || 3)));
 const DIGITAL_MASK_TURNS = Math.max(1, Number(process.env.DIGITAL_MASK_TURNS || 12));
-const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(12, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 6)));
+const LOCATION_ARC_COMPLETE_TURNS = Math.max(3, Math.min(16, Number(process.env.LOCATION_ARC_COMPLETE_TURNS || 10)));
 const PERF_MAX_SAMPLES = Math.max(10, Math.min(300, Number(process.env.AI_PERF_MAX_SAMPLES || 80)));
 
 const AI_PERF = {
@@ -207,6 +210,102 @@ function formatRoamingDigitalPresence(location = '', limit = 2) {
   return list
     .map((entry, idx) => `無名滲透者${idx + 1}(第${String(entry.group || 'Nemo')}組)`)
     .join('、');
+}
+
+function normalizeNpcAlignValue(raw = '') {
+  const text = String(raw || '').trim().toLowerCase();
+  if (text === 'evil' || text === 'bad' || text === 'villain') return 'evil';
+  if (text === 'good' || text === 'hero') return 'good';
+  if (text === 'neutral') return 'neutral';
+  return '';
+}
+
+function isHostileNpcRecord(npc = null) {
+  if (!npc || typeof npc !== 'object') return false;
+  const align = normalizeNpcAlignValue(npc.align);
+  if (align === 'evil') return true;
+  const identity = [npc.name || '', npc.title || '', npc.sect || ''].join(' ');
+  return /(digital|暗潮|黑市|滲透|叛徒|賊|匪|殺手|刺客|掠奪)/iu.test(identity);
+}
+
+function getWantedPressure(player = null) {
+  if (!player || typeof player !== 'object') return 0;
+  const localWanted = Math.max(0, Number(player?.wanted || 0));
+  const playerId = String(player?.id || '').trim();
+  let coreWanted = 0;
+  if (playerId && CORE && typeof CORE.getPlayerWantedLevel === 'function') {
+    coreWanted = Math.max(0, Number(CORE.getPlayerWantedLevel(playerId) || 0));
+  }
+  return Math.max(localWanted, coreWanted);
+}
+
+function getBattleCadenceInfo(player = null) {
+  const turns = Math.max(0, Number(player?.storyTurns || 0));
+  const span = BATTLE_CADENCE_TURNS;
+  const step = (turns % span) + 1;
+  return {
+    turns,
+    span,
+    step,
+    nearConflict: step >= Math.max(2, span - 1),
+    dueConflict: step === span
+  };
+}
+
+function getNearbyHostileNpcSummary(location = '', limit = 3) {
+  const loc = String(location || '').trim();
+  if (!loc || !CORE || typeof CORE.getNearbyNpcIds !== 'function') {
+    return { names: [], count: 0 };
+  }
+  const ids = CORE.getNearbyNpcIds(loc, 8);
+  if (!Array.isArray(ids) || ids.length <= 0) return { names: [], count: 0 };
+  const seen = new Set();
+  const names = [];
+  for (const npcId of ids) {
+    const info = typeof CORE.getAgentFullInfo === 'function'
+      ? CORE.getAgentFullInfo(npcId)
+      : null;
+    if (!info) continue;
+    if (String(info.loc || '').trim() !== loc) continue;
+    if (!isHostileNpcRecord(info)) continue;
+    const name = String(info.name || npcId || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+    if (names.length >= Math.max(1, Number(limit || 3))) break;
+  }
+  return { names, count: names.length };
+}
+
+function buildIslandKnowledgeBoundaryPrompt(location = '', stage = 0, stageCount = 8, completed = false) {
+  if (!ISLAND_STORY || typeof ISLAND_STORY.getStoryRoadmap !== 'function') return '';
+  const loc = String(location || '').trim();
+  if (!loc) return '';
+  const safeStageCount = Math.max(1, Number(stageCount || 8));
+  const roadmap = ISLAND_STORY.getStoryRoadmap(loc, safeStageCount);
+  if (!Array.isArray(roadmap) || roadmap.length <= 0) return '';
+  if (completed) {
+    return [
+      '【島嶼知識邊界】',
+      '本島主線已完成：可自由探索，不需再受「僅揭露到某段」限制。',
+      '但若提及其他島關鍵真相，仍需透過當下行動或新證據逐步揭露。'
+    ].join('\n');
+  }
+
+  const visibleStage = Math.max(1, Math.min(safeStageCount, Number(stage || 1)));
+  const revealed = roadmap.slice(0, visibleStage).map((goal, idx) => `${idx + 1}. ${goal}`);
+  const nextHint = String(roadmap[visibleStage] || '').trim();
+  const hiddenCount = Math.max(0, roadmap.length - visibleStage);
+  return [
+    '【島嶼知識邊界（硬規則）】',
+    `目前只可把「第 1~${visibleStage} 段」內容當成已知事實；第 ${visibleStage + 1} 段以後禁止提前當成既定真相。`,
+    '已揭露段落：',
+    ...revealed,
+    nextHint
+      ? `可預告方向（不可下結論）：下一段將朝「${nextHint}」推進`
+      : '可預告方向：本島段落已接近收束',
+    `尚未揭露段落數：${hiddenCount}`
+  ].join('\n');
 }
 
 function sanitizeNarrativeText(text = '') {
@@ -953,6 +1052,18 @@ function buildInventoryContextText(player = {}, playerLang = 'zh-TW') {
   return items.slice(0, 24).join('、');
 }
 
+function getAppraisalExampleLine(maxCount = 8) {
+  const list = Array.isArray(WORLD_LORE?.WORLD_LORE?.appraisalExamples)
+    ? WORLD_LORE.WORLD_LORE.appraisalExamples
+    : [];
+  if (list.length <= 0) return '古董機械錶、封存科技晶片、能量核心碎片';
+  return list
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, Math.max(3, Number(maxCount || 8)))
+    .join('、');
+}
+
 function buildStoryFocusForChoices(rawStory = '') {
   const story = String(rawStory || '').replace(/\s+/g, ' ').trim();
   if (!story) return { lead: '', tail: '', closing: '' };
@@ -1262,13 +1373,8 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
   }
 
   if (duplicateCount > 0) issues.push(`有 ${duplicateCount} 個重複選項`);
-  const hasPreviousStory = String(previousStory || '').trim().length > 0;
-  const requiredAnchorHits = (!hasPreviousStory || anchorList.length === 0)
-    ? 0
-    : 1;
-  if (requiredAnchorHits > 0 && anchorHitCount < requiredAnchorHits) {
-    issues.push(`至少 ${requiredAnchorHits} 個選項需要貼合已出現元素，目前只有 ${anchorHitCount} 個`);
-  }
+  // 「是否命中過往元素」改為提示詞引導，不作為硬性失敗條件，
+  // 避免選項已合理但因命中門檻造成整組失敗。
 
   // 威脅應對改由提示詞引導，不作為硬性擋下條件，避免故事已成功但選項為空。
   return issues;
@@ -1483,14 +1589,19 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const islandState = ISLAND_STORY.getIslandStoryState(player, location) || null;
   const islandGuidePrompt = ISLAND_STORY.buildIslandGuidancePrompt(player, location);
   const islandStage = Number(islandState?.stage || 0);
-  const islandStageCount = Math.max(1, Number(islandState?.stageCount || 3));
+  const islandStageCount = Math.max(1, Number(islandState?.stageCount || 8));
   const islandCompleted = Boolean(islandState?.completed);
+  const islandKnowledgePrompt = buildIslandKnowledgeBoundaryPrompt(location, islandStage, islandStageCount, islandCompleted);
+  const islandRoadmapPrompt = ISLAND_STORY && typeof ISLAND_STORY.buildStoryRoadmapPrompt === 'function'
+    ? ISLAND_STORY.buildStoryRoadmapPrompt(location, islandStage, islandStageCount)
+    : '';
   const mainStoryState = typeof MAIN_STORY.ensureMainStoryState === 'function'
     ? MAIN_STORY.ensureMainStoryState(player)
     : null;
-  const revealRivalName = Number(mainStoryState?.act || 1) >= 5;
+  const revealRivalName = Number(mainStoryState?.act || 1) >= RIVAL_NAME_REVEAL_ACT;
   const mainStoryBrief = MAIN_STORY.getMainStoryBrief(player);
   const loreSnippet = WORLD_LORE.getLorePromptSnippet({ revealRivalName, newbieDeception: newbieMask });
+  const appraisalExamples = getAppraisalExampleLine(8);
   const rivalDisclosureRule = revealRivalName
     ? '可使用第二勢力正式名稱（Digital）描述局勢。'
     : (newbieMask
@@ -1509,6 +1620,15 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     ? `玩家已在地圖設定座標導航目標：${navigationTarget}。本段敘事必須讓行動朝該地點推進，並在環境描寫中呈現前進路徑。`
     : '';
   const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
+  const battleCadence = getBattleCadenceInfo(player);
+  const battleCadenceHint = battleCadence.dueConflict
+    ? '本輪是戰鬥節奏點（5/5），可把衝突推進到可交手邊緣，但仍需符合當前鋪陳。'
+    : (battleCadence.nearConflict
+      ? '本輪接近戰鬥節奏點（4/5），可升高張力，先鋪備戰/追蹤/對峙。'
+      : '本輪非強制衝突點，優先維持線索連續與地區推進。');
+  const wantedPressure = getWantedPressure(player);
+  const nearbyHostile = getNearbyHostileNpcSummary(location, 3);
+  const nearbyHostileHint = nearbyHostile.count > 0 ? nearbyHostile.names.join('、') : '（附近暫無明確敵對 NPC）';
   const npcs = RENAISS_NPCS[location] || [];
   
   // 檢查 NPC 狀態
@@ -1594,6 +1714,9 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 地區篇章進度：第 ${Math.max(1, arcMeta.turnsInLocation)} / ${arcMeta.targetTurns} 段（階段：${arcMeta.phase}）
 已完成跨區篇章：${arcMeta.completedLocations}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
+戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格｜${battleCadenceHint}
+通緝熱度：${wantedPressure}（>=${WANTED_AMBUSH_MIN_LEVEL} 時，敵對勢力更可能主動接近）
+附近敵對 NPC：${nearbyHostileHint}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
 導航目標：${navigationTarget || '（未設定）'}
@@ -1604,6 +1727,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 主線進度：${mainStoryBrief}
 世界設定：
 ${loreSnippet}
+可被鑑定的物件示例：${appraisalExamples}
 勢力揭露規則：${rivalDisclosureRule}
 語言設定：${playerLang}
 ${npcStatusText}
@@ -1613,6 +1737,8 @@ ${inventorySection}
 ${npcDialogueSection}
 ${mainlinePinsSection}
 ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
+${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
+${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationInstruction ? `\n【導航約束】\n${navigationInstruction}` : ''}
 ${openingBeatSection}
 
@@ -1650,6 +1776,13 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 26. 若「島嶼劇情狀態」顯示進行中，優先推進該地在地衝突與線索，不要跳過島內收束直接跨區
 27. 若「島嶼劇情狀態」顯示已完成，移除硬引導語氣，改為開放世界敘事
 28. 「玩家：${safePlayerName}」是主角唯一名稱，禁止把同名當成其他 NPC 或通訊器另一端人物；若要新增角色，必須使用不同名字
+29. 避免地理刻板描寫與舊套路意象（例如沙漠駱駝、武林門派式修行），改以「收藏品真偽、供應鏈、滲透、證據」推進劇情
+30. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可提前揭露為已知真相，只能做模糊預告
+31. 戰鬥節奏僅作敘事節拍參考：第 4/5 可拉高張力、第 5/5 可推向衝突，但不可硬跳不連貫場景
+32. 若通緝熱度 >= ${WANTED_AMBUSH_MIN_LEVEL}，可讓敵對勢力主動接近，但要明確交代「誰靠近、如何接觸」
+33. 若要讓 NPC 主動出現，必須在當前地點或附近可互動地點內合理登場，不可跨區瞬移
+34. 高通緝壓迫需採「漸進式」：先可疑視線/尾隨，再試探接觸，最後才進入正面衝突；不可一開場就連續跳多名追兵
+35. 若提到「可鑑定品」，優先使用「可被鑑定的物件示例」中的物件，避免憑空造出不合世界觀的品項
 
 直接開始講：`;
 
@@ -1723,8 +1856,12 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const islandState = ISLAND_STORY.getIslandStoryState(player, location) || null;
   const islandGuidePrompt = ISLAND_STORY.buildIslandGuidancePrompt(player, location);
   const islandStage = Number(islandState?.stage || 0);
-  const islandStageCount = Math.max(1, Number(islandState?.stageCount || 3));
+  const islandStageCount = Math.max(1, Number(islandState?.stageCount || 8));
   const islandCompleted = Boolean(islandState?.completed);
+  const islandKnowledgePrompt = buildIslandKnowledgeBoundaryPrompt(location, islandStage, islandStageCount, islandCompleted);
+  const islandRoadmapPrompt = ISLAND_STORY && typeof ISLAND_STORY.buildStoryRoadmapPrompt === 'function'
+    ? ISLAND_STORY.buildStoryRoadmapPrompt(location, islandStage, islandStageCount)
+    : '';
   const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
   const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
@@ -1734,6 +1871,18 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
   const navigationTarget = String(player?.navigationTarget || '').trim();
   const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
+  const battleCadence = getBattleCadenceInfo(player);
+  const wantedPressure = getWantedPressure(player);
+  const nearbyHostile = getNearbyHostileNpcSummary(location, 3);
+  const nearbyHostileHint = nearbyHostile.count > 0 ? nearbyHostile.names.join('、') : '（附近暫無明確敵對 NPC）';
+  const cadenceRequirement = battleCadence.dueConflict
+    ? `本回合為戰鬥節奏點（第 ${battleCadence.step}/${battleCadence.span} 格），5 個選項中至少 1 個要是衝突相關，且可直接進入戰鬥。`
+    : (battleCadence.nearConflict
+      ? `本回合接近戰鬥節奏點（第 ${battleCadence.step}/${battleCadence.span} 格），至少 1 個選項要是衝突預備（追蹤/備戰/對峙/攔截）。`
+      : `本回合為節奏第 ${battleCadence.step}/${battleCadence.span} 格，衝突選項非硬性，但若劇情有威脅需自然提供。`);
+  const wantedRequirement = wantedPressure >= WANTED_AMBUSH_MIN_LEVEL
+    ? `玩家通緝熱度 ${wantedPressure}（>=${WANTED_AMBUSH_MIN_LEVEL}）：若附近有敵對 NPC，至少 1 個選項可表現「對方主動接近/尾隨/試探」。`
+    : `玩家通緝熱度 ${wantedPressure}：可選擇不主動引戰。`;
   const petName = pet?.name || '寵物';
   const playerName = player.name || '冒險者';
   const npcs = RENAISS_NPCS[location] || [];
@@ -1781,6 +1930,9 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 位置：${location} - ${locDesc}
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
+戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格
+通緝熱度：${wantedPressure}
+附近敵對 NPC：${nearbyHostileHint}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
 導航目標：${navigationTarget || '（未設定）'}
@@ -1793,6 +1945,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 最近已做過的選擇（避免重複）：${recentChoiceText || '（無）'}
 ${memorySection}
 ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
+${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
+${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationTarget ? `\n【導航約束】\n玩家已在地圖設定導航目標「${navigationTarget}」，至少 1 個選項必須是朝該地點推進的具體行動。` : ''}
 
 【完整故事全文（必讀）】
@@ -1825,9 +1979,13 @@ ${anchorText}
 10. 避免與「最近已做過的選擇」重複同動詞同目的（例如連續多次「檢測」「詢問」「追查同線索」）
 11. 5 個選項要有足夠發散度，避免都在做同一件事
 12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
-13. 若島嶼劇情進行中，至少 2 個選項要明確推進島內主題（來自島內引導段）
+13. 若島嶼劇情進行中，至少 1 個選項要明確推進島內主題（來自島內引導段），且不得超過 1 個主線強引導選項
 14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例
 15. 玩家名稱「${playerName}」只能指主角本人；禁止再創建同名 NPC
+16. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可直接當成已知真相寫進選項
+17. ${cadenceRequirement}
+18. ${wantedRequirement}
+19. 若通緝熱度偏高，5 個選項中最多只允許 1 個「敵對主動逼近/立即戰鬥」類，其餘需維持調查、移動、社交或交易分散度
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗

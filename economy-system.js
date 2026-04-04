@@ -13,13 +13,18 @@ const path = require('path');
 
 const PROTECTED_ITEMS = new Set(['乾糧一包', '水囊']);
 
-const RARITY_WEIGHTS = [
-  { key: '普通', baseWeight: 58, multiplier: 1.0 },
-  { key: '精良', baseWeight: 24, multiplier: 1.45 },
-  { key: '稀有', baseWeight: 12, multiplier: 2.2 },
-  { key: '史詩', baseWeight: 5, multiplier: 3.6 },
-  { key: '傳說', baseWeight: 1, multiplier: 6.2 }
+const LOOT_RARITY_TIERS = [
+  { key: '普通', multiplier: 1.0 },
+  { key: '稀有', multiplier: 1.0 },
+  { key: '史詩', multiplier: 1.0 }
 ];
+const LOOT_BASELINE_RATES = { 普通: 80, 稀有: 15, 史詩: 5 };
+const LOOT_DIFFICULTY_SLOPE = Math.max(1, Number(process.env.LOOT_DIFFICULTY_SLOPE || 8));
+const LOOT_VALUE_RANGES = {
+  普通: { min: 15, max: 100 },
+  稀有: { min: 120, max: 500 },
+  史詩: { min: 550, max: 2000 }
+};
 
 const APPRAISERS = {
   renaiss: {
@@ -44,6 +49,7 @@ const TROPHY_PREFIX = ['裂痕', '燃霜', '幽鋒', '荒潮', '銀葬', '玄骨
 const MAX_APPRAISAL_HISTORY = 28;
 const MINIMAX_MODEL = 'MiniMax-M2.5';
 const AI_TIMEOUT_MS = 12000;
+const LOOT_AI_TIMEOUT_MS = 4500;
 const SCRATCH_STATE_FILE = path.join(__dirname, 'data', 'scratch_lottery.json');
 const PLAYER_MARKET_FILE = path.join(__dirname, 'data', 'player_market_board.json');
 const SCRATCH_COST = 100;
@@ -988,14 +994,44 @@ ${marketLens}
   return cleaned.slice(0, 180);
 }
 
-function rollRarity(luck = 50, difficulty = 3) {
-  const bonus = (Number(luck || 50) - 50) * 0.12 + (Number(difficulty || 3) - 3) * 2.8;
-  const bag = RARITY_WEIGHTS.map((r) => ({
+function buildRarityWeights(luck = 50, difficulty = 1) {
+  const rates = { ...LOOT_BASELINE_RATES };
+  const safeDifficulty = clamp(Number(difficulty || 1), 1, 6);
+  const safeLuck = clamp(Number(luck || 50), 1, 100);
+
+  // 難度越高，從普通轉移到稀有/史詩，基準仍是 D1=80/15/5
+  const difficultyShift = (safeDifficulty - 1) * LOOT_DIFFICULTY_SLOPE;
+  rates.普通 -= difficultyShift;
+  rates.稀有 += Math.round(difficultyShift * 0.65);
+  rates.史詩 += difficultyShift - Math.round(difficultyShift * 0.65);
+
+  // 幸運值僅影響稀有度分佈，不影響是否掉落
+  const luckShift = clamp((safeLuck - 50) / 2.5, -10, 10);
+  rates.普通 -= luckShift * 0.8;
+  rates.稀有 += luckShift * 0.5;
+  rates.史詩 += luckShift * 0.3;
+
+  rates.普通 = Math.max(20, rates.普通);
+  rates.稀有 = Math.max(5, rates.稀有);
+  rates.史詩 = Math.max(2, rates.史詩);
+
+  const total = rates.普通 + rates.稀有 + rates.史詩;
+  if (total <= 0) return { 普通: 80, 稀有: 15, 史詩: 5 };
+  return {
+    普通: (rates.普通 / total) * 100,
+    稀有: (rates.稀有 / total) * 100,
+    史詩: (rates.史詩 / total) * 100
+  };
+}
+
+function rollRarity(luck = 50, difficulty = 1) {
+  const weights = buildRarityWeights(luck, difficulty);
+  const bag = LOOT_RARITY_TIERS.map((r) => ({
     ...r,
-    weight: Math.max(0.2, r.baseWeight + (r.key === '普通' ? -bonus : bonus * (r.key === '傳說' ? 0.18 : 0.08)))
+    weight: Number(weights[r.key] || 0)
   }));
   const total = bag.reduce((sum, item) => sum + item.weight, 0);
-  let roll = Math.random() * total;
+  let roll = Math.random() * Math.max(1, total);
   for (const item of bag) {
     roll -= item.weight;
     if (roll <= 0) return item;
@@ -1003,11 +1039,153 @@ function rollRarity(luck = 50, difficulty = 3) {
   return bag[0];
 }
 
-function normalizeValue(baseValue, rarityKey, rarityMultiplier) {
-  const base = Math.max(5, Number(baseValue || 5));
-  const withRarity = Math.round(base * Number(rarityMultiplier || 1));
-  const rarityBonus = rarityKey === '傳說' ? randInt(35, 65) : rarityKey === '史詩' ? randInt(18, 30) : 0;
-  return Math.max(5, withRarity + rarityBonus);
+function getLootValueRange(rarityKey = '普通') {
+  return LOOT_VALUE_RANGES[rarityKey] || LOOT_VALUE_RANGES.普通;
+}
+
+function rollValueByRarity(rarityKey = '普通') {
+  const range = getLootValueRange(rarityKey);
+  return randInt(range.min, range.max);
+}
+
+function parseJsonFromText(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1].trim() : text;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  const jsonText = start >= 0 && end > start ? candidate.slice(start, end + 1) : candidate;
+  try {
+    return JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeLootName(name = '', fallback = '未知素材') {
+  const cleaned = String(name || '')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/[「」"']/g, '')
+    .replace(/\s+/g, '')
+    .trim()
+    .slice(0, 18);
+  return cleaned || fallback;
+}
+
+function sanitizeLootDesc(desc = '', fallback = '') {
+  const cleaned = String(desc || '')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+  return cleaned || fallback;
+}
+
+function buildFallbackLootFlavor(meta = {}) {
+  const rarity = String(meta.rarity || '普通');
+  const enemyName = String(meta.enemyName || '敵人').replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '') || '敵人';
+  const location = String(meta.location || '未知地點');
+  const category = String(meta.category || '素材');
+  const value = rollValueByRarity(rarity);
+
+  if (meta.sourceType === 'combat') {
+    return {
+      name: `${pickOne(TROPHY_PREFIX, '碎影')}${enemyName}${pickOne(['徽章', '碎片', '核心', '殘晶'], '碎片')}`,
+      desc: `來自 ${enemyName} 的${rarity}戰鬥證物。`,
+      value
+    };
+  }
+  if (meta.sourceType === 'forage') {
+    return {
+      name: `${pickOne(RARE_PLANTS, '野生草藥')}${pickOne(['葉', '莖', '萃露', '花粉'], '萃露')}`,
+      desc: `${location} 採集取得的${rarity}${category}。`,
+      value
+    };
+  }
+  if (meta.sourceType === 'hunt') {
+    const animalName = String(meta.animalName || '獵物');
+    return {
+      name: `${animalName}${pickOne(['皮毛', '骨片', '腺囊', '紋刺'], '素材')}`,
+      desc: `${location} 狩獵取得的${rarity}${category}。`,
+      value
+    };
+  }
+  return {
+    name: `${pickOne(RARE_ORES, '古礦石')}${pickOne(['原礦', '晶核', '紋印', '殘片'], '原礦')}`,
+    desc: `${location} 探索發現的${rarity}${category}。`,
+    value
+  };
+}
+
+async function generateLootFlavorWithAI(meta = {}) {
+  const fallback = buildFallbackLootFlavor(meta);
+  const apiKey = String(process.env.MINIMAX_API_KEY || '').trim();
+  if (!apiKey) return fallback;
+
+  const rarity = String(meta.rarity || '普通');
+  const valueRange = getLootValueRange(rarity);
+  const lang = String(meta.lang || 'zh-TW');
+  const languageRule = lang === 'en'
+    ? 'Output in English.'
+    : lang === 'zh-CN'
+      ? '请使用简体中文输出。'
+      : '請使用繁體中文輸出。';
+  const sourceType = String(meta.sourceType || 'combat');
+  const category = String(meta.category || '素材');
+  const location = String(meta.location || '未知地點');
+  const enemyName = String(meta.enemyName || '');
+  const animalName = String(meta.animalName || '');
+  const sourceHint = sourceType === 'combat'
+    ? `戰鬥來源：${enemyName || '敵人'}`
+    : sourceType === 'hunt'
+      ? `狩獵來源：${animalName || '獵物'}`
+      : sourceType === 'forage'
+        ? '採集來源：自然資源'
+        : '探索來源：遺跡/礦脈';
+
+  const prompt = `你是遊戲掉落命名助手，請回傳 JSON 物件，不要其他文字。
+欄位：
+- name: 掉落物名稱（2~12字，不要空格、不要引號）
+- desc: 一句描述（12~40字）
+- value: 整數價格
+
+條件：
+- 類型：${category}
+- 稀有度：${rarity}
+- 地點：${location}
+- ${sourceHint}
+- 價格必須介於 ${valueRange.min} 到 ${valueRange.max}
+- 名稱不要和「${fallback.name}」完全相同
+- ${languageRule}`;
+
+  const body = JSON.stringify({
+    model: MINIMAX_MODEL,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 1.0,
+    top_p: 0.95,
+    max_tokens: 220
+  });
+
+  try {
+    const raw = await requestMiniMax(body, apiKey, LOOT_AI_TIMEOUT_MS);
+    const parsed = parseJsonFromText(raw);
+    if (!parsed || typeof parsed !== 'object') return fallback;
+    const safeName = sanitizeLootName(parsed.name, fallback.name);
+    const safeDesc = sanitizeLootDesc(parsed.desc, fallback.desc);
+    const safeValue = clamp(
+      Number(parsed.value || fallback.value),
+      valueRange.min,
+      valueRange.max
+    );
+    return {
+      name: safeName,
+      desc: safeDesc,
+      value: Math.round(safeValue)
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 function makeTradeGood(name, category, rarity, value, origin, desc = '') {
@@ -1031,42 +1209,88 @@ function addTradeGood(player, good) {
   return good;
 }
 
-function createCombatLoot(enemy, location = '', luck = 50) {
+async function createCombatLoot(enemy, location = '', luck = 50, options = {}) {
   const enemyName = String(enemy?.name || '敵人').replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '') || '敵人';
   const difficulty = getLocationDifficulty(location);
   const rarity = rollRarity(luck, difficulty);
-  const base = 22 + difficulty * 12 + randInt(6, 24);
-  const value = normalizeValue(base, rarity.key, rarity.multiplier);
   const type = pickOne(['戰利品', '怪物素材', '殘件'], '戰利品');
-  const name = `${pickOne(TROPHY_PREFIX, '碎影')}${enemyName}${pickOne(['徽章', '碎片', '核心', '爪痕', '殘晶'], '碎片')}`;
-  return makeTradeGood(name, type, rarity.key, value, `${location} 戰鬥掉落`, `從 ${enemyName} 身上取得的戰鬥證物。`);
+  const flavored = await generateLootFlavorWithAI({
+    sourceType: 'combat',
+    rarity: rarity.key,
+    category: type,
+    location,
+    enemyName,
+    lang: options.lang || 'zh-TW'
+  });
+  return makeTradeGood(
+    flavored.name,
+    type,
+    rarity.key,
+    flavored.value,
+    `${location} 戰鬥掉落`,
+    flavored.desc || `從 ${enemyName} 身上取得的戰鬥證物。`
+  );
 }
 
-function createForageLoot(location = '', luck = 50) {
+async function createForageLoot(location = '', luck = 50, options = {}) {
   const difficulty = getLocationDifficulty(location);
   const rarity = rollRarity(luck, Math.max(2, difficulty));
-  const herbName = pickOne(RARE_PLANTS, '野生草藥');
-  const base = 15 + difficulty * 8 + randInt(4, 18);
-  const value = normalizeValue(base, rarity.key, rarity.multiplier);
-  return makeTradeGood(herbName, '草藥', rarity.key, value, `${location} 採集`, '可作煉藥或交易素材。');
+  const flavored = await generateLootFlavorWithAI({
+    sourceType: 'forage',
+    rarity: rarity.key,
+    category: '草藥',
+    location,
+    lang: options.lang || 'zh-TW'
+  });
+  return makeTradeGood(
+    flavored.name,
+    '草藥',
+    rarity.key,
+    flavored.value,
+    `${location} 採集`,
+    flavored.desc || '可作煉藥或交易素材。'
+  );
 }
 
-function createHuntLoot(animalName = '獵物', location = '', luck = 50) {
+async function createHuntLoot(animalName = '獵物', location = '', luck = 50, options = {}) {
   const difficulty = getLocationDifficulty(location);
   const rarity = rollRarity(luck, difficulty);
-  const base = 18 + difficulty * 9 + randInt(5, 20);
-  const value = normalizeValue(base, rarity.key, rarity.multiplier);
-  const name = `${animalName} ${pickOne(['皮毛', '角質', '精肉', '腺囊'], '素材')}`;
-  return makeTradeGood(name, '獵物', rarity.key, value, `${location} 狩獵`, '新鮮獵獲，適合賣給行商或廚商。');
+  const flavored = await generateLootFlavorWithAI({
+    sourceType: 'hunt',
+    rarity: rarity.key,
+    category: '獵物',
+    location,
+    animalName,
+    lang: options.lang || 'zh-TW'
+  });
+  return makeTradeGood(
+    flavored.name,
+    '獵物',
+    rarity.key,
+    flavored.value,
+    `${location} 狩獵`,
+    flavored.desc || '新鮮獵獲，適合賣給行商或廚商。'
+  );
 }
 
-function createTreasureLoot(location = '', luck = 50) {
+async function createTreasureLoot(location = '', luck = 50, options = {}) {
   const difficulty = Math.max(3, getLocationDifficulty(location));
   const rarity = rollRarity(luck + 10, difficulty + 1);
-  const base = 55 + difficulty * 16 + randInt(20, 50);
-  const value = normalizeValue(base, rarity.key, rarity.multiplier);
-  const treasureName = `${pickOne(RARE_ORES, '古礦石')}${pickOne(['原礦', '晶核', '斷片', '紋印'], '原礦')}`;
-  return makeTradeGood(treasureName, '寶藏', rarity.key, value, `${location} 探索`, '高價值稀有素材。');
+  const flavored = await generateLootFlavorWithAI({
+    sourceType: 'treasure',
+    rarity: rarity.key,
+    category: '寶藏',
+    location,
+    lang: options.lang || 'zh-TW'
+  });
+  return makeTradeGood(
+    flavored.name,
+    '寶藏',
+    rarity.key,
+    flavored.value,
+    `${location} 探索`,
+    flavored.desc || '高價值稀有素材。'
+  );
 }
 
 function estimateLooseItemValue(name = '') {

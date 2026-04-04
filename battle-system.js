@@ -95,6 +95,43 @@ function clampInt(value, min, max, fallback = min) {
   return Math.max(min, Math.min(max, rounded));
 }
 
+const ELEMENT_COUNTER = Object.freeze({
+  水: '火',
+  火: '草',
+  草: '水'
+});
+
+function normalizeCombatElement(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (text === '水' || /水|液|潮|霧|冰/.test(text)) return '水';
+  if (text === '火' || /火|炎|焰|熱|熔/.test(text)) return '火';
+  if (text === '草' || /草|木|藤|森|生質/.test(text)) return '草';
+  return '';
+}
+
+function getCombatantElement(entity = {}, move = null) {
+  const candidates = [
+    entity?.type,
+    entity?.element,
+    entity?.petElement,
+    entity?.npcPet?.element,
+    move?.element
+  ];
+  for (const raw of candidates) {
+    const normalized = normalizeCombatElement(raw);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function hasElementAdvantage(attackerElement = '', defenderElement = '') {
+  const atk = normalizeCombatElement(attackerElement);
+  const def = normalizeCombatElement(defenderElement);
+  if (!atk || !def) return false;
+  return ELEMENT_COUNTER[atk] === def;
+}
+
 function isDigitalKingName(name = '') {
   return DIGITAL_KINGS.includes(String(name || '').trim());
 }
@@ -829,6 +866,13 @@ function applyAttack(attacker, defender, move, moveDmg, lines, attackerLabel, de
 
   let rawDamage = Math.max(0, instant - defense);
   if (instant > 0 && rawDamage <= 0) rawDamage = 1;
+
+  const attackerElement = getCombatantElement(attacker, move);
+  const defenderElement = getCombatantElement(defender, null);
+  if (rawDamage > 0 && hasElementAdvantage(attackerElement, defenderElement)) {
+    rawDamage = Math.max(1, Math.floor(rawDamage * 1.2));
+    lines.push(`🌟 屬性克制：${attackerElement}克制${defenderElement}，傷害提升 20%。`);
+  }
 
   const shieldReduce = defenderStatus.shield > 0 ? (8 + defenderStatus.shield * 4) : 0;
   let finalDamage = Math.max(0, rawDamage - shieldReduce);

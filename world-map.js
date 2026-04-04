@@ -420,7 +420,8 @@ function buildLocationStoryMetadata() {
       const profile = LOCATION_PROFILES[name] || {};
       const difficulty = regionDifficulty;
       const nextPrimary = list[i + 1] || null;
-      const stageCount = difficulty <= 2 ? 3 : difficulty === 3 ? 4 : 5;
+      // 每個地點固定 8 段，保持節奏一致、易於設計分鏡
+      const stageCount = 8;
       const desc = String(profile.desc || '').trim();
       const shortHook = desc
         ? desc.split('，')[0].split('。')[0].trim()
