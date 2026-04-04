@@ -7979,7 +7979,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'show_finance_ledger' ||
       customId === 'show_memory_audit' ||
       customId.startsWith('pmkt_');
-    const isStoryEventButton = customId.startsWith('event_');
     // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
@@ -7992,8 +7991,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       !isModalLauncherButton &&
       !isShopFlowButton &&
       !isPetFlowButton &&
-      !isInventoryFlowButton &&
-      !isStoryEventButton
+      !isInventoryFlowButton
     ) {
       await lockPressedButtonImmediately(interaction);
     }
