@@ -1257,6 +1257,9 @@ const CHOICE_ENTITY_TOKENS = [
   '斗篷人',
   '陌生隊伍'
 ];
+const CHOICE_PORTAL_PATTERNS = [
+  /傳送門|主傳送門|跨區傳送|跨區移動|傳送裝置|瞬間位移|portal|teleport/iu
+];
 
 function collectQuotedPhrases(text = '', limit = 8) {
   const source = String(text || '');
@@ -1522,6 +1525,7 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
 
     if (hasAnyRegex(text, CHOICE_BANNED_PHRASES)) issues.push(`第 ${i + 1} 個含跳 tone 詞彙`);
     if (hasAnyRegex(text, CHOICE_VAGUE_PHRASES)) issues.push(`第 ${i + 1} 個語意空泛或暴露過早`);
+    if (hasAnyRegex(text, CHOICE_PORTAL_PATTERNS)) issues.push(`第 ${i + 1} 個包含傳送類選項（已改由地圖按鈕）`);
     if (locationRegex && locationRegex.test(text)) issues.push(`第 ${i + 1} 個把地名當作物件`);
 
     if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) {
@@ -2457,6 +2461,7 @@ ${anchorText}
 7. 若寫「線索」，必須明說來源（例如哪個人、哪個艙、哪個檢測結果）
 8. 刮刮樂只允許在鑑價站互動中出現，這裡禁止輸出「刮刮樂」相關選項
 9. 地名只能用於「在某地調查/前往某地」，禁止把地名當物件（例如禁止「把廣州送去檢測」）
+9a. 禁止輸出任何「傳送門／傳送裝置／跨區傳送」類選項（這些改由地圖按鈕處理）
 10. 避免與「最近已做過的選擇」重複同動詞同目的（例如連續多次「檢測」「詢問」「追查同線索」）
 11. 5 個選項要有足夠發散度，避免都在做同一件事
 11a. 禁止模板句型：不可出現「沿著/沿XX繼續追查來源與流向」「先處理本區關鍵」「回到核心線索」這類制式措辭
@@ -2492,6 +2497,7 @@ ${anchorText}
 禁止出現：打坐修煉、隨便逛逛、原地休息這類選項！
 也禁止出現武俠詞彙：江湖、俠客、門派、武功、內力。
 禁止使用跳 tone 行銷詞：一鍵成交、立即變現、秒賺、躺賺。
+禁止輸出傳送類選項：傳送門、主傳送門、傳送裝置、跨區傳送、瞬間位移。
 並避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴（可用：真偽鑑定、來源線索、藏品修復、封存編號）。
 
 ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;

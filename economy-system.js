@@ -919,10 +919,45 @@ function requestMiniMax(body, apiKey, timeoutMs = AI_TIMEOUT_MS) {
   });
 }
 
+function buildFallbackAppraiserPitch(options = {}) {
+  const marketType = options.marketType === 'digital' ? 'digital' : 'renaiss';
+  const soldCount = Number(options.soldCount || 0);
+  const total = Number(options.total || 0);
+  const avgRatePct = Math.max(1, Math.round(Number(options.avgRate || 1) * 100));
+  const digitalMasked = Boolean(options.digitalMasked);
+  const lang = String(options.playerLang || 'zh-TW');
+  if (lang === 'en') {
+    if (soldCount <= 0) return 'No sellable items right now. Come back after collecting more materials.';
+    if (marketType === 'digital') {
+      return digitalMasked
+        ? `You moved ${soldCount} items for ${total} Rns. Quick lane complete, but compare a second quote before your next sale.`
+        : `I can close ${soldCount} items at ${total} Rns now. It looks efficient, but this quote favors the desk.`;
+    }
+    return `Appraised ${soldCount} items at ${total} Rns (about ${avgRatePct}% of baseline).`;
+  }
+  if (lang === 'zh-CN') {
+    if (soldCount <= 0) return '你现在没有可出售物品，整理背包后再来。';
+    if (marketType === 'digital') {
+      return digitalMasked
+        ? `这批 ${soldCount} 件我先按 ${total} Rns 代币帮你快速成交；想更稳，下一笔再去另一家比价。`
+        : `这批 ${soldCount} 件我给你 ${total} Rns 代币，成交很快；不过你也知道，这种报价会偏向柜台。`;
+    }
+    return `这批 ${soldCount} 件估值 ${total} Rns 代币，约为基准价的 ${avgRatePct}%。`;
+  }
+  if (soldCount <= 0) return '你現在沒有可出售物品，整理背包後再來。';
+  if (marketType === 'digital') {
+    return digitalMasked
+      ? `這批 ${soldCount} 件我先按 ${total} Rns 代幣幫你快速成交；想更穩，下一筆再去別家比價。`
+      : `這批 ${soldCount} 件我給你 ${total} Rns 代幣，成交很快；不過你也知道，這種報價會偏向櫃台。`;
+  }
+  return `這批 ${soldCount} 件估值 ${total} Rns 代幣，約為基準價的 ${avgRatePct}%。`;
+}
+
 async function generateAppraiserPitch(options = {}) {
+  const fallbackPitch = buildFallbackAppraiserPitch(options);
   const apiKey = String(process.env.MINIMAX_API_KEY || '').trim();
   if (!apiKey) {
-    throw new Error('MINIMAX_API_KEY missing for dynamic appraisal pitch');
+    return fallbackPitch;
   }
   const marketType = options.marketType === 'digital' ? 'digital' : 'renaiss';
   const appraiser = APPRAISERS[marketType] || APPRAISERS.renaiss;
@@ -982,16 +1017,18 @@ ${marketLens}
     top_p: 0.9,
     max_tokens: 220
   });
-  const raw = await requestMiniMax(body, apiKey, AI_TIMEOUT_MS);
-  const cleaned = raw
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/```(?:json)?/gi, '')
-    .replace(/```/g, '')
-    .trim();
-  if (cleaned.length < 12) {
-    throw new Error('Appraiser pitch too short');
+  try {
+    const raw = await requestMiniMax(body, apiKey, AI_TIMEOUT_MS);
+    const cleaned = raw
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/```(?:json)?/gi, '')
+      .replace(/```/g, '')
+      .trim();
+    if (cleaned.length < 12) return fallbackPitch;
+    return cleaned.slice(0, 180);
+  } catch (_) {
+    return fallbackPitch;
   }
-  return cleaned.slice(0, 180);
 }
 
 function buildRarityWeights(luck = 50, difficulty = 1) {

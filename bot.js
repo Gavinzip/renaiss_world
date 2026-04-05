@@ -2289,12 +2289,14 @@ function rewriteScratchChoiceToShop(choice, player = null) {
 }
 
 function normalizeEventChoices(player = null, choices = []) {
-  const pool = Array.isArray(choices)
+  const mapped = Array.isArray(choices)
     ? choices
       .filter(Boolean)
       .slice(0, CHOICE_POOL_COUNT)
       .map((choice) => rewriteScratchChoiceToShop(choice, player))
     : [];
+  // 傳送改由地圖按鈕（主傳送門/傳送裝置）處理，不再出現在劇情五選項中。
+  const pool = mapped.filter((choice) => !isPortalChoice(choice));
   if (pool.length <= CHOICE_DISPLAY_COUNT) return pool;
   const maxPick = Math.min(CHOICE_DISPLAY_COUNT, pool.length);
   const signals = buildChoiceContextSignals(player);
@@ -14906,25 +14908,21 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     });
     flushMemories();
     CORE.savePlayer(player);
-    const embed = new EmbedBuilder()
-      .setTitle(`🏪 ${getMarketTypeLabel(marketType)}`)
-      .setColor(marketType === 'digital' ? 0x9333ea : 0x0ea5e9)
-      .setDescription(
-        `🧭 刮刮樂已移至商店內操作，請點「🎟️ 刮刮樂(100)」。\n\n` +
-        `你可以：掛賣商品、跟老闆議價、買商品，或離開商店回到原本故事。`
+    try {
+      await showWorldShopScene(
+        interaction,
+        user,
+        marketType,
+        '🧭 刮刮樂已移至商店內操作，請點「🎟️ 刮刮樂(100)」。'
       );
-    const row1 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`shop_post_sell_${marketType}`).setLabel('📤 掛賣商品').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`shop_npc_haggle_${marketType}`).setLabel('🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
-    );
-    const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`shop_scratch_${marketType}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`shop_buy_${marketType}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
-    );
-    const shopMsg = await interaction.channel.send({ embeds: [embed], components: [row1, row2] });
-    trackActiveGameMessage(player, interaction.channel?.id, shopMsg.id);
-    await disableMessageComponents(interaction.channel, interaction.message?.id);
+    } catch (shopErr) {
+      console.error('[商店] 刮刮樂入口開啟失敗:', shopErr?.message || shopErr);
+      await respondError(`❌ 無法開啟${getMarketTypeLabel(marketType)}，請再試一次。`);
+      return;
+    }
+    if (interaction.message?.id) {
+      trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+    }
     return;
   } else if (event.action === 'market_renaiss' || event.action === 'market_digital') {
     const marketType = event.action === 'market_digital' ? 'digital' : 'renaiss';
@@ -14939,31 +14937,19 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     flushMemories();
     CORE.savePlayer(player);
 
-    const bossName = marketType === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員';
     const intro = marketType === 'digital'
       ? '你推門進入店內，老闆笑著招手，語氣親切卻帶著一絲試探。'
       : '你走進店內，牆上掛著完整估值表，老闆示意你先看規則。';
-    const embed = new EmbedBuilder()
-      .setTitle(`🏪 ${getMarketTypeLabel(marketType)}`)
-      .setColor(marketType === 'digital' ? 0x9333ea : 0x0ea5e9)
-      .setDescription(
-        `${intro}\n\n` +
-        `櫃台老闆：**${bossName}**\n` +
-        `你可以：掛賣商品、跟老闆議價、買商品，或離開商店回到原本故事。\n` +
-        `掛賣採下拉選單；上陣中的技能請先卸下。`
-      );
-    const row1 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`shop_post_sell_${marketType}`).setLabel('📤 掛賣商品').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`shop_npc_haggle_${marketType}`).setLabel('🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
-    );
-    const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`shop_buy_${marketType}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
-    );
-
-    const shopMsg = await interaction.channel.send({ embeds: [embed], components: [row1, row2] });
-    trackActiveGameMessage(player, interaction.channel?.id, shopMsg.id);
-    await disableMessageComponents(interaction.channel, interaction.message?.id);
+    try {
+      await showWorldShopScene(interaction, user, marketType, intro);
+    } catch (shopErr) {
+      console.error('[商店] 鑑價站開啟失敗:', shopErr?.message || shopErr);
+      await respondError(`❌ 無法開啟${getMarketTypeLabel(marketType)}，請再點一次。`);
+      return;
+    }
+    if (interaction.message?.id) {
+      trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+    }
     return;
   } else if (event.action === 'main_story') {
     const mainlineNarrative = String(event.mainlineNarrative || '').trim();

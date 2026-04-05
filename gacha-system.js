@@ -174,6 +174,8 @@ function drawSingleMove(player) {
       name: move.name,
       element: move.element,
       tier: move.tier,
+      priority: Number(move.priority || 0),
+      speed: Number(move.speed || 10),
       baseDamage: move.baseDamage,
       effect: move.effect,
       desc: move.desc

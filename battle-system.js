@@ -95,6 +95,31 @@ function clampInt(value, min, max, fallback = min) {
   return Math.max(min, Math.min(max, rounded));
 }
 
+const MOVE_SPEED_MIN = 1;
+const MOVE_SPEED_MAX = 20;
+const MOVE_SPEED_DEFAULT = 10;
+const LEGACY_SPEED_MAP = Object.freeze({
+  '-1': 4,
+  '0': 10,
+  '1': 13,
+  '2': 16,
+  '3': 20
+});
+
+function normalizeMoveSpeedValue(speed = undefined, priority = undefined) {
+  const raw = Number(speed);
+  if (Number.isFinite(raw)) {
+    if (raw >= MOVE_SPEED_MIN && raw <= MOVE_SPEED_MAX) {
+      return clampInt(raw, MOVE_SPEED_MIN, MOVE_SPEED_MAX, MOVE_SPEED_DEFAULT);
+    }
+    const legacy = LEGACY_SPEED_MAP[String(Math.floor(raw))];
+    if (Number.isFinite(Number(legacy))) return Number(legacy);
+  }
+  const fromPriority = LEGACY_SPEED_MAP[String(Math.floor(Number(priority)))];
+  if (Number.isFinite(Number(fromPriority))) return Number(fromPriority);
+  return MOVE_SPEED_DEFAULT;
+}
+
 function round1(value, fallback = 0) {
   const num = Number(value);
   if (!Number.isFinite(num)) return Number(fallback) || 0;
@@ -110,12 +135,91 @@ const ELEMENT_COUNTER = Object.freeze({
   火: '草',
   草: '水'
 });
-
-const ELEMENT_DAMAGE_BALANCE = Object.freeze({
-  水: 1.0,
-  火: 0.95,
-  草: 0.92
+const ELEMENT_ADVANTAGE_MULTIPLIER_DEFAULT = 1.12;
+const ELEMENT_ADVANTAGE_MULTIPLIER_MAP = Object.freeze({
+  '水>火': 1.12,
+  '火>草': 1.06,
+  '草>水': 1.04
 });
+
+function estimateEffectUtilityScore(effect = {}) {
+  if (!effect || typeof effect !== 'object') return 0;
+  const heal = Number(effect.heal || 0) * 0.22;
+  const shield = Number(effect.shield || 0) * 2.2;
+  const cleanse = effect.cleanse ? 3.2 : 0;
+  const reflect = Number(effect.reflect || 0) * 2.4;
+  const dodge = Number(effect.dodge || 0) * 2.0;
+  const thorns = Number(effect.thorns || 0) * 1.8;
+  const hardCc = (Number(effect.stun || 0) + Number(effect.freeze || 0)) * 5.2;
+  const softCc = (
+    Number(effect.bind || 0) +
+    Number(effect.slow || 0) +
+    Number(effect.fear || 0) +
+    Number(effect.confuse || 0) +
+    Number(effect.blind || 0) +
+    Number(effect.missNext || 0)
+  ) * 2.8;
+  const dot = (
+    Number(effect.burn || 0) * 1.8 +
+    Number(effect.poison || 0) * 1.6 +
+    Number(effect.trap || 0) * 1.7 +
+    Number(effect.bleed || 0) * 2.0 +
+    Number(effect.dot || 0) * 1.4
+  );
+  const offense = (effect.armorBreak ? 3.4 : 0) + (effect.ignoreResistance ? 3.6 : 0) + (effect.splash ? 2.6 : 0);
+  const penalty = Number(effect.selfDamage || 0) * 0.28;
+  return heal + shield + cleanse + reflect + dodge + thorns + hardCc + softCc + dot + offense - penalty;
+}
+
+function estimateMoveElementPower(move = {}) {
+  const base = Math.max(0, Number(move?.baseDamage ?? move?.damage ?? 0));
+  const tier = clampInt(move?.tier || 1, 1, 3, 1);
+  const tierWeight = tier === 3 ? 1.15 : tier === 2 ? 1.05 : 1.0;
+  const speed = normalizeMoveSpeedValue(move?.speed, move?.priority);
+  const tempo = (speed - 10) * 0.65;
+  const utility = estimateEffectUtilityScore(move?.effect || {});
+  return Math.max(1, (base + utility + tempo) * tierWeight);
+}
+
+function computeElementDamageBalance() {
+  const elements = ['水', '火', '草'];
+  const stats = {};
+  const tierWeights = { 1: 0.42, 2: 0.35, 3: 0.23 };
+
+  for (const element of elements) {
+    const rows = typeof PET.getMovesByElement === 'function' ? PET.getMovesByElement(element) : [];
+    if (!Array.isArray(rows) || rows.length <= 0) {
+      stats[element] = 1;
+      continue;
+    }
+    let weightedPower = 0;
+    let totalWeight = 0;
+    for (const move of rows) {
+      const tier = clampInt(move?.tier || 1, 1, 3, 1);
+      const w = Number(tierWeights[tier] || 0.33);
+      weightedPower += estimateMoveElementPower(move) * w;
+      totalWeight += w;
+    }
+    stats[element] = totalWeight > 0 ? (weightedPower / totalWeight) : 1;
+  }
+
+  const values = elements.map((k) => Number(stats[k] || 1)).filter((v) => Number.isFinite(v) && v > 0);
+  const avg = values.length > 0
+    ? values.reduce((sum, cur) => sum + cur, 0) / values.length
+    : 1;
+  const out = {};
+  for (const element of elements) {
+    const value = Number(stats[element] || avg || 1);
+    const ratio = avg / Math.max(1, value);
+    out[element] = Math.max(0.72, Math.min(1.28, round1(ratio, 1)));
+  }
+  return Object.freeze(out);
+}
+
+const ELEMENT_DAMAGE_BALANCE = computeElementDamageBalance();
+function getElementDamageBalance() {
+  return { ...ELEMENT_DAMAGE_BALANCE };
+}
 
 function normalizeCombatElement(raw = '') {
   const text = String(raw || '').trim();
@@ -148,6 +252,14 @@ function hasElementAdvantage(attackerElement = '', defenderElement = '') {
   return ELEMENT_COUNTER[atk] === def;
 }
 
+function getElementAdvantageMultiplier(attackerElement = '', defenderElement = '') {
+  const atk = normalizeCombatElement(attackerElement);
+  const def = normalizeCombatElement(defenderElement);
+  if (!atk || !def) return ELEMENT_ADVANTAGE_MULTIPLIER_DEFAULT;
+  const key = `${atk}>${def}`;
+  return Number(ELEMENT_ADVANTAGE_MULTIPLIER_MAP[key] || ELEMENT_ADVANTAGE_MULTIPLIER_DEFAULT);
+}
+
 function isDigitalKingName(name = '') {
   return DIGITAL_KINGS.includes(String(name || '').trim());
 }
@@ -169,7 +281,7 @@ function cloneMoveForEnemy(move = {}, powerScale = 1) {
     baseDamage: scaled,
     tier: clampInt(move?.tier || 1, 1, 3, 1),
     priority: clampInt(move?.priority || 0, -1, 3, 0),
-    speed: clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0),
+    speed: normalizeMoveSpeedValue(move?.speed, move?.priority),
     effect: { ...(move?.effect || {}) }
   };
 }
@@ -185,7 +297,7 @@ function normalizePresetMove(move, fallbackAttack = 10) {
       baseDamage: Math.max(1, Number(fallbackAttack) || 10),
       tier: 1,
       priority: 0,
-      speed: 0,
+      speed: MOVE_SPEED_DEFAULT,
       effect: {}
     };
   }
@@ -198,7 +310,7 @@ function normalizePresetMove(move, fallbackAttack = 10) {
       baseDamage: Math.max(1, Number(fallbackAttack) || 10),
       tier: 1,
       priority: 0,
-      speed: 0,
+      speed: MOVE_SPEED_DEFAULT,
       effect: {}
     };
   }
@@ -214,7 +326,7 @@ function normalizePresetMove(move, fallbackAttack = 10) {
       baseDamage: Math.max(1, Number(move.baseDamage ?? move.damage ?? fallbackAttack) || 10),
       tier: clampInt(move.tier || 1, 1, 3, 1),
       priority: clampInt(move.priority || 0, -1, 3, 0),
-      speed: clampInt(move.speed ?? move.priority ?? 0, -1, 3, 0),
+      speed: normalizeMoveSpeedValue(move.speed, move.priority),
       effect: { ...(move.effect || {}) }
     };
   }
@@ -259,24 +371,24 @@ function getEnemyMovePlan(enemyName = '', level = 1, options = {}) {
   const villain = options.villain === true || isVillainEnemyName(enemyName);
 
   if (king) {
-    return { king: true, villain: true, minTier: 3, targetCount: 5, powerScale: 1.28 };
+    return { king: true, villain: true, minTier: 3, targetCount: 5, powerScale: 1.30 };
   }
   if (villain) {
     let minTier = 2;
     let targetCount = 4;
-    let powerScale = 1.1;
+    let powerScale = 1.12;
     if (safeLevel <= 6) {
       minTier = 1;
       targetCount = 3;
-      powerScale = 1.03;
+      powerScale = 1.05;
     } else if (safeLevel >= 22) {
       minTier = 3;
       targetCount = 5;
-      powerScale = 1.18;
+      powerScale = 1.20;
     } else if (safeLevel >= 14) {
       minTier = 2;
       targetCount = 5;
-      powerScale = 1.14;
+      powerScale = 1.16;
     }
     return { king: false, villain: true, minTier, targetCount, powerScale };
   }
@@ -342,7 +454,7 @@ function buildEnemyMoveLoadout(enemyName = '', level = 1, rawMoves = [], options
       baseDamage: fallbackAttack,
       tier: plan.minTier,
       priority: 0,
-      speed: 0,
+      speed: MOVE_SPEED_DEFAULT,
       effect: {}
     });
   }
@@ -567,7 +679,7 @@ function ensureStatusState(entity) {
 
 function normalizeMove(move = {}, fallbackAttack = 10) {
   if (typeof move === 'string') {
-    return { name: move, damage: fallbackAttack, baseDamage: fallbackAttack, tier: 1, priority: 0, speed: 0, effect: {} };
+    return { name: move, damage: fallbackAttack, baseDamage: fallbackAttack, tier: 1, priority: 0, speed: MOVE_SPEED_DEFAULT, effect: {} };
   }
   return {
     ...move,
@@ -576,13 +688,13 @@ function normalizeMove(move = {}, fallbackAttack = 10) {
     baseDamage: Number(move?.baseDamage ?? move?.damage ?? fallbackAttack),
     tier: clampInt(move?.tier || 1, 1, 3, 1),
     priority: clampInt(move?.priority || 0, -1, 3, 0),
-    speed: clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0),
+    speed: normalizeMoveSpeedValue(move?.speed, move?.priority),
     effect: move?.effect || {}
   };
 }
 
 function getMoveSpeed(move = {}) {
-  return clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0);
+  return normalizeMoveSpeedValue(move?.speed, move?.priority);
 }
 
 function decideActionOrder(fighter, playerMove, enemy, enemyMove) {
@@ -597,11 +709,26 @@ function decideActionOrder(fighter, playerMove, enemy, enemyMove) {
     };
   }
 
+  const playerUnitSpeed = clampInt(fighter?.speed || 20, 1, 60, 20);
+  const enemyUnitSpeed = clampInt(enemy?.speed || 20, 1, 60, 20);
+  if (playerUnitSpeed !== enemyUnitSpeed) {
+    return {
+      first: playerUnitSpeed > enemyUnitSpeed ? 'player' : 'enemy',
+      reason: 'unit_speed',
+      playerMoveSpeed,
+      enemyMoveSpeed,
+      playerUnitSpeed,
+      enemyUnitSpeed
+    };
+  }
+
   return {
     first: Math.random() < 0.5 ? 'player' : 'enemy',
     reason: 'coin_flip',
     playerMoveSpeed,
-    enemyMoveSpeed
+    enemyMoveSpeed,
+    playerUnitSpeed,
+    enemyUnitSpeed
   };
 }
 
@@ -922,8 +1049,10 @@ function applyAttack(attacker, defender, move, moveDmg, lines, attackerLabel, de
   const attackerElement = getCombatantElement(attacker, move);
   const defenderElement = getCombatantElement(defender, null);
   if (rawDamage > 0 && hasElementAdvantage(attackerElement, defenderElement)) {
-    rawDamage = Math.max(1, Math.floor(rawDamage * 1.2));
-    lines.push(`🌟 屬性克制：${attackerElement}克制${defenderElement}，傷害提升 20%。`);
+    const advantageMultiplier = getElementAdvantageMultiplier(attackerElement, defenderElement);
+    rawDamage = Math.max(1, Math.floor(rawDamage * advantageMultiplier));
+    const pct = Math.max(1, Math.round((advantageMultiplier - 1) * 100));
+    lines.push(`🌟 屬性克制：${attackerElement}克制${defenderElement}，傷害提升 ${pct}%。`);
   }
 
   const shieldReduce = defenderStatus.shield > 0 ? (8 + defenderStatus.shield * 4) : 0;
@@ -1239,6 +1368,8 @@ function executeBattleRound(player, fighter, enemy, chosenMove, enemyMove = null
     const order = decideActionOrder(fighter, normalizedPlayerMove, enemy, normalizedEnemyMove);
     if (order.reason === 'move_speed' && order.playerMoveSpeed !== order.enemyMoveSpeed) {
       lines.push(`💨 招式速度判定：${order.first === 'player' ? fighterLabel : enemyLabel} 先手（速度 ${Math.max(order.playerMoveSpeed, order.enemyMoveSpeed)}）`);
+    } else if (order.reason === 'unit_speed') {
+      lines.push(`🏃 單位速度判定：${order.first === 'player' ? fighterLabel : enemyLabel} 先手（單位速度 ${Math.max(order.playerUnitSpeed || 0, order.enemyUnitSpeed || 0)}）`);
     } else {
       lines.push(`🎲 同招式速度：${order.first === 'player' ? fighterLabel : enemyLabel} 搶到先手。`);
     }
@@ -1278,13 +1409,13 @@ function enemyChooseMove(enemy) {
   const weighted = enemy.moves.map((rawMove) => {
     const move = normalizeMove(rawMove, enemy.attack || 10);
     const tier = clampInt(move?.tier || 1, 1, 3, 1);
-    const moveSpeed = clampInt(move?.speed ?? move?.priority ?? 0, -1, 3, 0);
+    const moveSpeed = getMoveSpeed(move);
     const effect = move?.effect || {};
     const hasControl = Boolean(effect.stun || effect.freeze || effect.bind || effect.slow || effect.fear || effect.confuse || effect.blind || effect.missNext);
     const hasDot = Boolean(effect.burn || effect.poison || effect.trap || effect.bleed || effect.dot || effect.spreadPoison);
     const highDamage = Number(move?.damage || 0) >= Number(enemy?.attack || 10) * 1.1;
     let weight = 1 + (tier - 1) * 0.7;
-    weight += moveSpeed * 0.05;
+    weight += (moveSpeed - 10) * 0.03;
     if (hasControl) weight += 0.45;
     if (hasDot) weight += 0.3;
     if (highDamage) weight += 0.25;
@@ -1312,6 +1443,7 @@ module.exports = {
   EPIC_BOSSES,
   getMoveEnergyCost,
   getMoveEffectSuccessRate,
+  getElementDamageBalance,
   calculatePlayerMoveDamage,
   executeBattlePlayerPhase,
   executeBattleEnemyPhase,

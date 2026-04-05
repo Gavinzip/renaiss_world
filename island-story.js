@@ -6,6 +6,8 @@
 const { getLocationStoryMetadata, getLocationPortalHub, MAP_LOCATIONS } = require('./world-map');
 
 const DEFAULT_STAGE_COUNT = Math.max(8, Number(process.env.ISLAND_STORY_STAGE_COUNT || 8));
+const KING_GATE_REGION_ID = 'island_routes';
+const KING_GATE_REQUIRED = 4;
 
 const REGION_STORY_CHAPTER = Object.freeze({
   central_core: '第一島：異常感',
@@ -282,7 +284,12 @@ function updateIslandStoryProgress(player, options = {}) {
   if (!entry) return null;
   const meta = getLocationStoryMetadata(location);
   const stageCount = Math.max(1, Number(meta?.stageCount || entry.stageCount || DEFAULT_STAGE_COUNT));
+  const regionId = String(meta?.regionId || '').trim();
   entry.stageCount = stageCount;
+  const missionRow = player?.mainStory?.mission?.regions && regionId
+    ? player.mainStory.mission.regions[regionId]
+    : null;
+  const regionKeyFound = Boolean(missionRow?.keyFound);
 
   const turnsInLocation = Math.max(0, Number(options.turnsInLocation || 0));
   const targetTurns = Math.max(1, Number(options.targetTurns || 6));
@@ -290,10 +297,39 @@ function updateIslandStoryProgress(player, options = {}) {
   const nextStage = calculateStageByTurns(turnsInLocation, targetTurns, stageCount);
   entry.stage = Math.max(entry.stage, nextStage);
 
-  if (!entry.completed && battleDone && turnsInLocation >= targetTurns) {
+  // 關鍵任務尚未完成時，限制可揭露段落，避免久待就提前知道本島深層真相。
+  if (!entry.completed && !regionKeyFound && regionId && regionId !== KING_GATE_REGION_ID && regionId !== 'hidden_deeps') {
+    const capStage = Math.max(1, Math.min(stageCount - 1, 3));
+    entry.stage = Math.min(entry.stage, capStage);
+  }
+
+  if (!entry.completed && regionKeyFound && regionId && regionId !== KING_GATE_REGION_ID && regionId !== 'hidden_deeps') {
     entry.completed = true;
     entry.stage = stageCount;
     entry.completedAt = Date.now();
+  } else if (!entry.completed && battleDone && turnsInLocation >= targetTurns) {
+    if (regionId === KING_GATE_REGION_ID) {
+      const defeatedKings = Array.isArray(player?.mainStory?.defeatedKings)
+        ? player.mainStory.defeatedKings
+        : [];
+      const cleared = defeatedKings
+        .map((name) => String(name || '').trim())
+        .filter(Boolean)
+        .filter((name, idx, arr) => arr.indexOf(name) === idx)
+        .length;
+      if (cleared >= KING_GATE_REQUIRED) {
+        entry.completed = true;
+        entry.stage = stageCount;
+        entry.completedAt = Date.now();
+      } else {
+        // 第五關硬門檻：未擊破四巨頭前不可通關，但維持接近收尾的進度手感。
+        entry.stage = Math.max(entry.stage, Math.max(1, stageCount - 1));
+      }
+    } else if (regionId === 'hidden_deeps') {
+      entry.completed = true;
+      entry.stage = stageCount;
+      entry.completedAt = Date.now();
+    }
   }
   entry.lastUpdatedAt = Date.now();
   return { ...entry };
@@ -318,6 +354,43 @@ function buildIslandGuidancePrompt(player, location = '') {
   const chapterTitle = getStoryChapterTitle(loc);
 
   const stageGoal = resolveStageGoal(stage, stageCount, loc);
+  const missionRow = player?.mainStory?.mission?.regions && String(meta?.regionId || '').trim()
+    ? player.mainStory.mission.regions[String(meta.regionId).trim()]
+    : null;
+  const missionHint = (() => {
+    const rid = String(meta?.regionId || '').trim();
+    if (!rid || rid === 'hidden_deeps') return '';
+    if (rid === 'central_core') {
+      return `本島關鍵任務（唯一來源）：僅能在「洛陽城」接觸灰帳記錄員取得「雙鑑衝突原始單」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+    }
+    if (rid === 'west_desert') {
+      return `本島關鍵任務（唯一來源）：僅能在「敦煌」接觸轉運站調度員取得「異常轉運時間鏈」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+    }
+    if (rid === 'southern_delta') {
+      return `本島關鍵任務（唯一來源）：僅能在「廣州」接觸工坊試樣師取得「偽造樣本與製程片段」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+    }
+    if (rid === 'northern_highland') {
+      return `本島關鍵任務（唯一來源）：僅能在「雪白山莊」接觸滲透聯絡員取得「夜冕主宰鏈路密鑰」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+    }
+    if (rid === KING_GATE_REGION_ID) {
+      return `本島關鍵任務：擊敗四巨頭全員，拼出核心憑證鏈｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+    }
+    return '';
+  })();
+  const kingGateHint = String(meta?.regionId || '').trim() === KING_GATE_REGION_ID
+    ? (() => {
+      const defeatedKings = Array.isArray(player?.mainStory?.defeatedKings)
+        ? player.mainStory.defeatedKings
+        : [];
+      const cleared = defeatedKings
+        .map((name) => String(name || '').trim())
+        .filter(Boolean)
+        .filter((name, idx, arr) => arr.indexOf(name) === idx)
+        .length;
+      const remain = Math.max(0, KING_GATE_REQUIRED - cleared);
+      return `四巨頭硬門檻：${cleared}/${KING_GATE_REQUIRED}${remain > 0 ? `（仍需擊敗 ${remain} 位）` : '（已達成）'}`;
+    })()
+    : '';
 
   const nextPortalHub = normalizeLocation(
     nextPrimary
@@ -333,8 +406,10 @@ function buildIslandGuidancePrompt(player, location = '') {
     `章節主題：${chapterTitle}`,
     `進度：stage ${stage}/${stageCount}（未完成）`,
     `本階段目標：${stageGoal}`,
+    missionHint,
+    kingGateHint,
     `收尾方向：${travelHint}`
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function getAllKnownLocations() {

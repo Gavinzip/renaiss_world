@@ -126,6 +126,309 @@ const NEGATIVE_MOVES = [
   { id: 'ultimate_dark', name: '零界崩解', element: '暗域', type: 'negative', tier: 3, baseDamage: 45, effect: { selfDamage: 20 }, desc: '引爆零界反應器，代價極高' }
 ];
 
+const MOVE_SPEED_MIN = 1;
+const MOVE_SPEED_MAX = 20;
+const MOVE_SPEED_DEFAULT = 10;
+const LEGACY_SPEED_MAP = Object.freeze({
+  '-1': 4,
+  '0': 10,
+  '1': 13,
+  '2': 16,
+  '3': 20
+});
+const TIER_POWER_PROFILE = Object.freeze({
+  1: { target: 13, min: 4, max: 18, supportMax: 10, speedBase: 15, speedMin: 12, speedMax: 20 },
+  2: { target: 22, min: 10, max: 30, supportMax: 15, speedBase: 11, speedMin: 8, speedMax: 16 },
+  3: { target: 32, min: 18, max: 44, supportMax: 20, speedBase: 8, speedMin: 3, speedMax: 13 }
+});
+
+function clampInt(value, min, max, fallback = min) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(num)));
+}
+
+function normalizeMoveElementForBalance(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (text === '水' || /水|液|潮|霧|冰/.test(text)) return '水';
+  if (text === '火' || /火|炎|焰|熱|熔/.test(text)) return '火';
+  if (text === '草' || /草|木|藤|森|生質/.test(text)) return '草';
+  return '';
+}
+
+function normalizeMoveSpeedValue(speed = undefined, priority = undefined) {
+  const raw = Number(speed);
+  if (Number.isFinite(raw)) {
+    if (raw >= MOVE_SPEED_MIN && raw <= MOVE_SPEED_MAX) {
+      return clampInt(raw, MOVE_SPEED_MIN, MOVE_SPEED_MAX, MOVE_SPEED_DEFAULT);
+    }
+    const legacy = LEGACY_SPEED_MAP[String(Math.floor(raw))];
+    if (Number.isFinite(Number(legacy))) {
+      return Number(legacy);
+    }
+  }
+  const legacyPriority = LEGACY_SPEED_MAP[String(Math.floor(Number(priority)))];
+  if (Number.isFinite(Number(legacyPriority))) {
+    return Number(legacyPriority);
+  }
+  return MOVE_SPEED_DEFAULT;
+}
+
+function getTierPowerProfile(tier = 1) {
+  const safeTier = clampInt(tier, 1, 3, 1);
+  return TIER_POWER_PROFILE[safeTier] || TIER_POWER_PROFILE[1];
+}
+
+function getMoveEffectStats(move = {}) {
+  const effect = (move && typeof move.effect === 'object') ? move.effect : {};
+  const stats = {
+    effect,
+    heal: Number(effect.heal || 0),
+    cleanse: Boolean(effect.cleanse),
+    shield: Number(effect.shield || 0),
+    reflect: Number(effect.reflect || 0),
+    dodge: Number(effect.dodge || 0),
+    thorns: Number(effect.thorns || 0),
+    drain: Number(effect.drain || 0),
+    burn: Number(effect.burn || 0),
+    poison: Number(effect.poison || 0),
+    trap: Number(effect.trap || 0),
+    bleed: Number(effect.bleed || 0),
+    dot: Number(effect.dot || 0),
+    spreadPoison: Boolean(effect.spreadPoison),
+    stun: Number(effect.stun || 0),
+    freeze: Number(effect.freeze || 0),
+    bind: Number(effect.bind || 0),
+    slow: Number(effect.slow || 0),
+    fear: Number(effect.fear || 0),
+    confuse: Number(effect.confuse || 0),
+    blind: Number(effect.blind || 0),
+    missNext: Number(effect.missNext || 0),
+    armorBreak: Boolean(effect.armorBreak),
+    defenseDown: Number(effect.defenseDown || effect.defDown || 0),
+    ignoreResistance: Boolean(effect.ignoreResistance),
+    splash: Boolean(effect.splash),
+    summon: Number(effect.summon || 0),
+    debuffAll: effect.debuff === 'all',
+    selfDamage: Number(effect.selfDamage || 0)
+  };
+  const hardCcTurns = stats.stun + stats.freeze;
+  const softCcTurns = stats.bind + stats.slow + stats.fear + stats.confuse + stats.blind + stats.missNext;
+  const supportValue =
+    stats.heal * 0.3 +
+    (stats.cleanse ? 5 : 0) +
+    stats.shield * 3.2 +
+    stats.reflect * 3.6 +
+    stats.dodge * 3.0 +
+    stats.thorns * 2.8;
+  const offenseValue =
+    stats.burn * 2.4 +
+    stats.poison * 2.0 +
+    stats.trap * 2.1 +
+    stats.bleed * 2.4 +
+    stats.dot * 1.8 +
+    (stats.spreadPoison ? 3.2 : 0) +
+    hardCcTurns * 6.2 +
+    softCcTurns * 3.8 +
+    (stats.armorBreak ? 4.4 : 0) +
+    stats.defenseDown * 3.2 +
+    (stats.ignoreResistance ? 5.0 : 0) +
+    (stats.splash ? 3.6 : 0) +
+    stats.summon * 3.0 +
+    (stats.debuffAll ? 6.0 : 0) +
+    stats.drain * 0.18;
+  const utility = supportValue + offenseValue - stats.selfDamage * 0.25;
+  return {
+    ...stats,
+    hardCcTurns,
+    softCcTurns,
+    utility
+  };
+}
+
+function getMoveCoreElement(move = {}) {
+  return normalizeMoveElementForBalance(move?.element || '');
+}
+
+function isSupportOnlyMove(move = {}) {
+  const baseDamage = Math.max(0, Number(move?.baseDamage || 0));
+  const stats = getMoveEffectStats(move);
+  const hasSupport = stats.heal > 0 || stats.cleanse || stats.shield > 0 || stats.reflect > 0 || stats.dodge > 0 || stats.thorns > 0;
+  const hasOffenseUtility =
+    stats.hardCcTurns > 0 ||
+    stats.softCcTurns > 0 ||
+    stats.burn > 0 ||
+    stats.poison > 0 ||
+    stats.trap > 0 ||
+    stats.bleed > 0 ||
+    stats.dot > 0 ||
+    stats.armorBreak ||
+    stats.defenseDown > 0 ||
+    stats.splash ||
+    stats.spreadPoison;
+  return hasSupport && !hasOffenseUtility && baseDamage <= 10;
+}
+
+function calculateMoveCombatPower(move = {}) {
+  const tier = clampInt(move?.tier || 1, 1, 3, 1);
+  const profile = getTierPowerProfile(tier);
+  const stats = getMoveEffectStats(move);
+  const supportOnly = isSupportOnlyMove(move);
+  const damage = Math.max(0, Number(move?.baseDamage || 0));
+  const speed = normalizeMoveSpeedValue(move?.speed, move?.priority);
+  const tempo = (speed - profile.speedBase) * 0.8;
+  const utility = Number(stats.utility || 0);
+  const supportPenalty = supportOnly ? 1.5 : 0;
+  return damage + utility + tempo - supportPenalty;
+}
+
+function rebalanceMoveDamage(pool = []) {
+  for (const move of pool) {
+    if (!move || typeof move !== 'object') continue;
+    const tier = clampInt(move.tier || 1, 1, 3, 1);
+    const profile = getTierPowerProfile(tier);
+    const stats = getMoveEffectStats(move);
+    const supportOnly = isSupportOnlyMove(move);
+    const currentDamage = Math.max(0, Number(move.baseDamage || 0));
+    const typeBias = String(move.type || '').trim() === 'negative' ? 0.8 : 0;
+    const targetPower = profile.target + typeBias;
+    const desiredDamageRaw = targetPower - stats.utility;
+    const minDamage = supportOnly ? 0 : profile.min;
+    const maxDamage = supportOnly ? profile.supportMax : profile.max;
+    const desiredDamage = clampInt(Math.round(desiredDamageRaw), minDamage, maxDamage, currentDamage);
+    const blended = Math.round(currentDamage * 0.45 + desiredDamage * 0.55);
+    move.baseDamage = clampInt(blended, minDamage, maxDamage, desiredDamage);
+  }
+}
+
+function rebalanceMoveDamageByElement(pool = []) {
+  const offensiveMoves = pool.filter((move) => {
+    if (!move || typeof move !== 'object') return false;
+    if (isSupportOnlyMove(move)) return false;
+    return Number(move.baseDamage || 0) > 0;
+  });
+  if (offensiveMoves.length <= 0) return;
+
+  for (const tier of [1, 2, 3]) {
+    const tierMoves = offensiveMoves.filter((move) => clampInt(move.tier || 1, 1, 3, 1) === tier);
+    if (tierMoves.length <= 0) continue;
+    const globalAvg = tierMoves.reduce((sum, move) => sum + Number(move.baseDamage || 0), 0) / tierMoves.length;
+    const groups = new Map();
+    for (const move of tierMoves) {
+      const key = normalizeMoveElementForBalance(move.element);
+      if (!key) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(move);
+    }
+    for (const [key, list] of groups.entries()) {
+      if (!['水', '火', '草'].includes(key) || list.length <= 0) continue;
+      const elementAvg = list.reduce((sum, move) => sum + Number(move.baseDamage || 0), 0) / list.length;
+      const delta = globalAvg - elementAvg;
+      if (Math.abs(delta) < 0.6) continue;
+      const profile = getTierPowerProfile(tier);
+      for (const move of list) {
+        const next = Number(move.baseDamage || 0) + delta * 0.35;
+        move.baseDamage = clampInt(Math.round(next), profile.min, profile.max, move.baseDamage);
+      }
+    }
+  }
+}
+
+function rebalanceCoreElementParity(pool = []) {
+  const rows = Array.isArray(pool) ? pool.filter(Boolean) : [];
+  if (rows.length <= 0) return;
+
+  for (let pass = 0; pass < 4; pass++) {
+    for (const tier of [1, 2, 3]) {
+      const tierRows = rows.filter((move) => clampInt(move?.tier || 1, 1, 3, 1) === tier);
+      const groups = {
+        水: tierRows.filter((move) => getMoveCoreElement(move) === '水'),
+        火: tierRows.filter((move) => getMoveCoreElement(move) === '火'),
+        草: tierRows.filter((move) => getMoveCoreElement(move) === '草')
+      };
+      const avgs = Object.entries(groups)
+        .filter(([, list]) => list.length > 0)
+        .map(([key, list]) => ({
+          key,
+          avg: list.reduce((sum, move) => sum + calculateMoveCombatPower(move), 0) / list.length
+        }));
+      if (avgs.length <= 1) continue;
+      const target = avgs.reduce((sum, row) => sum + row.avg, 0) / avgs.length;
+      const profile = getTierPowerProfile(tier);
+
+      for (const { key, avg } of avgs) {
+        const delta = target - avg;
+        if (Math.abs(delta) < 0.35) continue;
+        for (const move of groups[key]) {
+          if (!move || typeof move !== 'object') continue;
+          const supportOnly = isSupportOnlyMove(move);
+          const nextSpeed = Number(move.speed || profile.speedBase) + delta * (supportOnly ? 0.30 : 0.18);
+          const speedClamped = clampInt(Math.round(nextSpeed), profile.speedMin, profile.speedMax, profile.speedBase);
+          move.speed = clampInt(speedClamped, MOVE_SPEED_MIN, MOVE_SPEED_MAX, profile.speedBase);
+
+          if (supportOnly) continue;
+          const nextDamage = Number(move.baseDamage || profile.target) + delta * 0.52;
+          move.baseDamage = clampInt(
+            Math.round(nextDamage),
+            profile.min,
+            profile.max,
+            Math.max(profile.min, Number(move.baseDamage || profile.target))
+          );
+        }
+      }
+    }
+  }
+}
+
+function rebalanceCoreElementTierScale(pool = []) {
+  const rows = Array.isArray(pool) ? pool.filter(Boolean) : [];
+  if (rows.length <= 0) return;
+  for (let pass = 0; pass < 4; pass++) {
+    for (const tier of [1, 2, 3]) {
+      const tierRows = rows.filter((move) => clampInt(move?.tier || 1, 1, 3, 1) === tier);
+      const groups = {
+        水: tierRows.filter((move) => getMoveCoreElement(move) === '水'),
+        火: tierRows.filter((move) => getMoveCoreElement(move) === '火'),
+        草: tierRows.filter((move) => getMoveCoreElement(move) === '草')
+      };
+      const means = Object.entries(groups)
+        .filter(([, list]) => list.length > 0)
+        .map(([key, list]) => ({
+          key,
+          mean: list.reduce((sum, move) => sum + calculateMoveCombatPower(move), 0) / list.length
+        }));
+      if (means.length <= 1) continue;
+      const target = means.reduce((sum, row) => sum + row.mean, 0) / means.length;
+      const profile = getTierPowerProfile(tier);
+
+      for (const { key, mean } of means) {
+        if (!Number.isFinite(mean) || mean <= 0) continue;
+        const minScale = tier >= 3 ? 0.72 : 0.80;
+        const maxScale = tier >= 3 ? 1.22 : 1.18;
+        const scale = Math.max(minScale, Math.min(maxScale, target / mean));
+        const speedNudge = (scale - 1) * (tier >= 3 ? 6.8 : 5.5);
+        for (const move of groups[key]) {
+          if (!move || typeof move !== 'object') continue;
+          const supportOnly = isSupportOnlyMove(move);
+          if (!supportOnly) {
+            const nextDamage = Number(move.baseDamage || profile.target) * scale;
+            move.baseDamage = clampInt(
+              Math.round(nextDamage),
+              profile.min,
+              profile.max,
+              Math.max(profile.min, Number(move.baseDamage || profile.target))
+            );
+          }
+          const baseSpeed = Number(move.speed || profile.speedBase);
+          const nextSpeed = clampInt(Math.round(baseSpeed + speedNudge), profile.speedMin, profile.speedMax, profile.speedBase);
+          move.speed = clampInt(nextSpeed, MOVE_SPEED_MIN, MOVE_SPEED_MAX, profile.speedBase);
+        }
+      }
+    }
+  }
+}
+
 function deriveMovePriority(move = {}) {
   const effect = (move && typeof move.effect === 'object') ? move.effect : {};
   if (effect.flee) return 3;
@@ -145,17 +448,31 @@ function deriveMovePriority(move = {}) {
 
 function deriveMoveSpeed(move = {}) {
   const effect = (move && typeof move.effect === 'object') ? move.effect : {};
-  if (effect.flee) return 3;
-  if (effect.wait) return -1;
+  if (effect.flee) return MOVE_SPEED_MAX;
+  if (effect.wait) return MOVE_SPEED_MIN;
 
-  const hasHardControl = Boolean(effect.stun || effect.freeze || effect.missNext);
-  const hasSupport = Boolean(effect.heal || effect.cleanse || effect.shield || effect.dodge || effect.reflect);
-  const hasHeavyBurst = Number(move.baseDamage || 0) >= 35 || Number(move.tier || 1) >= 3;
+  const tier = clampInt(move.tier || 1, 1, 3, 1);
+  const profile = getTierPowerProfile(tier);
+  const stats = getMoveEffectStats(move);
+  const supportOnly = isSupportOnlyMove(move);
+  const damage = Math.max(0, Number(move.baseDamage || 0));
+  const hasHardControl = stats.hardCcTurns > 0;
+  const hasSoftControl = stats.softCcTurns > 0;
 
-  let speed = 0;
-  if (hasSupport || hasHardControl) speed += 1;
-  if (hasHeavyBurst) speed -= 1;
-  return Math.max(-1, Math.min(3, speed));
+  let speed = profile.speedBase;
+  if (supportOnly) speed += 3;
+  if (hasHardControl) speed += 2;
+  else if (hasSoftControl) speed += 1;
+  if (stats.heal > 0 && damage <= 0) speed += 2;
+  if (stats.splash) speed -= 1;
+  if (stats.selfDamage > 0) speed -= 1;
+
+  const damageOver = damage - profile.target;
+  if (damageOver > 0) speed -= damageOver * 0.35;
+  if (damageOver > 8) speed -= 1;
+  if (stats.utility > 12 && damage <= profile.target + 2) speed += 1;
+  const clampedByTier = clampInt(Math.round(speed), profile.speedMin, profile.speedMax, profile.speedBase);
+  return clampInt(clampedByTier, MOVE_SPEED_MIN, MOVE_SPEED_MAX, MOVE_SPEED_DEFAULT);
 }
 
 function enforceMovePriority(pool = []) {
@@ -173,12 +490,15 @@ function enforceMovePriority(pool = []) {
 function enforceMoveSpeed(pool = []) {
   for (const move of pool) {
     if (!move || typeof move !== 'object') continue;
-    const fixed = Number(move.speed);
-    if (Number.isFinite(fixed)) {
-      move.speed = Math.max(-1, Math.min(3, Math.floor(fixed)));
-      continue;
+    if (Number.isFinite(Number(move.speed))) {
+      move.speed = normalizeMoveSpeedValue(move.speed, move.priority);
+    } else {
+      move.speed = deriveMoveSpeed(move);
     }
-    move.speed = deriveMoveSpeed(move);
+    if (!(move?.effect && (move.effect.flee || move.effect.wait))) {
+      const profile = getTierPowerProfile(move?.tier || 1);
+      move.speed = clampInt(Number(move.speed || profile.speedBase), profile.speedMin, profile.speedMax, profile.speedBase);
+    }
   }
 }
 
@@ -203,15 +523,21 @@ function enforceControlMoveTier(pool = []) {
 // 控制型技能不應落在普通階，避免前期連控失衡
 enforceControlMoveTier(POSITIVE_MOVES);
 enforceControlMoveTier(NEGATIVE_MOVES);
+rebalanceMoveDamage(POSITIVE_MOVES);
+rebalanceMoveDamage(NEGATIVE_MOVES);
+rebalanceMoveDamageByElement([...POSITIVE_MOVES, ...NEGATIVE_MOVES]);
 enforceMovePriority(POSITIVE_MOVES);
 enforceMovePriority(NEGATIVE_MOVES);
 enforceMoveSpeed(POSITIVE_MOVES);
 enforceMoveSpeed(NEGATIVE_MOVES);
+rebalanceCoreElementParity(POSITIVE_MOVES);
+rebalanceCoreElementTierScale(POSITIVE_MOVES);
+enforceMoveSpeed(POSITIVE_MOVES);
 
 // ============== 初始技能 ==============
 const INITIAL_MOVES = [
-  { id: 'head_butt', name: '頭槌', element: '普通', type: 'normal', tier: 1, priority: 0, speed: 0, baseDamage: 8, effect: {}, desc: '寵物本能攻擊' },
-  { id: 'flee', name: '逃跑', element: '普通', type: 'normal', tier: 1, priority: 3, speed: 3, baseDamage: 0, effect: { flee: true }, desc: '100%逃脫' }
+  { id: 'head_butt', name: '頭槌', element: '普通', type: 'normal', tier: 1, priority: 0, speed: 10, baseDamage: 8, effect: {}, desc: '寵物本能攻擊' },
+  { id: 'flee', name: '逃跑', element: '普通', type: 'normal', tier: 1, priority: 3, speed: 20, baseDamage: 0, effect: { flee: true }, desc: '100%逃脫' }
 ];
 
 const ALL_MOVES = [...POSITIVE_MOVES, ...NEGATIVE_MOVES, ...INITIAL_MOVES];
