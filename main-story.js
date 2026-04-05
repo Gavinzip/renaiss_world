@@ -309,7 +309,7 @@ function inferMissionUnlockByAction(state, context = {}) {
   const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
   const minStoryTurns = Math.max(0, Number(spec?.minStoryTurns || 0));
   const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 0));
-  const leadGraceTurns = Math.max(0, Number(spec?.leadGraceTurns || 2));
+  const leadGraceTurns = Math.max(0, Math.min(1, Number(spec?.leadGraceTurns ?? 1)));
   if (storyTurns < minStoryTurns) return null;
   if (turnsInLocation < minTurnsInLocation) return null;
   const hasLeadHint = Number(row?.leadShownCount || 0) > 0;
@@ -327,7 +327,10 @@ function inferMissionUnlockByAction(state, context = {}) {
     (String(context?.enemyName || '').trim() && String(context.enemyName).includes(spec.npcName)) ||
     (spec.npcName && actionText.includes(spec.npcName))
   );
-  if (!hasNpcTrace) return null;
+  const inMissionCity = location === requiredLocation;
+  // 在唯一來源城市、且已出過關鍵線索時，允許「不含 NPC 全名」的調查推進，避免卡關。
+  const relaxedNpcTrace = hasLeadHint && inMissionCity && turnsInLocation >= minTurnsInLocation;
+  if (!hasNpcTrace && !relaxedNpcTrace) return null;
 
   const enemyName = String(context?.enemyName || '').trim();
   const victory = Boolean(context?.victory);
@@ -363,7 +366,7 @@ function maybeTriggerMissionNpcLead(player, context = {}) {
   const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 2));
   if (storyTurns < minStoryTurns) return null;
   if (turnsInLocation < minTurnsInLocation) return null;
-  if (storyTurns - Number(row.lastLeadTurn || -999) < 2) return null;
+  if (storyTurns - Number(row.lastLeadTurn || -999) < 1) return null;
 
   const baseChance = clamp(
     0.2 + Number(row.leadShownCount || 0) * 0.14 + Math.max(0, turnsInLocation - minTurnsInLocation) * 0.05,
@@ -371,8 +374,8 @@ function maybeTriggerMissionNpcLead(player, context = {}) {
     0.78
   );
   const chance = Number(row.leadShownCount || 0) <= 0
-    ? clamp(baseChance + 0.22, 0.42, 0.9)
-    : baseChance;
+    ? clamp(baseChance + 0.48, 0.85, 0.98)
+    : clamp(baseChance + 0.08, 0.28, 0.86);
   if (Math.random() > chance) return null;
 
   row.leadShownCount = Math.max(0, Number(row.leadShownCount || 0)) + 1;
