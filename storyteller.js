@@ -1552,199 +1552,6 @@ function isMainlineGuideChoiceText(choice = {}) {
   return /(主線|導引|回到線索|沿線追查|下一段|下一步)/u.test(text);
 }
 
-function buildFallbackMainlineBridgeChoice({
-  playerLang = 'zh-TW',
-  location = '',
-  stageGoal = '',
-  stage = 1,
-  stageCount = 8
-} = {}) {
-  const safeLocation = String(location || '當前區域').trim() || '當前區域';
-  const safeGoal = String(stageGoal || '').trim() || '先做一輪在地交叉驗證，確保線索來源可靠';
-  const progressText = `地區進度 ${Math.max(1, Number(stage || 1))}/${Math.max(1, Number(stageCount || 8))}`;
-  const base = {
-    action: 'main_story',
-    tag: '[📖主線導引]',
-    name: '沿線推進調查',
-    choice: `沿${safeLocation}線路執行「${safeGoal}」，先做低風險驗證再深入`,
-    desc: `${progressText}｜承接當前現場線索，穩定推進下一段`,
-    mainlineGoal: safeGoal,
-    mainlineProgress: progressText,
-    mainlineStage: Math.max(1, Number(stage || 1)),
-    mainlineStageCount: Math.max(1, Number(stageCount || 8)),
-    mainlineBridge: true
-  };
-  return normalizeChoiceByLanguage(base, playerLang);
-}
-
-async function generateMainlineBridgeChoiceWithAI({
-  playerLang = 'zh-TW',
-  location = '',
-  stageGoal = '',
-  stage = 1,
-  stageCount = 8,
-  storyTail = '',
-  storyContext = '',
-  bridgeContext = ''
-} = {}) {
-  const safeLocation = String(location || '當前區域').trim() || '當前區域';
-  const safeGoal = String(stageGoal || '').replace(/\s+/g, ' ').trim();
-  if (!safeGoal) return null;
-
-  const langInstruction = {
-    'zh-TW': '請用繁體中文',
-    'zh-CN': '請用簡體中文',
-    'en': 'Please output in English'
-  }[playerLang] || '請用繁體中文';
-  const progressText = `地區進度 ${Math.max(1, Number(stage || 1))}/${Math.max(1, Number(stageCount || 8))}`;
-  const tail = String(storyTail || '').replace(/\s+/g, ' ').trim().slice(-280);
-  const fullContext = String(storyContext || '').replace(/\s+/g, ' ').trim().slice(-1600);
-  const bridgeCtx = String(bridgeContext || '').replace(/\s+/g, ' ').trim().slice(-1200);
-
-  const prompt = `你是 Renaiss 劇情選項橋接器，只生成 1 個自然承接的主線選項（JSON 物件）。
-風格限制：原創科技收藏敘事，禁止武俠語氣與模板句。
-
-語言：${playerLang}（${langInstruction}）
-地點：${safeLocation}
-主線目標（8-2）：${safeGoal}
-故事全文（8-1，截斷）：
-${fullContext || '（無）'}
-故事尾段（8-1，優先承接）：
-${tail || '（無）'}
-橋接上下文（與主選項同源）：
-${bridgeCtx || '（無）'}
-
-任務：
-生成 1 個「從 8-1 承接到 8-2」的可執行選項，語氣要像玩家當下真的會做的事，不可模板化。
-禁止出現這種句型：先處理本區關鍵、回到核心線索、照劇本走。
-
-輸出格式（只輸出 JSON，不要額外文字）：
-{"name":"12字內短標題","choice":"12-30字具體動作","desc":"12-34字補充說明","tag":"[📖主線導引]"}
-
-規則：
-1. 選項必須承接「故事尾段」中的場景或行動方向。
-2. 選項要默默導向「主線目標」，但不能直接複誦目標原文。
-3. 必須可執行、可觀察，不可空話。
-4. 禁止武俠詞彙：江湖、俠客、門派、武功、內力、修煉。
-5. 禁止系統測試語氣：不可寫「測試是否可用」「方向是否可用」「主傳送門測試」這類句子。
-6. 不可忽略「故事全文」裡已出現的人物/物件關係，禁止憑空改寫前文事實。
-7. 優先使用「橋接上下文」內已出現的人名、地點、物件與動作詞。`;
-
-  try {
-    const raw = await callAI(prompt, 0.9, {
-      label: 'mainlineBridgeChoice',
-      model: MINIMAX_MODEL,
-      maxTokens: 260,
-      timeoutMs: SYSTEM_CHOICE_TIMEOUT_MS,
-      retries: 2
-    });
-    const parsed = parseJsonOrThrow(raw, 'object');
-    const choice = normalizeChoiceByLanguage({
-      action: 'main_story',
-      name: String(parsed?.name || '').trim() || '沿線推進調查',
-      choice: String(parsed?.choice || '').trim() || `沿${safeLocation}持續追查，先做一輪在地驗證`,
-      desc: String(parsed?.desc || '').trim() || `${progressText}｜承接現場線索推進下一段`,
-      tag: '[📖主線導引]',
-      mainlineGoal: safeGoal,
-      mainlineProgress: progressText,
-      mainlineStage: Math.max(1, Number(stage || 1)),
-      mainlineStageCount: Math.max(1, Number(stageCount || 8)),
-      mainlineBridge: true
-    }, playerLang);
-    return sanitizeMainlineBridgeChoiceTone(choice, {
-      playerLang,
-      location: safeLocation,
-      progressText
-    });
-  } catch (e) {
-    console.log('[AI][mainlineBridgeChoice] skipped:', e?.message || e);
-    return null;
-  }
-}
-
-async function injectMainlineBridgeChoiceWithAI(choices = [], options = {}) {
-  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_OUTPUT_COUNT).map(item => ({ ...item })) : [];
-  if (list.length === 0) return list;
-
-  const playerLang = String(options?.playerLang || 'zh-TW').trim() || 'zh-TW';
-  const location = String(options?.location || '').trim();
-  const stageGoal = String(options?.stageGoal || '').trim();
-  const stage = Math.max(1, Number(options?.stage || 1));
-  const stageCount = Math.max(1, Number(options?.stageCount || 8));
-  const storyTail = String(options?.storyTail || '').trim();
-  const storyContext = String(options?.storyContext || '').trim();
-  const bridgeContext = String(options?.bridgeContext || '').trim();
-  const bridgeChoiceResolved = Boolean(options?.bridgeChoiceResolved);
-  const precomputedBridgeChoice = options?.bridgeChoice && typeof options.bridgeChoice === 'object'
-    ? { ...options.bridgeChoice }
-    : null;
-  const islandCompleted = Boolean(options?.islandCompleted);
-
-  if (islandCompleted) return list;
-  if (!stageGoal) return list;
-
-  const existingGuideIdx = list.findIndex(isMainlineGuideChoiceText);
-  if (existingGuideIdx >= 0) {
-    const normalized = normalizeChoiceByLanguage({
-      ...list[existingGuideIdx],
-      action: 'main_story',
-      tag: '[📖主線導引]',
-      mainlineGoal: stageGoal,
-      mainlineProgress: `地區進度 ${stage}/${stageCount}`,
-      mainlineStage: stage,
-      mainlineStageCount: stageCount,
-      mainlineBridge: true
-    }, playerLang);
-    list[existingGuideIdx] = normalized;
-    return list.slice(0, CHOICE_OUTPUT_COUNT);
-  }
-
-  let bridgeRaw = precomputedBridgeChoice;
-  if (!bridgeRaw && bridgeChoiceResolved) {
-    bridgeRaw = null;
-  }
-  if (!bridgeRaw) {
-    bridgeRaw = await generateMainlineBridgeChoiceWithAI({
-      playerLang,
-      location,
-      stageGoal,
-      stage,
-      stageCount,
-      storyTail,
-      storyContext,
-      bridgeContext
-    });
-  }
-  if (!bridgeRaw || typeof bridgeRaw !== 'object') return list.slice(0, CHOICE_OUTPUT_COUNT);
-  const progressText = `地區進度 ${stage}/${stageCount}`;
-  const bridgeChoice = sanitizeMainlineBridgeChoiceTone(normalizeChoiceByLanguage({
-    ...bridgeRaw,
-    action: 'main_story',
-    tag: '[📖主線導引]',
-    mainlineGoal: stageGoal,
-    mainlineProgress: progressText,
-    mainlineStage: stage,
-    mainlineStageCount: stageCount,
-    mainlineBridge: true
-  }, playerLang), {
-    playerLang,
-    location,
-    progressText
-  });
-
-  const fp = getChoiceFingerprint(bridgeChoice);
-  const hasDuplicate = list.some((item) => getChoiceFingerprint(item) === fp);
-  if (hasDuplicate) return list.slice(0, CHOICE_OUTPUT_COUNT);
-
-  if (list.length < CHOICE_OUTPUT_COUNT) {
-    list.push(bridgeChoice);
-    return list.slice(0, CHOICE_OUTPUT_COUNT);
-  }
-
-  list[list.length - 1] = bridgeChoice;
-  return list.slice(0, CHOICE_OUTPUT_COUNT);
-}
-
 function hasUnanchoredEntityToken(text = '', anchors = []) {
   const source = String(text || '');
   if (!source) return false;
@@ -2286,19 +2093,6 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const startedAt = Date.now();
   const newbieMask = isInNewbiePhase(player);
   const arcMeta = getLocationArcMeta(player);
-  const storySignals = buildStorySystemSignals(previousStory || '');
-  const forcePortal = Boolean(
-    arcMeta.nearCompletion ||
-    (storySignals.portal && arcMeta.turnsInLocation >= Math.max(2, Math.floor(arcMeta.targetTurns * 0.5))) ||
-    (!arcMeta.seenPortalChoice && arcMeta.turnsInLocation >= Math.max(2, Math.floor(arcMeta.targetTurns * 0.6)))
-  );
-  const forceWishPool = Boolean(
-    (storySignals.wishPool && !arcMeta.seenWishPoolChoice && arcMeta.turnsInLocation >= 2) ||
-    !arcMeta.seenWishPoolChoice && arcMeta.turnsInLocation >= Math.max(2, Math.floor(arcMeta.targetTurns * 0.5))
-  );
-  const forceMarket = Boolean(
-    storySignals.market && !arcMeta.seenMarketChoice && arcMeta.turnsInLocation >= 1
-  );
   const location = player.location || '河港鎮';
   const islandState = ISLAND_STORY.getIslandStoryState(player, location) || null;
   const islandGuidePrompt = ISLAND_STORY.buildIslandGuidancePrompt(player, location);
@@ -2361,14 +2155,30 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const missionInfo = typeof MAIN_STORY.getCurrentRegionMission === 'function'
     ? MAIN_STORY.getCurrentRegionMission(player, location)
     : null;
+  const missionInCity = Boolean(
+    missionInfo &&
+    !missionInfo.keyFound &&
+    String(location || '').trim() === String(missionInfo.npcLocation || '').trim()
+  );
+  const missionCityTurns = missionInCity ? Math.max(1, Number(arcMeta?.turnsInLocation || 1)) : 0;
+  const missionApproachRule = (() => {
+    if (!missionInfo || missionInfo.keyFound) return '';
+    if (missionInfo.regionId === 'island_routes') {
+      return '本區關鍵任務未完成：四巨頭未全滅前，只能鋪陳追蹤或備戰，不能寫成已拿到終章核心憑證。';
+    }
+    if (missionInCity) {
+      if (missionCityTurns <= 1) {
+        return `你已在任務城市（第${missionCityTurns}回合）：本回合至少 1 個選項要自然引出「${missionInfo.npcName}」的出沒線索（旁觀者口供、交易時間、常去地點等），語句不可像任務模板。`;
+      }
+      if (missionCityTurns === 2) {
+        return `你已在任務城市（第2回合）：本回合至少 1 個選項要把線索收斂成可執行接觸（堵點、約見、尾隨、換取情報），但不得直接寫成證據到手。`;
+      }
+      return `你已在任務城市（第${missionCityTurns}回合）：本回合至少 1 個選項可直接接觸「${missionInfo.npcName}」或其代理人；仍不可直接寫成已取得「${missionInfo.evidenceName}」。`;
+    }
+    return `你尚未到任務城市：本回合至少 1 個選項要透過在地線索把路徑推向「${missionInfo.npcLocation}」，不可在當地直接拿到「${missionInfo.evidenceName}」。`;
+  })();
   const missionChoiceRule = missionInfo && !missionInfo.keyFound
-    ? (missionInfo.regionId === 'island_routes'
-      ? '本區關鍵任務未完成：四巨頭未全滅前，只能鋪陳追蹤或備戰，不能寫成已拿到終章核心憑證。'
-      : (
-        String(location || '').trim() === String(missionInfo.npcLocation || '').trim()
-          ? `本區關鍵任務未完成：你現在在唯一來源城市。5 個選項中至少 1 個要自然導向接觸「${missionInfo.npcName}」或其行動軌跡；不得直接寫成已取得「${missionInfo.evidenceName}」。`
-          : `本區關鍵任務未完成：不可在本地直接取得「${missionInfo.evidenceName}」，只能鋪陳為蒐集路徑、比對線索，或朝「${missionInfo.npcLocation}」推進。`
-      ))
+    ? missionApproachRule
     : '';
   
   const focusedMemory = summarizeContext(memoryContext, 560, 8);
@@ -2466,6 +2276,7 @@ ${anchorText}
 11. 5 個選項要有足夠發散度，避免都在做同一件事
 11a. 禁止模板句型：不可出現「沿著/沿XX繼續追查來源與流向」「先處理本區關鍵」「回到核心線索」這類制式措辭
 11b. 每個選項都要有具體對象（人/物/地點/行動），不能只寫抽象目標
+11c. 禁止把規則文字直接寫進選項（例如「關鍵任務」「唯一來源」「地區進度 x/8」「鎖定某某拿到某證據」）
 12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
 13. 若島嶼劇情進行中，至少 1 個選項要明確推進島內主題（來自島內引導段），且不得超過 1 個主線強引導選項
 14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例

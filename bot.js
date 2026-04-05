@@ -849,9 +849,14 @@ async function startFriendDuel(interaction, user, friendId = '') {
     await showFriendsMenu(interaction, user, '你們尚未互加好友，無法發起友誼戰。');
     return;
   }
+  // 友誼戰優先：若玩家殘留舊戰鬥狀態（常見於互動中斷/畫面遺失），允許本次直接覆蓋。
   if (challenger.battleState?.enemy) {
-    await interaction.reply({ content: '⚠️ 你目前正在戰鬥中，請先結束再發起友誼戰。', ephemeral: true }).catch(() => {});
-    return;
+    const previousOnlineRoomId = String(challenger?.battleState?.friendDuel?.online?.roomId || '').trim();
+    if (previousOnlineRoomId) {
+      clearOnlineFriendDuelTimer(previousOnlineRoomId);
+    }
+    challenger.battleState = null;
+    CORE.savePlayer(challenger);
   }
 
   const targetPlayer = CORE.loadPlayer(targetId);
@@ -958,16 +963,54 @@ async function startFriendDuel(interaction, user, friendId = '') {
       `請選擇戰鬥模式：`
     );
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel('⚔️ 手動戰鬥（線下模式）').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('battle_mode_manual_online').setLabel('🌐 手動戰鬥（線上模式）').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('battle_mode_manual').setLabel('⚔️ 手動模式').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 AI戰鬥').setStyle(ButtonStyle.Primary)
+  );
+  await interaction.update({ embeds: [embed], components: [row] });
+}
+
+async function showFriendManualModePicker(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
+  const duel = player?.battleState?.friendDuel;
+  const enemy = player?.battleState?.enemy;
+  if (!player || !pet || !duel || !enemy) {
+    await interaction.reply({ content: '❌ 找不到可用的好友對戰狀態，請重新發起。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (petResolved?.changed) CORE.savePlayer(player);
+
+  const embed = new EmbedBuilder()
+    .setTitle('⚔️ 手動模式選擇')
+    .setColor(0x8b5cf6)
+    .setDescription(
+      `對手：${String(duel.friendName || '好友').trim() || '好友'}\n` +
+      `請選擇手動模式：\n` +
+      `1) 手動（對手AI）\n` +
+      `2) 手動（真人即時，雙方每回合限時提交）`
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel('⚔️ 手動（對手AI）').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('battle_mode_manual_online').setLabel('🌐 手動（真人即時）').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel('↩️ 返回').setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
 }
 
 function parseOnlineFriendDuelAction(customId = '') {
   const text = String(customId || '').trim();
-  let matched = text.match(/^fdonline_move_([^_]+)_(\d+)$/);
+  let matched = text.match(/^fdonline_join_([^_]+)$/);
+  if (matched) {
+    return {
+      kind: 'join',
+      hostId: String(matched[1] || '').trim(),
+      moveIndex: -1
+    };
+  }
+  matched = text.match(/^fdonline_move_([^_]+)_(\d+)$/);
   if (matched) {
     return {
       kind: 'move',
@@ -3587,173 +3630,6 @@ function ensureEarlyGameIncomeChoice(player, choices = []) {
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
 
-function isMainlineGuideChoice(choice) {
-  if (!choice || typeof choice !== 'object') return false;
-  const action = String(choice.action || '').trim();
-  if (action === 'main_story') return true;
-  const tag = String(choice.tag || '').trim();
-  if (/\[📖主線導引\]/u.test(tag)) return true;
-  // 傳送門本身不等於主線導引，避免一般移動選項被硬套上「地區進度 x/8」。
-  if (action === 'portal_intent') {
-    const portalText = [choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
-    return /(主線|收尾|下一區|跨區|回到線索|沿線追查)/u.test(portalText);
-  }
-  const text = [tag, choice.name || '', choice.choice || '', choice.desc || ''].join(' ');
-  return /(主線|收尾|下一區|跨區|回到線索|沿線追查)/u.test(text);
-}
-
-function createSoftMainlineGuideChoice(player) {
-  const location = String(player?.location || '附近據點').trim() || '附近據點';
-  const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
-    ? ISLAND_STORY.getIslandStoryState(player, location)
-    : null;
-  const isCompleted = Boolean(islandState?.completed);
-  const stage = Math.max(1, Number(islandState?.stage || 1));
-  // 舊存檔可能殘留 3 段，顯示層至少以 8 段呈現
-  const stageCount = Math.max(8, Number(islandState?.stageCount || 8));
-  const nextPrimary = ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
-    ? String(ISLAND_STORY.getNextPrimaryLocation(location) || '').trim()
-    : '';
-  const chapterTitle = ISLAND_STORY && typeof ISLAND_STORY.getStoryChapterTitle === 'function'
-    ? String(ISLAND_STORY.getStoryChapterTitle(location) || '島內篇章').trim()
-    : '島內篇章';
-  const roadmap = ISLAND_STORY && typeof ISLAND_STORY.getStoryRoadmap === 'function'
-    ? ISLAND_STORY.getStoryRoadmap(location, stageCount)
-    : [];
-  const stageIdx = Math.max(0, Math.min(Math.max(0, stageCount - 1), stage - 1));
-  const stageGoal = String(
-    (Array.isArray(roadmap) && roadmap[stageIdx]) || '先把當前線索做交叉比對，再決定下一步'
-  ).trim();
-  const safeProgressText = `地區進度 ${stage}/${stageCount}`;
-
-  if (isCompleted && nextPrimary) {
-    return {
-      action: 'portal_intent',
-      tag: '[📖主線導引]',
-      name: '轉往下一個線索區',
-      choice: `回到${location}主傳送門，前往${nextPrimary}銜接下一段調查`,
-      desc: `${chapterTitle}已收束，可先整理證據再跨區`,
-      mainlineNarrative: `你把${location}這段調查收束完成，下一步是經主傳送門前往${nextPrimary}。`
-    };
-  }
-
-  return {
-    action: 'main_story',
-    tag: '[📖主線導引]',
-    name: '沿現場線索追查',
-    choice: `回到${location}現場，優先核對「誰提供服務、何時出現」`,
-    desc: `${safeProgressText}｜先把當前證據補齊，再決定是否跨區`,
-    mainlineGoal: stageGoal,
-    mainlineProgress: safeProgressText,
-    mainlineNarrative: `你決定先把${location}的主線段落往前推進：${stageGoal}。`
-  };
-}
-
-function ensureMainlineChoiceProgress(choice, player) {
-  if (!choice || typeof choice !== 'object') return choice;
-  if (!isMainlineGuideChoice(choice)) return choice;
-
-  const next = { ...choice };
-  const meta = getIslandMainlineProgressMeta(player);
-  if (!meta) return next;
-  const progressText = meta.completed ? '本區主線已完成' : meta.progressText;
-  const action = String(next.action || '').trim();
-  if (!action || action === 'followup') next.action = 'main_story';
-  if (!String(next.tag || '').trim()) next.tag = '[📖主線導引]';
-
-  const choiceText = String(next.choice || next.name || '').trim();
-  if (!choiceText) {
-    next.choice = '沿現場線索繼續推進調查';
-  }
-
-  const descText = String(next.desc || '').trim();
-  if (!descText) {
-    next.desc = `${progressText}｜可自由探索但建議至少推進 1 段主線`;
-  } else if (!/地區進度\s*\d+\s*\/\s*\d+/u.test(descText) && !/本區主線已完成/u.test(descText)) {
-    next.desc = `${progressText}｜${descText}`;
-  }
-  next.mainlineProgress = progressText;
-  return next;
-}
-
-function createScatterChoice(player, salt = 0) {
-  const location = String(player?.location || '附近').trim() || '附近';
-  const templates = [
-    {
-      action: 'explore',
-      tag: '[🔍需探索]',
-      name: '四處走走觀察',
-      choice: `沿著${location}周邊繞行，記錄新出現的人事物`,
-      desc: '偏離主線的自由探索，可能觸發新支線'
-    },
-    {
-      action: 'social',
-      tag: '[🤝需社交]',
-      name: '和路人交換情報',
-      choice: `在${location}找攤商與巡邏員閒聊，蒐集當地傳聞`,
-      desc: '不直接推主線，但可能補齊背景細節'
-    },
-    {
-      action: 'forage',
-      tag: '[🎁高回報]',
-      name: '收集可交易素材',
-      choice: `先在${location}附近採集可交易素材，補充資源再說`,
-      desc: '偏經濟玩法，主線可稍後再推進'
-    },
-    {
-      action: 'custom_input',
-      tag: '[❓有驚喜]',
-      name: '自訂接下來行動',
-      choice: '先不跟系統建議，改由你決定下一步要做什麼',
-      desc: '允許你主動偏離劇情，系統下一回合仍會給你回主線入口'
-    }
-  ];
-  const idx = Math.abs(Number(salt || 0)) % templates.length;
-  return { ...templates[idx] };
-}
-
-function ensureSingleMainlineGuideChoice(player, choices = []) {
-  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
-  if (!player || list.length === 0) return list;
-
-  const guideIndices = [];
-  for (let i = 0; i < list.length; i++) {
-    if (isMainlineGuideChoice(list[i])) guideIndices.push(i);
-  }
-
-  if (guideIndices.length === 0) {
-    const injected = ensureMainlineChoiceProgress(createSoftMainlineGuideChoice(player), player);
-    const protectedActions = new Set(['wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery']);
-    let replaceIdx = list.length - 1;
-    for (let i = list.length - 1; i >= 0; i--) {
-      if (!protectedActions.has(String(list[i]?.action || '').trim())) {
-        replaceIdx = i;
-        break;
-      }
-    }
-    list[replaceIdx] = injected;
-    return list.slice(0, CHOICE_DISPLAY_COUNT);
-  }
-
-  // 不要太強硬：最多保留 1 條主線導引，其餘讓玩法發散
-  let keepIdx = guideIndices[0];
-  if (Boolean(player?.forcePortalChoice)) {
-    const portalIdx = guideIndices.find((idx) => String(list[idx]?.action || '').trim() === 'portal_intent');
-    if (Number.isFinite(Number(portalIdx))) keepIdx = portalIdx;
-  } else {
-    const mainStoryIdx = guideIndices.find((idx) => String(list[idx]?.action || '').trim() === 'main_story');
-    if (Number.isFinite(Number(mainStoryIdx))) keepIdx = mainStoryIdx;
-  }
-
-  let scatterSalt = getPlayerStoryTurns(player);
-  for (const idx of guideIndices) {
-    if (idx === keepIdx) continue;
-    list[idx] = createScatterChoice(player, scatterSalt++);
-  }
-  list[keepIdx] = ensureMainlineChoiceProgress(list[keepIdx], player);
-  return list.slice(0, CHOICE_DISPLAY_COUNT);
-}
-
 function applyChoicePolicy(player, choices = []) {
   let list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
@@ -4705,6 +4581,14 @@ function restoreChoicesFromGenerationState(player) {
 
 function rememberPlayer(player, memory) {
   if (!player || !memory || !memory.content) return;
+  const tags = Array.isArray(memory.tags) ? memory.tags.map((t) => String(t || '').trim().toLowerCase()) : [];
+  const type = String(memory.type || '').trim();
+  const content = String(memory.content || '').trim();
+  const outcome = String(memory.outcome || '').trim();
+  const merged = `${type} ${content} ${outcome}`.toLowerCase();
+  if (tags.includes('friend_duel') || type.includes('好友友誼戰') || merged.includes('friend_duel') || merged.includes('好友友誼戰')) {
+    return;
+  }
   CORE.appendPlayerMemory(player, memory);
 }
 
@@ -9047,14 +8931,14 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId.startsWith('pmkt_');
     const isFriendOnlineBattleButton =
       customId === 'battle_mode_manual_online' ||
-      customId.startsWith('fdonline_move_') ||
-      customId.startsWith('fdonline_wait_');
+      customId.startsWith('fdonline_');
     const isFriendFlowButton =
       customId === 'open_friends' ||
       customId === 'friend_refresh' ||
       customId === 'open_friend_add_modal' ||
       customId.startsWith('friend_') ||
       customId === 'battle_mode_manual' ||
+      customId === 'battle_mode_manual_back' ||
       customId === 'battle_mode_manual_offline' ||
       customId === 'battle_mode_manual_online' ||
       customId === 'battle_mode_ai';
@@ -10099,7 +9983,61 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
 
   if (customId === 'battle_mode_manual') {
-    await startManualBattle(interaction, user);
+    const player = CORE.loadPlayer(user.id);
+    if (player?.battleState?.friendDuel) {
+      await showFriendManualModePicker(interaction, user);
+    } else {
+      await startManualBattle(interaction, user);
+    }
+    return;
+  }
+
+  if (customId === 'battle_mode_manual_back') {
+    const player = CORE.loadPlayer(user.id);
+    if (player?.battleState?.friendDuel) {
+      const fallbackPet = PET.loadPet(user.id);
+      const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+      const pet = petResolved?.pet || fallbackPet;
+      const duel = player?.battleState?.friendDuel || {};
+      const enemy = player?.battleState?.enemy;
+      if (!pet || !enemy) {
+        await interaction.reply({ content: '❌ 找不到好友對戰狀態，請重新發起。', ephemeral: true }).catch(() => {});
+        return;
+      }
+      if (petResolved?.changed) CORE.savePlayer(player);
+      const estimate = estimateBattleOutcome(player, pet, enemy, player?.battleState?.fighter || 'pet');
+      const enemyElementText = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
+      const allyElementText = formatBattleElementDisplay(pet?.type || pet?.element || '');
+      const relationText = getBattleElementRelation(
+        pet?.type || pet?.element || '',
+        resolveEnemyBattleElement(enemy)
+      ).text;
+      const embed = new EmbedBuilder()
+        .setTitle(`🤝 好友友誼戰：${player.name} vs ${String(duel.friendName || '好友').trim() || '好友'}`)
+        .setColor(0x8b5cf6)
+        .setDescription(
+          `**友誼戰即將開始！**\n\n` +
+          `對手：${enemy.name}\n` +
+          `🏷️ 敵方屬性：${enemyElementText}\n` +
+          `❤️ 對手 HP：${enemy.hp}/${enemy.maxHp}\n` +
+          `⚔️ 對手攻擊：${enemy.attack}\n` +
+          `🐾 ${pet.name} 出戰\n` +
+          `🏷️ 我方屬性：${allyElementText}\n` +
+          `${relationText}\n` +
+          `⚡ 戰鬥能量規則：每回合 +2，可結轉\n` +
+          `🌐 線上手動模式：雙方每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒內同時提交行動\n` +
+          `🤝 友誼戰規則：不影響生死、無通緝、無金幣掉落\n` +
+          `📊 勝率預估：${estimate.rank}（約 ${format1(estimate.winRate)}%）\n\n` +
+          `請選擇戰鬥模式：`
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('battle_mode_manual').setLabel('⚔️ 手動模式').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 AI戰鬥').setStyle(ButtonStyle.Primary)
+      );
+      await interaction.update({ embeds: [embed], components: [row] });
+    } else {
+      await interaction.reply({ content: 'ℹ️ 目前不是好友對戰模式。', ephemeral: true }).catch(() => {});
+    }
     return;
   }
 
@@ -10136,7 +10074,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  if (customId.startsWith('fdonline_move_') || customId.startsWith('fdonline_wait_')) {
+  if (customId.startsWith('fdonline_')) {
     await handleOnlineFriendDuelChoice(interaction, user, customId);
     return;
   }
@@ -14244,6 +14182,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
   });
   const pager = paginateList(allListings, page, MARKET_LIST_PAGE_SIZE);
   const listings = pager.items;
+  const stockInfo = getTeleportDeviceStockInfo(player);
   const listText = listings.length > 0
     ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
     : '（目前沒有可購買商品）';
@@ -15463,6 +15402,10 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     islandProgressAfterTurn?.completed
   );
   const completedLocation = String(player.location || '').trim();
+  const regionMissionAtCompletion = (MAIN_STORY && typeof MAIN_STORY.getCurrentRegionMission === 'function')
+    ? MAIN_STORY.getCurrentRegionMission(player, completedLocation)
+    : null;
+  const shouldHoldForRegionMission = Boolean(regionMissionAtCompletion && !regionMissionAtCompletion.keyFound);
   const completedChapterTitle = ISLAND_STORY && typeof ISLAND_STORY.getStoryChapterTitle === 'function'
     ? String(ISLAND_STORY.getStoryChapterTitle(completedLocation) || '島內篇章').trim()
     : '島內篇章';
@@ -15472,7 +15415,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   const nextPortalHubHint = nextIslandHint && typeof getLocationPortalHub === 'function'
     ? String(getLocationPortalHub(nextIslandHint) || '').trim()
     : '';
-  if (islandCompletedNow) {
+  if (islandCompletedNow && !shouldHoldForRegionMission) {
     // 這個地區已完成：開放同區自由遊走（可不傳送）
     unlockRegionFreeRoamByLocation(player, completedLocation);
     // 收尾點直接把玩家帶到該區主傳送門旁，讓轉場更自然
@@ -15522,6 +15465,22 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       tags: ['island_story', 'completed']
     });
     if (!extraStoryGuide) extraStoryGuide = buildPortalUsageGuide(player);
+  } else if (islandCompletedNow && shouldHoldForRegionMission) {
+    const missionNpc = String(regionMissionAtCompletion?.npcName || '關鍵NPC').trim();
+    const missionLocation = String(regionMissionAtCompletion?.npcLocation || completedLocation).trim();
+    const missionEvidence = String(regionMissionAtCompletion?.evidenceName || '關鍵證據').trim();
+    result.message = `${String(result.message || '').trim()}\n\n` +
+      `📍 ${completedChapterTitle}可自由探索，但你尚未取得本區唯一來源關鍵證據「${missionEvidence}」。\n` +
+      `🎯 請優先在 **${missionLocation}** 接觸 **${missionNpc}**，完成後再考慮跨區。`;
+    player.portalMenuOpen = false;
+    player.forcePortalChoice = false;
+    queueMemory({
+      type: '主線',
+      content: `本區收尾但關鍵證據未取得：${missionEvidence}`,
+      outcome: `維持本區調查，優先接觸${missionNpc}@${missionLocation}`,
+      importance: 2,
+      tags: ['main_story', 'mission_hold']
+    });
   }
   if (typeof CORE.advanceRoamingDigitalVillains === 'function') {
     CORE.advanceRoamingDigitalVillains({ steps: 1, persist: true });
@@ -16619,6 +16578,25 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
   const readyText =
     `提交狀態：${hostName} ${formatOnlineFriendChoiceText(hostChoice, hostMoves)} ｜ ${rivalName} ${formatOnlineFriendChoiceText(rivalChoice, rivalMoves)}`;
 
+  if (online?.awaitingRival) {
+    const waitingContent =
+      `🌐 **好友手動對戰（線上模式）**\n` +
+      `🕒 正在等待對手加入本場即時戰鬥...\n` +
+      `就緒狀態：${hostName} ✅ ｜ ${rivalName} ⌛\n` +
+      `\n請對手按下「✅ 加入即時戰鬥」後開打。\n` +
+      `（若對手未加入，你也可以改用其他模式）`;
+    const readyRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`fdonline_join_${hostId}`).setLabel('✅ 加入即時戰鬥').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel('⚔️ 改用手動（對手AI）').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 改用AI戰鬥').setStyle(ButtonStyle.Secondary)
+    );
+    return {
+      content: waitingContent,
+      embeds: [],
+      components: [readyRow]
+    };
+  }
+
   const content =
     `🌐 **好友手動對戰（線上模式）**\n` +
     `⏳ 本回合倒數：<t:${countdownTs}:R>（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）\n` +
@@ -16901,20 +16879,20 @@ async function startManualBattleOnline(interaction, user) {
     rivalId: friendId,
     roomId: `fd_${String(player.id || '').trim()}_${Date.now().toString(36)}`,
     turn: Math.max(1, Number(player?.battleState?.turn || 1)),
-    deadlineAt: Date.now() + FRIEND_DUEL_ONLINE_TURN_MS,
+    deadlineAt: 0,
     rivalEnergy: 2,
     choices: {},
     channelId: String(interaction.channelId || '').trim(),
     messageId: String(interaction.message?.id || '').trim(),
-    resolving: false
+    resolving: false,
+    awaitingRival: true
   };
   player.battleState.friendDuel.online = online;
   CORE.savePlayer(player);
   clearOnlineFriendDuelTimer(online.roomId);
-  scheduleOnlineFriendDuelTimer(player);
 
   const payload = buildOnlineFriendDuelPayload(player, pet, {
-    notice: `📡 已建立即時友誼戰房間：每回合限時 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒提交。`
+    notice: `📡 已建立即時友誼戰房間，等待對手加入。`
   });
   await interaction.update(payload).catch(async () => {
     await interaction.reply({ content: '❌ 線上模式啟動失敗，請重試。', ephemeral: true }).catch(() => {});
@@ -16956,6 +16934,42 @@ async function handleOnlineFriendDuelChoice(interaction, user, customId = '') {
   const actorIsRival = actorId === rivalId;
   if (!actorIsHost && !actorIsRival) {
     await interaction.reply({ content: '⚠️ 你不是本場線上友誼戰參戰者。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  if (action.kind === 'join') {
+    if (!online.awaitingRival) {
+      await interaction.reply({ content: 'ℹ️ 這場即時戰鬥已開始。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (!actorIsRival) {
+      await interaction.reply({ content: '⚠️ 只有對手可以按「加入即時戰鬥」。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    await interaction.deferUpdate().catch(() => {});
+    online.awaitingRival = false;
+    online.deadlineAt = Date.now() + FRIEND_DUEL_ONLINE_TURN_MS;
+    online.turn = Math.max(1, Number(hostPlayer?.battleState?.turn || online.turn || 1));
+    online.choices = {};
+    online.resolving = false;
+    CORE.savePlayer(hostPlayer);
+    scheduleOnlineFriendDuelTimer(hostPlayer);
+
+    const fallbackPetJoin = PET.loadPet(hostId);
+    const petResolvedJoin = resolvePlayerMainPet(hostPlayer, { preferBattle: true, fallbackPet: fallbackPetJoin });
+    const hostPetJoin = petResolvedJoin?.pet || fallbackPetJoin;
+    if (!hostPetJoin) return;
+    if (petResolvedJoin?.changed) CORE.savePlayer(hostPlayer);
+
+    const payload = buildOnlineFriendDuelPayload(hostPlayer, hostPetJoin, {
+      notice: `✅ 雙方已就緒，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
+    });
+    await editOnlineFriendDuelMessage(hostPlayer, payload);
+    return;
+  }
+
+  if (online.awaitingRival) {
+    await interaction.reply({ content: '⏳ 對手尚未加入線上即時戰鬥，暫時不能提交招式。', ephemeral: true }).catch(() => {});
     return;
   }
 

@@ -309,7 +309,7 @@ function inferMissionUnlockByAction(state, context = {}) {
   const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
   const minStoryTurns = Math.max(0, Number(spec?.minStoryTurns || 0));
   const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 0));
-  const leadGraceTurns = Math.max(0, Math.min(1, Number(spec?.leadGraceTurns ?? 1)));
+  const leadGraceTurns = Math.max(0, Math.min(6, Number(spec?.leadGraceTurns ?? 1)));
   if (storyTurns < minStoryTurns) return null;
   if (turnsInLocation < minTurnsInLocation) return null;
   const hasLeadHint = Number(row?.leadShownCount || 0) > 0;
@@ -341,7 +341,13 @@ function inferMissionUnlockByAction(state, context = {}) {
   if (!actionText.trim()) return null;
   const matched = Array.isArray(spec.actionKeywords)
     && spec.actionKeywords.some((kw) => kw && actionText.includes(kw));
-  if (!matched) return null;
+  const isMainStoryPush = String(context?.eventAction || '').trim() === 'main_story';
+  const relaxedMainStoryUnlock = isMainStoryPush && inMissionCity && hasLeadHint;
+  const relaxedInvestigateUnlock = inMissionCity
+    && hasLeadHint
+    && turnsInLocation >= minTurnsInLocation
+    && /(詢問|问|訪談|访谈|追查|追蹤|追踪|查證|查证|核對|核对|比對|比对|尾隨|尾随|堵點|堵点|約見|约见|交涉|對質|对质|對接|对接)/u.test(actionText);
+  if (!matched && !relaxedMainStoryUnlock && !relaxedInvestigateUnlock) return null;
   return buildMissionEvidenceUnlock(state, regionId, 'investigate', spec.npcName);
 }
 
@@ -365,7 +371,7 @@ function maybeTriggerMissionNpcLead(player, context = {}) {
   const minStoryTurns = Math.max(0, Number(spec?.minStoryTurns || 2));
   const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 2));
   if (storyTurns < minStoryTurns) return null;
-  if (turnsInLocation < minTurnsInLocation) return null;
+  if (turnsInLocation < Math.max(1, minTurnsInLocation - 1)) return null;
   if (storyTurns - Number(row.lastLeadTurn || -999) < 1) return null;
 
   const baseChance = clamp(
@@ -373,6 +379,20 @@ function maybeTriggerMissionNpcLead(player, context = {}) {
     0.2,
     0.78
   );
+  const firstLead = Number(row.leadShownCount || 0) <= 0;
+  if (firstLead) {
+    row.leadShownCount = 1;
+    row.lastLeadTurn = storyTurns;
+    const lines = MISSION_LEAD_LINES[regionId] || [];
+    const line = lines.length > 0
+      ? String(lines[0] || '').trim()
+      : '';
+    if (!line) return null;
+    return {
+      appendText: `🎯 **關鍵人物線索**：${line}`,
+      memory: `你在${location}首次鎖定「${spec.npcName}」線索，目標證據是「${spec.evidenceName}」。`
+    };
+  }
   const chance = Number(row.leadShownCount || 0) <= 0
     ? clamp(baseChance + 0.48, 0.85, 0.98)
     : clamp(baseChance + 0.08, 0.28, 0.86);
@@ -438,12 +458,12 @@ function getTruthGatePrompt(player = null, location = '') {
   const allow = TRUTH_TIERS[Math.max(0, level - 1)] || TRUTH_TIERS[0];
   const next = TRUTH_TIERS[Math.min(TRUTH_TIERS.length - 1, level)] || null;
   const mission = getCurrentRegionMission(player, location || player?.location || '');
-  let missionLine = '本區關鍵任務：請先取得當地核心證據，再擴大揭露真相。';
+  let missionLine = '本區關鍵任務：先用在地線索接近關鍵人物，再推進證據鏈。請以自然敘事表達，勿把規則句直接寫進故事或選項。';
   if (mission) {
     if (mission.regionId === 'island_routes') {
-      missionLine = `本區關鍵任務（唯一來源）：僅能在「群島航線」擊敗四巨頭全員，拼出「${mission.evidenceName}」，不可用其他角色或其他城市替代。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
+      missionLine = `本區關鍵任務：四巨頭戰線必須在「群島航線」完成；在此之前只能鋪陳追蹤/備戰，不能寫成已取得「${mission.evidenceName}」。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
     } else {
-      missionLine = `本區關鍵任務（唯一來源）：僅能在「${mission.npcLocation || '指定地點'}」接觸「${mission.npcName}」取得「${mission.evidenceName}」，不可用其他角色或其他城市替代。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
+      missionLine = `本區關鍵任務：僅在「${mission.npcLocation || '指定地點'}」與「${mission.npcName}」這條線能推進到「${mission.evidenceName}」；其他地點最多只能拿到過渡線索。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
     }
   }
   const nextLine = next ? `下一層僅可做懷疑預告：${next.allow}` : '你已在終局層，可進入平衡重建敘事。';
