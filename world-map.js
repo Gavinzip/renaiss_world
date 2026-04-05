@@ -793,6 +793,8 @@ function getBeginnerSpawnLocations() {
   return MAP_LOCATIONS.filter((loc) => {
     const profile = LOCATION_PROFILES[loc];
     if (!profile) return false;
+    // 新玩家出生地硬限制：只能在第一島（中原核心）任意可出生點，避免跳到第二關。
+    if (String(profile.region || '') !== '中原核心') return false;
     if (profile.starterEligible === false) return false;
     return Number(getLocationDifficulty(loc) || 3) <= 2;
   });
