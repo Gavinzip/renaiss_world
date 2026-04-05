@@ -2069,6 +2069,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     previousChoice?.name ||
     player?.generationState?.sourceChoice ||
     '開始探索';
+  const previousActionCode = String(previousChoice?.action || '').trim();
   const previousOutcome = summarizeContext(
     previousChoice?.outcome || previousChoice?.desc || '',
     360,
@@ -2177,6 +2178,7 @@ ${openingBeatSection}
 ${mainlineBridgeSection}
 
 【上一個行動】
+動作代碼：${previousActionCode || '（無）'}
 ${previousAction}
 ${previousOutcome ? `\n【上一個行動結果（必須銜接）】\n${previousOutcome}` : ''}
 
@@ -2222,6 +2224,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 37. 若人物攜帶封存艙，請寫成可單人抱持/背負的尺度，不可描述為巨型艙體
 38. 若存在【主線橋接鎖定】，開場 1-2 段必須優先承接該目標，且給出「現在就能做」的行動落點
 39. 主線橋接鎖定只能當「本回合先落地」的方向，不可直接照抄成模板句或條列宣告
+40. 若「動作代碼」是 portal_jump_followup 或 device_jump_followup，開場必須採三段銜接：先交代原地點最後情勢（1-2句）→ 再寫啟動傳送與過程（1-2句）→ 最後落在新地點且立刻有可互動對象/環境回應（至少2句），禁止只寫「已抵達」空句
 
 直接開始講：`;
 

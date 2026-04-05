@@ -7002,17 +7002,21 @@ function getMapText(lang = 'zh-TW') {
       mapCurrentLocationSuffix: '（地圖中已高亮）',
       mapInfoNearbyPrefix: '附近',
       mapPortalGuide: (preview) => `🌀 **主傳送門操作：** 先移動到「主傳送門地點」→ 按「🌀 傳送門」→ 選目的地（如：${preview}）。`,
+      mapPortalGuideLocked: '🌀 **主傳送門操作：** 先完成本區主線，再到主傳送門跨島。',
       mapDeviceGuide: (preview, count, ttlText) => `🧭 **傳送裝置操作：** 按「🧭 傳送裝置」→ 選同島目的地（如：${preview}）。目前可用 ${count} 顆（最早到期：${ttlText}）。`,
       mapNotFoundPlayer: '❌ 找不到角色資料，請先 /start',
       mapUseInThread: '⚠️ 請回到遊戲討論串使用。',
       portalTitle: '🌀 傳送門目的地',
       portalDesc1: '你已啟動',
       portalDesc2: '附近的傳送門網路。',
-      portalDesc3: '（六大區主傳送門互通）',
+      portalDesc3Open: '（已完成本區主線，可跨島傳送）',
+      portalDesc3Locked: '（本區主線未完成，跨島尚未開放）',
       portalDesc4: '請點選要傳送到的目的地：',
       portalBackMap: '🗺️ 返回地圖',
       portalBackStory: '📖 返回故事',
       portalNotReady: '⚠️ 你目前不在主傳送門地點。請先在島內移動到主傳送門所在城市。',
+      portalStoryLocked: '⚠️ 你尚未完成本區主線，暫時不能跨島傳送。請先完成本區關鍵劇情。',
+      portalNoDestination: '⚠️ 目前沒有可用的跨島目的地。',
       deviceTitle: '🧭 傳送裝置｜同島目的地',
       deviceNotOwned: `⚠️ 你目前沒有可用的傳送裝置。請先在鑑價站購買（${TELEPORT_DEVICE_COST} Rns，單顆效期 ${TELEPORT_DEVICE_DURATION_HOURS} 小時）。`,
       deviceDesc: (count, ttlText) => `你啟動了隨身傳送裝置。此裝置僅支援同島（同大區）內瞬間位移。\n可用數量：${count} 顆｜最早到期：${ttlText}\n每次傳送會消耗 1 顆。`,
@@ -7040,7 +7044,11 @@ function getMapText(lang = 'zh-TW') {
       mapAutoTravelMoved: (from, target) => `🧭 你依照地圖座標離開 **${from}**，一路推進到 **${target}**。`,
       portalInvalidDestination: '⚠️ 無效的傳送目的地。',
       portalGateDenied: (target, winRate) => `🛑 無法前往 **${target}**：目前勝率 ${format1(winRate)}%（需要 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`,
-      portalTeleportStory: (from, to) => `🌀 傳送門正在開啟，空間折疊完成。\n你已由 **${from}** 抵達 **${to}**。`,
+      portalTeleportStory: (from, to, tail = '') => {
+        const carry = String(tail || '').trim();
+        const intro = carry ? `📖 承接前情：${carry}\n` : '';
+        return `${intro}🌀 傳送門正在開啟，空間折疊完成。\n你已由 **${from}** 抵達 **${to}**，周遭場景與人流在光紋散去後迅速重組。`;
+      },
       portalDoneTitle: '✅ 傳送完成',
       portalDoneDesc: (from, to) => `你已由 **${from}** 傳送至 **${to}**。\n\n接下來按「📖 返回故事」，系統會以新地點生成新的故事與選項。`,
       mapGotoHint: '🗺️ 地圖按鈕僅供查看，移動請透過劇情中的「前往傳送門」選項。'
@@ -7099,17 +7107,21 @@ function getMapText(lang = 'zh-TW') {
       mapCurrentLocationSuffix: '（地图中已高亮）',
       mapInfoNearbyPrefix: '附近',
       mapPortalGuide: (preview) => `🌀 **主传送门操作：** 先移动到「主传送门地点」→ 按「🌀 传送门」→ 选目的地（如：${preview}）。`,
+      mapPortalGuideLocked: '🌀 **主传送门操作：** 先完成本区主线，再到主传送门跨岛。',
       mapDeviceGuide: (preview, count, ttlText) => `🧭 **传送装置操作：** 按「🧭 传送装置」→ 选同岛目的地（如：${preview}）。目前可用 ${count} 个（最早到期：${ttlText}）。`,
       mapNotFoundPlayer: '❌ 找不到角色资料，请先 /start',
       mapUseInThread: '⚠️ 请回到游戏讨论串使用。',
       portalTitle: '🌀 传送门目的地',
       portalDesc1: '你已启动',
       portalDesc2: '附近的传送门网络。',
-      portalDesc3: '（六大区主传送门互通）',
+      portalDesc3Open: '（已完成本区主线，可跨岛传送）',
+      portalDesc3Locked: '（本区主线未完成，跨岛尚未开放）',
       portalDesc4: '请点选要传送到的目的地：',
       portalBackMap: '🗺️ 返回地图',
       portalBackStory: '📖 返回故事',
       portalNotReady: '⚠️ 你目前不在主传送门地点。请先在岛内移动到主传送门所在城市。',
+      portalStoryLocked: '⚠️ 你尚未完成本区主线，暂时不能跨岛传送。请先完成本区关键剧情。',
+      portalNoDestination: '⚠️ 目前没有可用的跨岛目的地。',
       deviceTitle: '🧭 传送装置｜同岛目的地',
       deviceNotOwned: `⚠️ 你目前没有可用的传送装置。请先在鉴价站购买（${TELEPORT_DEVICE_COST} Rns，单个有效期 ${TELEPORT_DEVICE_DURATION_HOURS} 小时）。`,
       deviceDesc: (count, ttlText) => `你启动了随身传送装置。此装置仅支持同岛（同大区）内瞬间位移。\n可用数量：${count} 个｜最早到期：${ttlText}\n每次传送会消耗 1 个。`,
@@ -7137,7 +7149,11 @@ function getMapText(lang = 'zh-TW') {
       mapAutoTravelMoved: (from, target) => `🧭 你依照地图坐标离开 **${from}**，一路推进到 **${target}**。`,
       portalInvalidDestination: '⚠️ 无效的传送目的地。',
       portalGateDenied: (target, winRate) => `🛑 无法前往 **${target}**：当前胜率 ${format1(winRate)}%（需要 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`,
-      portalTeleportStory: (from, to) => `🌀 传送门正在开启，空间折叠完成。\n你已由 **${from}** 抵达 **${to}**。`,
+      portalTeleportStory: (from, to, tail = '') => {
+        const carry = String(tail || '').trim();
+        const intro = carry ? `📖 承接前情：${carry}\n` : '';
+        return `${intro}🌀 传送门正在开启，空间折叠完成。\n你已由 **${from}** 抵达 **${to}**，周遭场景与人流在光纹散去后迅速重组。`;
+      },
       portalDoneTitle: '✅ 传送完成',
       portalDoneDesc: (from, to) => `你已由 **${from}** 传送至 **${to}**。\n\n接下来按「📖 返回故事」，系统会以新地点生成新的故事与选项。`,
       mapGotoHint: '🗺️ 地图按钮仅供查看，移动请通过剧情中的「前往传送门」选项。'
@@ -7196,17 +7212,21 @@ function getMapText(lang = 'zh-TW') {
       mapCurrentLocationSuffix: '(highlighted on map)',
       mapInfoNearbyPrefix: 'Nearby',
       mapPortalGuide: (preview) => `🌀 **Main Portal Guide:** Move to the portal-hub city first -> press "🌀 Portal" -> choose destination (e.g. ${preview}).`,
+      mapPortalGuideLocked: '🌀 **Main Portal Guide:** Finish this region mainline first, then use the main portal for cross-island travel.',
       mapDeviceGuide: (preview, count, ttlText) => `🧭 **Teleport Device Guide:** Press "🧭 Teleport Device" -> choose in-island destination (e.g. ${preview}). Usable: ${count} (soonest expiry: ${ttlText}).`,
       mapNotFoundPlayer: '❌ Character not found. Please run /start first.',
       mapUseInThread: '⚠️ Please use this in your game thread.',
       portalTitle: '🌀 Portal Destinations',
       portalDesc1: 'You have activated the portal network near',
       portalDesc2: '.',
-      portalDesc3: '(The six main regional portal hubs are interconnected)',
+      portalDesc3Open: '(This region mainline is complete. Cross-island travel is unlocked.)',
+      portalDesc3Locked: '(This region mainline is not complete. Cross-island travel is locked.)',
       portalDesc4: 'Choose a destination:',
       portalBackMap: '🗺️ Back to Map',
       portalBackStory: '📖 Back to Story',
       portalNotReady: '⚠️ You are not standing at the main portal hub. Move to the hub city first.',
+      portalStoryLocked: '⚠️ You have not completed this region mainline yet, so cross-island portal travel is locked.',
+      portalNoDestination: '⚠️ No cross-island portal destination is currently available.',
       deviceTitle: '🧭 Teleport Device | In-Island Destinations',
       deviceNotOwned: `⚠️ You currently have no usable teleport devices. Buy one at an appraisal station (${TELEPORT_DEVICE_COST} Rns, each expires in ${TELEPORT_DEVICE_DURATION_HOURS}h).`,
       deviceDesc: (count, ttlText) => `You activated a portable teleport device. It only supports instant travel within the same island (same region).\nUsable stock: ${count} | Soonest expiry: ${ttlText}\nEach teleport consumes 1 device.`,
@@ -7234,7 +7254,11 @@ function getMapText(lang = 'zh-TW') {
       mapAutoTravelMoved: (from, target) => `🧭 Following map coordinates, you moved from **${from}** to **${target}**.`,
       portalInvalidDestination: '⚠️ Invalid portal destination.',
       portalGateDenied: (target, winRate) => `🛑 Cannot travel to **${target}**: current win rate ${format1(winRate)}% (required > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%).`,
-      portalTeleportStory: (from, to) => `🌀 Portal activated. Spatial fold complete.\nYou moved from **${from}** to **${to}**.`,
+      portalTeleportStory: (from, to, tail = '') => {
+        const carry = String(tail || '').trim();
+        const intro = carry ? `📖 Carry-over: ${carry}\n` : '';
+        return `${intro}🌀 Portal activated. Spatial fold complete.\nYou moved from **${from}** to **${to}**, and the local scene rapidly re-anchors around your arrival.`;
+      },
       portalDoneTitle: '✅ Teleport Complete',
       portalDoneDesc: (from, to) => `You teleported from **${from}** to **${to}**.\n\nNow press "📖 Back to Story" to generate new story and choices at the new location.`,
       mapGotoHint: '🗺️ Map buttons are for viewing only. For movement, use the story option "Go to nearby portal".'
@@ -7316,12 +7340,51 @@ function getSettingsText(lang = 'zh-TW') {
 function buildPortalUsageGuide(player, lang = '') {
   const uiLang = normalizeLangCode(lang || player?.language || 'zh-TW');
   const tx = getMapText(uiLang);
-  const allDestinations = typeof getPortalDestinations === 'function'
-    ? getPortalDestinations(player?.location || '')
-    : [];
-  const destinations = Array.isArray(allDestinations) ? allDestinations : [];
-  const preview = destinations.length > 0 ? joinByLang(destinations.slice(0, 3), uiLang) : tx.mapNoPortal;
+  const access = getPortalAccessContext(player);
+  if (!access.crossRegionUnlocked) {
+    return tx.mapPortalGuideLocked || tx.mapPortalGuide(tx.mapNoPortal);
+  }
+  const preview = access.destinations.length > 0
+    ? joinByLang(access.destinations.slice(0, 3), uiLang)
+    : tx.mapNoPortal;
   return tx.mapPortalGuide(preview);
+}
+
+function formatPortalDestinationDisplay(location = '', lang = '') {
+  const uiLang = normalizeLangCode(lang || 'zh-TW');
+  const name = String(location || '').trim();
+  if (!name) return '';
+  const profile = typeof getLocationProfile === 'function' ? getLocationProfile(name) : null;
+  const region = String(profile?.region || '').trim();
+  if (!region) return name;
+  return uiLang === 'en' ? `${name} (${region})` : `${name}（${region}）`;
+}
+
+function getPortalAccessContext(player) {
+  const from = String(player?.location || '').trim();
+  const atPortalHub = isMainPortalHubLocation(from);
+  const rawDestinations = typeof getPortalDestinations === 'function'
+    ? getPortalDestinations(from)
+    : [];
+  const cleaned = Array.isArray(rawDestinations)
+    ? rawDestinations
+      .map((loc) => String(loc || '').trim())
+      .filter((loc) => loc && loc !== from)
+    : [];
+  const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+    ? ISLAND_STORY.getIslandStoryState(player, from)
+    : null;
+  const islandCompleted = Boolean(islandState?.completed);
+  const regionUnlocked = canFreeRoamCurrentRegion(player);
+  const crossRegionUnlocked = Boolean(islandCompleted || regionUnlocked);
+  return {
+    from,
+    atPortalHub,
+    islandCompleted,
+    regionUnlocked,
+    crossRegionUnlocked,
+    destinations: atPortalHub && crossRegionUnlocked ? cleaned : []
+  };
 }
 
 function buildDeviceUsageGuide(player, lang = '') {
@@ -7638,6 +7701,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const nearbyPortals = typeof getPortalDestinations === 'function'
     ? getPortalDestinations(player.location || '')
     : [];
+  const portalAccess = getPortalAccessContext(player);
   const atPortalHub = isMainPortalHubLocation(player.location || '');
   const canOpenPortal = Boolean(atPortalHub && Array.isArray(nearbyPortals) && nearbyPortals.length > 0);
   const canOpenDevice = playerOwnsTeleportDevice(player);
@@ -7710,9 +7774,13 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const nearbyResources = Array.isArray(currentProfile?.resources) && currentProfile.resources.length > 0
     ? joinByLang(currentProfile.resources.slice(0, 4), uiLang)
     : tx.mapNoNearby;
-  const nearbyPortalsText = Array.isArray(nearbyPortals) && nearbyPortals.length > 0
-    ? joinByLang(nearbyPortals.slice(0, 6), uiLang)
-    : tx.mapNoPortal;
+  const nearbyPortalsText = portalAccess.crossRegionUnlocked
+    ? (
+      Array.isArray(portalAccess.destinations) && portalAccess.destinations.length > 0
+        ? joinByLang(portalAccess.destinations.slice(0, 6).map((loc) => formatPortalDestinationDisplay(loc, uiLang)), uiLang)
+        : tx.mapNoPortal
+    )
+    : tx.portalDesc3Locked;
   const navTargetText = String(player.navigationTarget || '').trim() || tx.mapNoNavTarget;
   const currentLocationText = player.location || tx.mapNoProfile;
   const regionNameText = regionSnapshot?.regionName || currentProfile?.region || tx.mapNoRegion;
@@ -7805,13 +7873,25 @@ async function showPortalSelection(interaction, user) {
   }
   ensurePlayerIslandState(player);
 
-  const allDestinations = typeof getPortalDestinations === 'function'
-    ? getPortalDestinations(player.location || '')
-    : [];
-  const destinations = Array.isArray(allDestinations) ? allDestinations : [];
-  if (!isMainPortalHubLocation(player.location || '') || allDestinations.length === 0) {
+  const access = getPortalAccessContext(player);
+  if (!access.atPortalHub) {
     await interaction.reply({
       content: tx.portalNotReady,
+      ephemeral: true
+    }).catch(() => {});
+    return;
+  }
+  if (!access.crossRegionUnlocked) {
+    await interaction.reply({
+      content: tx.portalStoryLocked,
+      ephemeral: true
+    }).catch(() => {});
+    return;
+  }
+  const destinations = Array.isArray(access.destinations) ? access.destinations : [];
+  if (destinations.length === 0) {
+    await interaction.reply({
+      content: tx.portalNoDestination,
       ephemeral: true
     }).catch(() => {});
     return;
@@ -7839,9 +7919,9 @@ async function showPortalSelection(interaction, user) {
     .setColor(0x7b68ee)
     .setDescription(
       `${tx.portalDesc1} ${player.location} ${tx.portalDesc2}\n` +
-      `${tx.portalDesc3}\n` +
+      `${tx.portalDesc3Open}\n` +
       `${tx.portalDesc4}\n\n` +
-      destinations.map((loc, idx) => `${idx + 1}. ${loc}`).join('\n')
+      destinations.map((loc, idx) => `${idx + 1}. ${formatPortalDestinationDisplay(loc, uiLang)}`).join('\n')
     );
 
   await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
@@ -9794,29 +9874,43 @@ CLIENT.on('interactionCreate', async (interaction) => {
     }
     ensurePlayerIslandState(player);
 
-    const rawDestinations = typeof getPortalDestinations === 'function'
-      ? getPortalDestinations(player.location || '')
-      : [];
-    const destinations = Array.isArray(rawDestinations) ? rawDestinations : [];
+    const access = getPortalAccessContext(player);
+    if (!access.atPortalHub) {
+      await interaction.reply({ content: tx.portalNotReady, ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (!access.crossRegionUnlocked) {
+      await interaction.reply({ content: tx.portalStoryLocked, ephemeral: true }).catch(() => {});
+      return;
+    }
+    const destinations = Array.isArray(access.destinations) ? access.destinations : [];
     const targetLocation = destinations[Number.isNaN(idx) ? -1 : idx];
     if (!targetLocation) {
       await interaction.reply({ content: tx.portalInvalidDestination, ephemeral: true }).catch(() => {});
       return;
     }
 
-    if (!isMainPortalHubLocation(player.location || '')) {
-      await interaction.reply({ content: tx.portalNotReady, ephemeral: true }).catch(() => {});
-      return;
-    }
-
     const fromLocation = player.location;
-    const carryTail = extractStoryTailLine(player.currentStory || '', 96);
+    const preTeleportStory = String(player.currentStory || '').trim();
+    const carryTail = extractStoryTailLine(preTeleportStory, 140);
     player.location = targetLocation;
     syncLocationArcLocation(player);
     ensurePlayerIslandState(player);
     player.portalMenuOpen = false;
     player.navigationTarget = '';
-    player.currentStory = tx.portalTeleportStory(fromLocation, targetLocation, carryTail);
+    const transferLine = tx.portalTeleportStory(fromLocation, targetLocation, carryTail);
+    player.currentStory = composeActionBridgeStory(
+      { currentStory: preTeleportStory },
+      `啟動主傳送門由${fromLocation}前往${targetLocation}`,
+      transferLine
+    );
+    queuePendingStoryTrigger(player, {
+      name: '跨區傳送後承接',
+      choice: `由${fromLocation}傳送至${targetLocation}，並延續上一段線索`,
+      desc: `本回合必須先承接 ${fromLocation} 的當前情勢，再寫傳送過程，最後在 ${targetLocation} 落地接續`,
+      action: 'portal_jump_followup',
+      outcome: `跨區傳送完成：${fromLocation} -> ${targetLocation}｜傳送前最後情境：${carryTail || '（無）'}`
+    });
     player.eventChoices = [];
     if (player.mapReturnSnapshot) delete player.mapReturnSnapshot;
     rememberPlayer(player, {
@@ -9867,7 +9961,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
     }
 
     const fromLocation = String(player.location || '').trim();
-    const carryTail = extractStoryTailLine(player.currentStory || '', 96);
+    const preTeleportStory = String(player.currentStory || '').trim();
+    const carryTail = extractStoryTailLine(preTeleportStory, 140);
     const consumed = consumeTeleportDevice(player);
     if (!consumed) {
       await interaction.reply({ content: tx.deviceNotOwned, ephemeral: true }).catch(() => {});
@@ -9877,7 +9972,19 @@ CLIENT.on('interactionCreate', async (interaction) => {
     syncLocationArcLocation(player);
     ensurePlayerIslandState(player);
     player.navigationTarget = '';
-    player.currentStory = tx.deviceTeleportStory(fromLocation, targetLocation, carryTail);
+    const transferLine = tx.deviceTeleportStory(fromLocation, targetLocation, carryTail);
+    player.currentStory = composeActionBridgeStory(
+      { currentStory: preTeleportStory },
+      `啟動傳送裝置由${fromLocation}前往${targetLocation}`,
+      transferLine
+    );
+    queuePendingStoryTrigger(player, {
+      name: '同島傳送後承接',
+      choice: `由${fromLocation}傳送裝置移動至${targetLocation}，並延續上一段線索`,
+      desc: `本回合必須先承接 ${fromLocation} 的當前情勢，再寫傳送過程，最後在 ${targetLocation} 落地接續`,
+      action: 'device_jump_followup',
+      outcome: `同島傳送完成：${fromLocation} -> ${targetLocation}｜傳送前最後情境：${carryTail || '（無）'}`
+    });
     player.eventChoices = [];
     if (player.mapReturnSnapshot) delete player.mapReturnSnapshot;
     rememberPlayer(player, {
