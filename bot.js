@@ -78,6 +78,7 @@ const {
   buildIslandMapAnsi,
   MAP_LOCATIONS,
   getLocationProfile,
+  getLocationStoryMetadata,
   getLocationStoryContext,
   getPortalDestinations,
   getLocationPortalHub,
@@ -187,7 +188,17 @@ function format1(value, fallback = 0) {
 }
 
 function getMoveSpeedValue(move = {}) {
-  return Math.max(-1, Math.min(3, Number(move?.speed ?? move?.priority ?? 0) || 0));
+  const raw = Number(move?.speed);
+  if (Number.isFinite(raw)) {
+    if (raw >= 1 && raw <= 20) return Math.max(1, Math.min(20, Math.floor(raw)));
+    const legacyMap = { '-1': 4, '0': 10, '1': 13, '2': 16, '3': 20 };
+    const mapped = Number(legacyMap[String(Math.floor(raw))] || 0);
+    if (mapped > 0) return mapped;
+  }
+  const legacyPriorityMap = { '-1': 4, '0': 10, '1': 13, '2': 16, '3': 20 };
+  const mappedPriority = Number(legacyPriorityMap[String(Math.floor(Number(move?.priority || 0)))] || 0);
+  if (mappedPriority > 0) return mappedPriority;
+  return 10;
 }
 
 // ============== 玩家討論串管理 ==============
@@ -724,7 +735,7 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
       element: String(m?.element || '普通').trim(),
       tier: Math.max(1, Math.min(3, Number(m?.tier || 1))),
       priority: Math.max(-1, Math.min(3, Number(m?.priority || 0) || 0)),
-      speed: Math.max(-1, Math.min(3, Number(m?.speed ?? m?.priority ?? 0) || 0)),
+      speed: getMoveSpeedValue(m),
       baseDamage: Math.max(1, Number(m?.baseDamage ?? m?.damage ?? 10) || 10),
       damage: Math.max(1, Number(m?.baseDamage ?? m?.damage ?? 10) || 10),
       effect: (m?.effect && typeof m.effect === 'object') ? { ...m.effect } : {},
@@ -738,7 +749,7 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
     element: '普通',
     tier: 1,
     priority: 0,
-    speed: 0,
+    speed: 10,
     baseDamage: Math.max(8, Number(friendPet?.attack || 12)),
     damage: Math.max(8, Number(friendPet?.attack || 12)),
     effect: {},
@@ -3551,16 +3562,10 @@ function ensureSingleMainlineGuideChoice(player, choices = []) {
 function applyChoicePolicy(player, choices = []) {
   let list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
   if (!player || list.length === 0) return list;
+  // Prompt-only 選項策略：
+  // 只做安全性修正（如威脅場景下的即時戰鬥降級），不再本地注入模板選項。
+  // 所有可玩性/主線/系統可用性由 AI 提示詞直接產生。
   list = applyStoryThreatGate(player, list);
-  list = enforceMentorSparAvailability(player, list);
-  list = ensurePortalChoiceAvailability(player, list);
-  list = ensureWishPoolChoiceAvailability(player, list);
-  list = ensureMarketChoiceAvailability(player, list);
-  list = ensureLocationStoryBattleChoiceAvailability(player, list);
-  list = ensureBattleCadenceChoiceAvailability(player, list);
-  list = ensureAggressiveChoiceAvailability(player, list);
-  list = ensureEarlyGameIncomeChoice(player, list);
-  list = ensureSingleMainlineGuideChoice(player, list);
   markSystemChoiceExposure(player, list);
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
@@ -4520,7 +4525,7 @@ function applyMainStoryCombatProgress(player, enemyName, victory = false) {
       type: '主線',
       content: progress.memory,
       importance: 3,
-      tags: ['main_story', 'kings']
+      tags: ['main_story', 'combat_progress']
     });
   }
   return String(progress.appendText || '').trim();
@@ -5374,10 +5379,18 @@ function getIslandMainlineProgressMeta(player) {
 function buildMainlineProgressLine(player) {
   const meta = getIslandMainlineProgressMeta(player);
   if (!meta) return '';
+  const mission = (MAIN_STORY && typeof MAIN_STORY.getCurrentRegionMission === 'function')
+    ? MAIN_STORY.getCurrentRegionMission(player, meta.location)
+    : null;
+  const missionLine = mission
+    ? (mission.regionId === 'island_routes'
+      ? `｜關鍵任務：擊敗四巨頭全員（${mission.keyFound ? '已完成' : '未完成'}）`
+      : `｜關鍵NPC：${mission.npcName}@${mission.npcLocation}（${mission.keyFound ? '已完成' : '未完成'}）`)
+    : '';
   if (meta.completed) {
-    return `📖 本區主線：已完成（${meta.location}）`;
+    return `📖 本區主線：已完成（${meta.location}）${missionLine}`;
   }
-  return `📖 本區主線：${meta.progressText}`;
+  return `📖 本區主線：${meta.progressText}${missionLine}`;
 }
 
 function detectStitchedBattleStory(story = '') {
@@ -6427,12 +6440,12 @@ function pickBestMoveForAI(player, pet, enemy, combatant = null, availableEnergy
   let bestScore = -1;
   for (const move of affordableMoves) {
     const cost = BATTLE.getMoveEnergyCost(move);
-    const moveSpeed = Math.max(-1, Math.min(3, Number(move?.speed ?? move?.priority ?? 0) || 0));
+    const moveSpeed = getMoveSpeedValue(move);
     const dmg = BATTLE.calculatePlayerMoveDamage(move, player, activeCombatant);
     const netDamage = Math.max(1, (dmg.total || 0) - (enemy?.defense || 0));
     const killBonus = (enemy?.hp || 0) <= netDamage ? 120 : 0;
     const efficiencyBonus = Math.max(0, 4 - cost) * 2;
-    const speedBonus = moveSpeed * 1;
+    const speedBonus = (moveSpeed - 10) * 0.4;
     const score = netDamage + killBonus + efficiencyBonus + speedBonus;
     if (score > bestScore) {
       best = move;
@@ -14659,6 +14672,58 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     if (Array.isArray(movedPortals) && movedPortals.length > 0) {
       extraStoryGuide = buildPortalUsageGuide(player);
     }
+  }
+
+  const arcStateForMission = syncLocationArcLocation(player);
+  const turnsInLocationForMission = Number(arcStateForMission?.turnsInLocation || 0);
+  const storyTurnsForMission = getPlayerStoryTurns(player);
+
+  const actionEvidence = (typeof MAIN_STORY.recordActionEvidence === 'function')
+    ? MAIN_STORY.recordActionEvidence(player, {
+      location: String(islandLocationBefore || player.location || '').trim(),
+      regionId: String(getLocationStoryMetadata(islandLocationBefore || player.location || '')?.regionId || '').trim(),
+      selectedChoice,
+      eventAction: String(event?.action || '').trim(),
+      resultType: String(result?.type || '').trim(),
+      resultMessage: String(result?.message || '').trim(),
+      npcName: String(result?.npcName || event?.npcName || '').trim(),
+      storyTurns: storyTurnsForMission,
+      turnsInLocation: turnsInLocationForMission
+    })
+    : null;
+  if (actionEvidence?.appendText) {
+    result.message = `${result.message || ''}\n\n${actionEvidence.appendText}`.trim();
+  }
+  if (actionEvidence?.announcement) {
+    EVENTS.addWorldEvent(actionEvidence.announcement, 'main_story');
+  }
+  if (actionEvidence?.memory) {
+    queueMemory({
+      type: '主線',
+      content: actionEvidence.memory,
+      importance: 3,
+      tags: ['main_story', 'key_mission']
+    });
+  }
+
+  const missionLead = (typeof MAIN_STORY.maybeTriggerMissionNpcLead === 'function')
+    ? MAIN_STORY.maybeTriggerMissionNpcLead(player, {
+      location: String(player.location || '').trim(),
+      regionId: String(getLocationStoryMetadata(player.location || '')?.regionId || '').trim(),
+      storyTurns: storyTurnsForMission,
+      turnsInLocation: turnsInLocationForMission
+    })
+    : null;
+  if (missionLead?.appendText) {
+    result.message = `${result.message || ''}\n\n${missionLead.appendText}`.trim();
+  }
+  if (missionLead?.memory) {
+    queueMemory({
+      type: '主線',
+      content: missionLead.memory,
+      importance: 2,
+      tags: ['main_story', 'npc_lead']
+    });
   }
 
   const passive = MAIN_STORY.maybeTriggerPassiveStory(player, { event, result });

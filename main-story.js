@@ -6,7 +6,7 @@
 const { sanitizeWorldObject } = require('./style-sanitizer');
 const BATTLE = require('./battle-system');
 const ISLAND_STORY = require('./island-story');
-const { getLocationPortalHub } = require('./world-map');
+const { getLocationPortalHub, getLocationStoryMetadata } = require('./world-map');
 
 const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',
@@ -27,6 +27,125 @@ const ENDING_RULES = {
   controller: { fakeRate: 0.28, ambushRate: 0.24, volatility: 0.18, rewardVariance: 0.4 }
 };
 
+const REGION_SEQUENCE = Object.freeze([
+  'central_core',
+  'west_desert',
+  'southern_delta',
+  'northern_highland',
+  'island_routes',
+  'hidden_deeps'
+]);
+
+const REGION_KEY_MISSIONS = Object.freeze({
+  central_core: {
+    npcName: '灰帳記錄員',
+    npcLocation: '洛陽城',
+    evidenceName: '雙鑑衝突原始單',
+    actionKeywords: ['雙鑑', '鑑定衝突', '正規鑑定', '低價鑑定', '原始單', '灰帳'],
+    enemyAliases: ['灰帳記錄員'],
+    minStoryTurns: 3,
+    minTurnsInLocation: 2,
+    leadGraceTurns: 3
+  },
+  west_desert: {
+    npcName: '轉運站調度員',
+    npcLocation: '敦煌',
+    evidenceName: '異常轉運時間鏈',
+    actionKeywords: ['轉運', '時間鏈', '貨流', '洗來源', '調度', '碼頭紀錄'],
+    enemyAliases: ['轉運站調度員'],
+    minStoryTurns: 8,
+    minTurnsInLocation: 2,
+    leadGraceTurns: 3
+  },
+  southern_delta: {
+    npcName: '工坊試樣師',
+    npcLocation: '廣州',
+    evidenceName: '偽造樣本與製程片段',
+    actionKeywords: ['偽造樣本', '製程片段', '試樣', '工坊', '仿品', '樣本'],
+    enemyAliases: ['工坊試樣師'],
+    minStoryTurns: 13,
+    minTurnsInLocation: 2,
+    leadGraceTurns: 3
+  },
+  northern_highland: {
+    npcName: '滲透聯絡員',
+    npcLocation: '雪白山莊',
+    evidenceName: '夜冕主宰鏈路密鑰',
+    actionKeywords: ['鏈路密鑰', '上級節點', '聯絡密鑰', '夜冕', '滲透聯絡'],
+    enemyAliases: ['滲透聯絡員'],
+    minStoryTurns: 18,
+    minTurnsInLocation: 2,
+    leadGraceTurns: 3
+  },
+  island_routes: {
+    npcName: '四巨頭',
+    npcLocation: '星潮港',
+    evidenceName: '核心憑證（四巨頭鏈）',
+    actionKeywords: [],
+    enemyAliases: [...DIGITAL_KINGS]
+  }
+});
+
+const MISSION_LEAD_LINES = Object.freeze({
+  central_core: [
+    '你在洛陽城反覆聽到同一句低聲提醒：想核對衝突原單，去找灰帳記錄員。',
+    '洛陽城的攤販對你使了個眼色：雙鑑衝突原始單不在檯面上，只能找灰帳記錄員。'
+  ],
+  west_desert: [
+    '敦煌轉運區有人壓低聲線告訴你：要看異常時間鏈，得直接問轉運站調度員。',
+    '沙港倉門邊傳來一句暗語：異常轉運時間鏈只在調度員手上，別找錯人。'
+  ],
+  southern_delta: [
+    '廣州工坊街有人遞來一句話：偽造樣本與製程片段，只有工坊試樣師敢拿出來。',
+    '修復臺後方傳來提醒：別再兜圈，工坊試樣師手上才有你要的製程片段。'
+  ],
+  northern_highland: [
+    '雪白山莊的巡線員低聲說：夜冕主宰鏈路密鑰只在滲透聯絡員那裡。',
+    '寒原風聲裡夾著一句警告：想接上四巨頭戰線，先拿到夜冕主宰鏈路密鑰。'
+  ]
+});
+
+const TRUTH_TIERS = Object.freeze([
+  {
+    level: 1,
+    allow: '只可確認「過度友善低價服務 + 同件物品雙鑑衝突」',
+    forbid: '禁止把供應鏈洗來源、偽造工坊、滲透網、四巨頭當成既定事實'
+  },
+  {
+    level: 2,
+    allow: '可確認「來源流向異常、轉運紀錄被洗」',
+    forbid: '禁止把偽造工坊技術細節、滲透名單、四巨頭控制鏈當成既定事實'
+  },
+  {
+    level: 3,
+    allow: '可確認「存在偽造樣本與製程能力」',
+    forbid: '禁止把滲透網完整名單與四巨頭核心鏈當成既定事實'
+  },
+  {
+    level: 4,
+    allow: '可確認「滲透聯絡員持有夜冕主宰鏈路密鑰，能直通四巨頭戰線」',
+    forbid: '禁止把四巨頭全部關聯與最終公開方案當成既定事實'
+  },
+  {
+    level: 5,
+    allow: '可確認「四巨頭控制鏈與核心憑證關聯」',
+    forbid: '禁止直接宣告終局公開後的世界結局'
+  },
+  {
+    level: 6,
+    allow: '可進入終局層：公開方式、平衡重建、長期對抗',
+    forbid: '無'
+  }
+]);
+
+const MISSION_REGION_ORDER = Object.freeze([
+  'central_core',
+  'west_desert',
+  'southern_delta',
+  'northern_highland',
+  'island_routes'
+]);
+
 function getCompletedLocationCount(player) {
   if (ISLAND_STORY && typeof ISLAND_STORY.countCompletedIslands === 'function') {
     const total = Number(ISLAND_STORY.countCompletedIslands(player));
@@ -42,6 +161,318 @@ function pickVariant(lines = [], seed = 0) {
   if (arr.length === 0) return '';
   const idx = Math.abs(Number(seed || 0)) % arr.length;
   return String(arr[idx] || '').trim();
+}
+
+function clamp(num, min, max) {
+  return Math.max(min, Math.min(max, Number(num || 0)));
+}
+
+function getStoryWantedPressure(player, context = {}) {
+  const localWanted = Math.max(0, Number(player?.wanted || 0));
+  const resultWanted = Math.max(0, Number(context?.result?.wantedLevel || 0));
+  const eventWanted = Math.max(0, Number(context?.event?.wantedLevel || 0));
+  return Math.max(localWanted, resultWanted, eventWanted);
+}
+
+function getRegionIdByLocation(location = '') {
+  const loc = String(location || '').trim();
+  if (!loc) return '';
+  const meta = getLocationStoryMetadata(loc);
+  return String(meta?.regionId || '').trim();
+}
+
+function ensureMissionState(state) {
+  if (!state || typeof state !== 'object') return null;
+  if (!state.mission || typeof state.mission !== 'object' || Array.isArray(state.mission)) {
+    state.mission = {
+      hunterUnlocked: false,
+      regions: {}
+    };
+  }
+  if (!state.mission.regions || typeof state.mission.regions !== 'object' || Array.isArray(state.mission.regions)) {
+    state.mission.regions = {};
+  }
+  for (const regionId of Object.keys(REGION_KEY_MISSIONS)) {
+    const current = state.mission.regions[regionId];
+    if (!current || typeof current !== 'object') {
+      state.mission.regions[regionId] = {
+        keyFound: false,
+        foundAt: 0,
+        method: '',
+        npcName: '',
+        evidenceName: '',
+        leadShownCount: 0,
+        lastLeadTurn: -999
+      };
+      continue;
+    }
+    current.keyFound = Boolean(current.keyFound);
+    if (!Number.isFinite(Number(current.foundAt))) current.foundAt = 0;
+    current.method = String(current.method || '').trim();
+    current.npcName = String(current.npcName || '').trim();
+    current.evidenceName = String(current.evidenceName || '').trim();
+    if (!Number.isFinite(Number(current.leadShownCount))) current.leadShownCount = 0;
+    if (!Number.isFinite(Number(current.lastLeadTurn))) current.lastLeadTurn = -999;
+  }
+  return state.mission;
+}
+
+function isMissionKeyFound(state, regionId = '') {
+  const mission = ensureMissionState(state);
+  const rid = String(regionId || '').trim();
+  if (!mission || !rid) return false;
+  return Boolean(mission.regions?.[rid]?.keyFound);
+}
+
+function isMissionRegionOpen(state, regionId = '') {
+  const rid = String(regionId || '').trim();
+  if (!rid) return false;
+  const idx = MISSION_REGION_ORDER.indexOf(rid);
+  if (idx <= 0) return true;
+  for (let i = 0; i < idx; i += 1) {
+    if (!isMissionKeyFound(state, MISSION_REGION_ORDER[i])) return false;
+  }
+  return true;
+}
+
+function updateIslandRoutesMissionFromKings(state) {
+  if (!state || typeof state !== 'object') return;
+  const mission = ensureMissionState(state);
+  if (!mission) return;
+  const cleared = Array.isArray(state.defeatedKings)
+    ? state.defeatedKings
+      .map((name) => String(name || '').trim())
+      .filter(Boolean)
+      .filter((name, idx, arr) => arr.indexOf(name) === idx).length
+    : 0;
+  if (cleared < DIGITAL_KINGS.length) return;
+  const row = mission.regions.island_routes;
+  if (!row || row.keyFound) return;
+  row.keyFound = true;
+  row.foundAt = Date.now();
+  row.method = 'combat';
+  row.npcName = '四巨頭';
+  row.evidenceName = REGION_KEY_MISSIONS.island_routes.evidenceName;
+}
+
+function buildMissionEvidenceUnlock(state, regionId, method = 'investigate', sourceNpc = '') {
+  const mission = ensureMissionState(state);
+  const rid = String(regionId || '').trim();
+  const spec = REGION_KEY_MISSIONS[rid];
+  if (!mission || !rid || !spec) return null;
+  const row = mission.regions[rid];
+  if (!row || row.keyFound) return null;
+  row.keyFound = true;
+  row.foundAt = Date.now();
+  row.method = String(method || 'investigate').trim();
+  row.npcName = String(sourceNpc || spec.npcName || '').trim();
+  row.evidenceName = String(spec.evidenceName || '').trim();
+  if (rid === 'central_core') {
+    mission.hunterUnlocked = true;
+    if (Number(state.act || 1) < 3) {
+      state.act = 3;
+      state.node = 'act3_marked';
+      pushHistory(state, '第一關關鍵證據到手 -> 被盯上');
+    }
+    state.lastAssassinPressureEventCount = Math.min(
+      Number(state.lastAssassinPressureEventCount || -999),
+      Number(state.eventCount || 0) - ASSASSIN_PRESSURE_GAP_EVENTS
+    );
+  }
+  const npcText = row.npcName ? `（關鍵人物：${row.npcName}）` : '';
+  const hunterLine = rid === 'central_core'
+    ? '\n⚠️ 你的行動已被敵對勢力標記，後續將逐步出現跟監與追殺壓力。'
+    : '';
+  return {
+    appendText: `📌 **關鍵證據取得**：${row.evidenceName}${npcText}\n你已拿到本區可驗證核心，主線可往下一島推進。${hunterLine}`,
+    announcement: `🧭 ${row.npcName || '在地線人'}交出關鍵證據「${row.evidenceName}」。`,
+    memory: `你取得本區關鍵證據：${row.evidenceName}${npcText}。`
+  };
+}
+
+function inferMissionUnlockByAction(state, context = {}) {
+  if (!state || typeof state !== 'object') return null;
+  const regionId = String(context?.regionId || '').trim();
+  const spec = REGION_KEY_MISSIONS[regionId];
+  if (!regionId || !spec) return null;
+  if (regionId === 'island_routes' || regionId === 'hidden_deeps') return null;
+  if (isMissionKeyFound(state, regionId)) return null;
+  if (!isMissionRegionOpen(state, regionId)) return null;
+  const mission = ensureMissionState(state);
+  const row = mission?.regions?.[regionId];
+  if (!row) return null;
+  const location = String(context?.location || '').trim();
+  const requiredLocation = String(spec.npcLocation || '').trim();
+  if (requiredLocation && location !== requiredLocation) return null;
+
+  const storyTurns = Math.max(0, Number(context?.storyTurns ?? state?.eventCount ?? 0));
+  const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
+  const minStoryTurns = Math.max(0, Number(spec?.minStoryTurns || 0));
+  const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 0));
+  const leadGraceTurns = Math.max(0, Number(spec?.leadGraceTurns || 2));
+  if (storyTurns < minStoryTurns) return null;
+  if (turnsInLocation < minTurnsInLocation) return null;
+  const hasLeadHint = Number(row?.leadShownCount || 0) > 0;
+  if (!hasLeadHint && turnsInLocation < (minTurnsInLocation + leadGraceTurns)) return null;
+
+  const npcName = String(context?.npcName || '').trim();
+  const actionText = [
+    String(context?.selectedChoice || ''),
+    String(context?.eventAction || ''),
+    String(context?.resultType || ''),
+    String(context?.resultMessage || '')
+  ].join('\n');
+  const hasNpcTrace = Boolean(
+    (npcName && npcName.includes(spec.npcName)) ||
+    (String(context?.enemyName || '').trim() && String(context.enemyName).includes(spec.npcName)) ||
+    (spec.npcName && actionText.includes(spec.npcName))
+  );
+  if (!hasNpcTrace) return null;
+
+  const enemyName = String(context?.enemyName || '').trim();
+  const victory = Boolean(context?.victory);
+  if (victory && enemyName) {
+    const hitEnemy = Array.isArray(spec.enemyAliases) && spec.enemyAliases.some((name) => enemyName.includes(name));
+    if (hitEnemy) return buildMissionEvidenceUnlock(state, regionId, 'combat', enemyName);
+  }
+  if (!actionText.trim()) return null;
+  const matched = Array.isArray(spec.actionKeywords)
+    && spec.actionKeywords.some((kw) => kw && actionText.includes(kw));
+  if (!matched) return null;
+  return buildMissionEvidenceUnlock(state, regionId, 'investigate', spec.npcName);
+}
+
+function maybeTriggerMissionNpcLead(player, context = {}) {
+  const state = ensureMainStoryState(player);
+  if (!state || state.completed) return null;
+  const location = String(context?.location || player?.location || '').trim();
+  if (!location) return null;
+  const regionId = String(context?.regionId || getRegionIdByLocation(location)).trim();
+  const spec = REGION_KEY_MISSIONS[regionId];
+  if (!spec || regionId === 'island_routes' || regionId === 'hidden_deeps') return null;
+  if (isMissionKeyFound(state, regionId)) return null;
+  if (!isMissionRegionOpen(state, regionId)) return null;
+  if (location !== String(spec.npcLocation || '').trim()) return null;
+
+  const mission = ensureMissionState(state);
+  const row = mission?.regions?.[regionId];
+  if (!row) return null;
+  const storyTurns = Math.max(0, Number(context?.storyTurns ?? player?.storyTurns ?? 0));
+  const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
+  const minStoryTurns = Math.max(0, Number(spec?.minStoryTurns || 2));
+  const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 2));
+  if (storyTurns < minStoryTurns) return null;
+  if (turnsInLocation < minTurnsInLocation) return null;
+  if (storyTurns - Number(row.lastLeadTurn || -999) < 2) return null;
+
+  const baseChance = clamp(
+    0.2 + Number(row.leadShownCount || 0) * 0.14 + Math.max(0, turnsInLocation - minTurnsInLocation) * 0.05,
+    0.2,
+    0.78
+  );
+  const chance = Number(row.leadShownCount || 0) <= 0
+    ? clamp(baseChance + 0.22, 0.42, 0.9)
+    : baseChance;
+  if (Math.random() > chance) return null;
+
+  row.leadShownCount = Math.max(0, Number(row.leadShownCount || 0)) + 1;
+  row.lastLeadTurn = storyTurns;
+  const lines = MISSION_LEAD_LINES[regionId] || [];
+  const line = lines.length > 0
+    ? String(lines[(row.leadShownCount - 1) % lines.length] || '').trim()
+    : '';
+  if (!line) return null;
+  return {
+    appendText: `🎯 **關鍵人物線索**：${line}`,
+    memory: `你在${location}再次聽到「${spec.npcName}」線索，目標證據是「${spec.evidenceName}」。`
+  };
+}
+
+function getSequentialMissionLevel(state) {
+  const mission = ensureMissionState(state);
+  if (!mission) return 0;
+  const ordered = ['central_core', 'west_desert', 'southern_delta', 'northern_highland', 'island_routes'];
+  let cleared = 0;
+  for (const regionId of ordered) {
+    if (!mission.regions?.[regionId]?.keyFound) break;
+    cleared += 1;
+  }
+  return cleared;
+}
+
+function getTruthDisclosureLevel(player = null) {
+  const state = ensureMainStoryState(player);
+  if (!state) return 1;
+  updateIslandRoutesMissionFromKings(state);
+  const sequential = getSequentialMissionLevel(state);
+  return Math.max(1, Math.min(6, sequential + 1));
+}
+
+function getCurrentRegionMission(player = null, location = '') {
+  const state = ensureMainStoryState(player);
+  if (!state) return null;
+  const regionId = getRegionIdByLocation(location || player?.location || '');
+  if (!regionId) return null;
+  const spec = REGION_KEY_MISSIONS[regionId];
+  if (!spec) return null;
+  const mission = ensureMissionState(state);
+  const row = mission?.regions?.[regionId] || null;
+  return {
+    regionId,
+    npcName: String(spec.npcName || '').trim(),
+    npcLocation: String(spec.npcLocation || '').trim(),
+    evidenceName: String(spec.evidenceName || '').trim(),
+    keyFound: Boolean(row?.keyFound),
+    method: String(row?.method || '').trim()
+  };
+}
+
+function getTruthGatePrompt(player = null, location = '') {
+  const state = ensureMainStoryState(player);
+  if (!state) return '';
+  updateIslandRoutesMissionFromKings(state);
+  const level = getTruthDisclosureLevel(player);
+  const allow = TRUTH_TIERS[Math.max(0, level - 1)] || TRUTH_TIERS[0];
+  const next = TRUTH_TIERS[Math.min(TRUTH_TIERS.length - 1, level)] || null;
+  const mission = getCurrentRegionMission(player, location || player?.location || '');
+  let missionLine = '本區關鍵任務：請先取得當地核心證據，再擴大揭露真相。';
+  if (mission) {
+    if (mission.regionId === 'island_routes') {
+      missionLine = `本區關鍵任務（唯一來源）：僅能在「群島航線」擊敗四巨頭全員，拼出「${mission.evidenceName}」，不可用其他角色或其他城市替代。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
+    } else {
+      missionLine = `本區關鍵任務（唯一來源）：僅能在「${mission.npcLocation || '指定地點'}」接觸「${mission.npcName}」取得「${mission.evidenceName}」，不可用其他角色或其他城市替代。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
+    }
+  }
+  const nextLine = next ? `下一層僅可做懷疑預告：${next.allow}` : '你已在終局層，可進入平衡重建敘事。';
+  return [
+    '【跨島真相邊界（硬規則）】',
+    `目前真相層級：L${level}/6`,
+    `可當既定事實：${allow.allow}`,
+    `禁止當既定事實：${allow.forbid}`,
+    nextLine,
+    missionLine
+  ].join('\n');
+}
+
+function recordActionEvidence(player, context = {}) {
+  const state = ensureMainStoryState(player);
+  if (!state || state.completed) return null;
+  const regionId = String(context?.regionId || getRegionIdByLocation(context?.location || player?.location || '')).trim();
+  if (!regionId) return null;
+  updateIslandRoutesMissionFromKings(state);
+  return inferMissionUnlockByAction(state, {
+    regionId,
+    location: String(context?.location || player?.location || '').trim(),
+    selectedChoice: context?.selectedChoice,
+    eventAction: context?.eventAction,
+    resultType: context?.resultType,
+    resultMessage: context?.resultMessage,
+    npcName: context?.npcName,
+    enemyName: context?.enemyName,
+    victory: context?.victory,
+    storyTurns: context?.storyTurns,
+    turnsInLocation: context?.turnsInLocation
+  });
 }
 
 function getIslandContext(player, location = '') {
@@ -216,6 +647,11 @@ function ensureMainStoryState(player) {
     player.mainStory.lastAssassinPressureEventCount = -999;
   }
   normalizeKingProgressState(player.mainStory);
+  ensureMissionState(player.mainStory);
+  updateIslandRoutesMissionFromKings(player.mainStory);
+  if (player.mainStory.mission?.regions?.central_core?.keyFound) {
+    player.mainStory.mission.hunterUnlocked = true;
+  }
   return player.mainStory;
 }
 
@@ -227,7 +663,8 @@ function getMainStoryBrief(player) {
     Number(state.act || 1) >= 5 || state.node === 'act6_winchman'
       ? `｜四巨頭：${Number((state.defeatedKings || []).length)}/${DIGITAL_KINGS.length}`
       : '';
-  return `${STORY_ACTS[state.act] || '未知章節'}｜節點：${state.node}${kingProgressText}${endingText}`;
+  const truthLevel = getTruthDisclosureLevel(player);
+  return `${STORY_ACTS[state.act] || '未知章節'}｜節點：${state.node}${kingProgressText}｜真相L${truthLevel}${endingText}`;
 }
 
 function pushHistory(state, text) {
@@ -342,6 +779,8 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   const event = context.event || {};
   const result = context.result || {};
+  const wantedPressure = getStoryWantedPressure(player, context);
+  state.pressure = Math.max(0, Number(state.pressure || 0), wantedPressure);
   absorbPlayerBehavior(state, event, result);
 
   const count = state.eventCount;
@@ -369,6 +808,11 @@ function maybeTriggerPassiveStory(player, context = {}) {
   }
 
   if (state.node === 'act2_whispers' && count >= 6) {
+    if (!isMissionKeyFound(state, 'central_core')) {
+      triggered.appendText = '📖 **主線線索**：你還缺少第一關可驗證核心（雙鑑衝突原始單），追兵暫未全面出手。';
+      triggered.memory = '你尚未掌握第一關核心證據，主線停在觀察與追查。';
+      return triggered;
+    }
     if (completedLocations < 1) {
       const travelHint = buildTravelGateHint(state, 1, completedLocations, player);
       if (!travelHint) return null;
@@ -383,6 +827,11 @@ function maybeTriggerPassiveStory(player, context = {}) {
   }
 
   if (state.node === 'act3_marked' && count >= 8) {
+    if (!isMissionKeyFound(state, 'central_core')) {
+      triggered.appendText = '📖 **主線線索**：先補齊第一關核心證據，再談追兵壓力升級。';
+      triggered.memory = '第一關關鍵證據尚未到位，追兵壓力仍停在試探層。';
+      return triggered;
+    }
     if (completedLocations < 1) {
       const travelHint = buildTravelGateHint(state, 1, completedLocations, player);
       if (!travelHint) return null;
@@ -399,21 +848,29 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act4_war' && count < 10) {
     const sinceLastPressure = count - Number(state.lastAssassinPressureEventCount || -999);
-    if (count >= 9 && sinceLastPressure >= ASSASSIN_PRESSURE_GAP_EVENTS) {
+    const pressureLevel = clamp(Math.max(wantedPressure, Number(state.pressure || 0)), 0, 10);
+    const dynamicGap = Math.max(1, ASSASSIN_PRESSURE_GAP_EVENTS - Math.floor(pressureLevel / 2));
+    const dynamicAmbushChance = clamp(0.38 + pressureLevel * 0.06, 0.38, 0.95);
+    if (count >= 9 && sinceLastPressure >= dynamicGap) {
       state.lastAssassinPressureEventCount = count;
-      if (Math.random() < 0.42) {
+      if (Math.random() < dynamicAmbushChance) {
         triggered.overrideResult = buildMaskedAssassinEncounter();
         triggered.announcement = `💀 ${player.name}遭遇了暗潮覆面獵手的狩獵測試。`;
-        triggered.memory = '覆面獵手現身並發動了突襲。';
+        triggered.memory = `覆面獵手現身並發動突襲（通緝壓力 Lv.${pressureLevel}）。`;
       } else {
         triggered.appendText = buildMainlineBeatText(player, state, 'act4_probe');
-        triggered.memory = '追兵尚未開戰，但你確定自己正在被鎖定。';
+        triggered.memory = `追兵尚未開戰，但你確定自己正在被鎖定（通緝壓力 Lv.${pressureLevel}）。`;
       }
       return triggered;
     }
   }
 
   if (state.node === 'act4_war' && count >= 10) {
+    if (!isMissionKeyFound(state, 'northern_highland')) {
+      triggered.appendText = '📖 **主線線索**：你還缺「夜冕主宰鏈路密鑰」，四巨頭戰線暫不開啟。先鎖定雪白山莊的滲透聯絡員。';
+      triggered.memory = '第四關關鍵證據未到手，尚不能直連四巨頭。';
+      return triggered;
+    }
     if (completedLocations < 2) {
       const travelHint = buildTravelGateHint(state, 2, completedLocations, player);
       if (!travelHint) return null;
@@ -502,12 +959,19 @@ function recordCombatOutcome(player, context = {}) {
   const enemyName = String(context?.enemyName || '').trim();
   if (!enemyName) return null;
 
+  const missionTriggered = recordActionEvidence(player, {
+    location: context?.location || player?.location || '',
+    enemyName,
+    victory: true
+  });
+
   const defeatedKing = DIGITAL_KINGS.find((name) => enemyName === name || enemyName.includes(name));
-  if (!defeatedKing) return null;
+  if (!defeatedKing) return missionTriggered || null;
   if (state.defeatedKings.includes(defeatedKing)) return null;
 
   state.defeatedKings.push(defeatedKing);
   state.pendingKing = state.pendingKing === defeatedKing ? null : state.pendingKing;
+  updateIslandRoutesMissionFromKings(state);
   const cleared = state.defeatedKings.length;
   const remainingKings = getRemainingKings(state);
 
@@ -526,6 +990,13 @@ function recordCombatOutcome(player, context = {}) {
     triggered.appendText += '\n📖 四巨頭全滅，終章入口已解鎖。';
     triggered.announcement = `🏁 ${player?.name || '玩家'}已擊破四巨頭，終章入口開啟。`;
     triggered.memory = '你已擊敗全部四巨頭，終章即將展開。';
+  }
+
+  if (missionTriggered?.appendText) {
+    triggered.appendText = `${triggered.appendText}\n${missionTriggered.appendText}`.trim();
+  }
+  if (missionTriggered?.memory) {
+    triggered.memory = `${triggered.memory}\n${missionTriggered.memory}`.trim();
   }
 
   return triggered;
@@ -559,6 +1030,11 @@ module.exports = {
   ENDING_RULES,
   ensureMainStoryState,
   getMainStoryBrief,
+  getTruthDisclosureLevel,
+  getTruthGatePrompt,
+  getCurrentRegionMission,
+  recordActionEvidence,
+  maybeTriggerMissionNpcLead,
   getMainStoryChoice,
   resolveMainStoryAction,
   maybeTriggerPassiveStory,

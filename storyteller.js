@@ -1239,6 +1239,9 @@ const CHOICE_VAGUE_PHRASES = [
   /追問她留下的線索|追查她留下的線索|查她的線索/gu,
   /某個線索|不明線索|神秘線索(?!來源)/gu,
   /持續追查來源與流向|继续追查来源与流向/gu,
+  /沿著.{0,18}(追查|追蹤).{0,20}(來源與流向|来源与流向)/gu,
+  /先處理本區關鍵|先处理本区关键/gu,
+  /回到核心線索|回到核心线索/gu,
   /現場目擊者逐一確認出現時間|现场目击者逐一确认出现时间/gu,
   /可疑人物|可疑隊伍|可疑目标|可疑目標/gu
 ];
@@ -1501,6 +1504,7 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
   const seen = new Set();
   let duplicateCount = 0;
   let anchorHitCount = 0;
+  let aggressiveCount = 0;
   const locationRegex = location
     ? new RegExp(`把[「"]?${escapeRegex(location)}[」"]?\\s*(送|帶去|拿去|送去)`, 'u')
     : null;
@@ -1523,9 +1527,13 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
     if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) {
       anchorHitCount += 1;
     }
+    if (/\[(?:🔥高風險|⚔️會戰鬥)\]/u.test(String(choice?.tag || ''))) {
+      aggressiveCount += 1;
+    }
   }
 
   if (duplicateCount > 0) issues.push(`有 ${duplicateCount} 個重複選項`);
+  if (aggressiveCount < 1) issues.push('至少需要 1 個偏激進選項（[🔥高風險] 或 [⚔️會戰鬥]）');
   // 「是否命中過往元素」改為提示詞引導，不作為硬性失敗條件，
   // 避免選項已合理但因命中門檻造成整組失敗。
 
@@ -1577,9 +1585,7 @@ async function generateMainlineBridgeChoiceWithAI({
 } = {}) {
   const safeLocation = String(location || '當前區域').trim() || '當前區域';
   const safeGoal = String(stageGoal || '').replace(/\s+/g, ' ').trim();
-  if (!safeGoal) {
-    return buildFallbackMainlineBridgeChoice({ playerLang, location: safeLocation, stageGoal: safeGoal, stage, stageCount });
-  }
+  if (!safeGoal) return null;
 
   const langInstruction = {
     'zh-TW': '請用繁體中文',
@@ -1647,18 +1653,8 @@ ${bridgeCtx || '（無）'}
       progressText
     });
   } catch (e) {
-    console.log('[AI][mainlineBridgeChoice] fallback:', e?.message || e);
-    return sanitizeMainlineBridgeChoiceTone(buildFallbackMainlineBridgeChoice({
-      playerLang,
-      location: safeLocation,
-      stageGoal: safeGoal,
-      stage,
-      stageCount
-    }), {
-      playerLang,
-      location: safeLocation,
-      progressText
-    });
+    console.log('[AI][mainlineBridgeChoice] skipped:', e?.message || e);
+    return null;
   }
 }
 
@@ -1701,13 +1697,7 @@ async function injectMainlineBridgeChoiceWithAI(choices = [], options = {}) {
 
   let bridgeRaw = precomputedBridgeChoice;
   if (!bridgeRaw && bridgeChoiceResolved) {
-    bridgeRaw = buildFallbackMainlineBridgeChoice({
-      playerLang,
-      location,
-      stageGoal,
-      stage,
-      stageCount
-    });
+    bridgeRaw = null;
   }
   if (!bridgeRaw) {
     bridgeRaw = await generateMainlineBridgeChoiceWithAI({
@@ -2011,7 +2001,25 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const mainStoryState = typeof MAIN_STORY.ensureMainStoryState === 'function'
     ? MAIN_STORY.ensureMainStoryState(player)
     : null;
-  const revealRivalName = Number(mainStoryState?.act || 1) >= RIVAL_NAME_REVEAL_ACT;
+  const truthLevel = typeof MAIN_STORY.getTruthDisclosureLevel === 'function'
+    ? Number(MAIN_STORY.getTruthDisclosureLevel(player) || 1)
+    : 1;
+  const revealRivalName = truthLevel >= Math.max(3, RIVAL_NAME_REVEAL_ACT);
+  const truthGatePrompt = typeof MAIN_STORY.getTruthGatePrompt === 'function'
+    ? MAIN_STORY.getTruthGatePrompt(player, location)
+    : '';
+  const missionInfo = typeof MAIN_STORY.getCurrentRegionMission === 'function'
+    ? MAIN_STORY.getCurrentRegionMission(player, location)
+    : null;
+  const missionNarrativeRule = missionInfo && !missionInfo.keyFound
+    ? (missionInfo.regionId === 'island_routes'
+      ? '本區關鍵任務未完成：四巨頭尚未全滅前，不可把終章真相寫成已成立。'
+      : (
+        String(location || '').trim() === String(missionInfo.npcLocation || '').trim()
+          ? `本區關鍵任務未完成：你現在就在唯一來源城市，可鋪陳接觸「${missionInfo.npcName}」，但證據「${missionInfo.evidenceName}」只能由他交付。`
+          : `本區關鍵任務未完成：證據「${missionInfo.evidenceName}」唯一來源是 ${missionInfo.npcLocation} 的 ${missionInfo.npcName}，本回合不可寫成已取得。`
+      ))
+    : '';
   const mainStoryBrief = MAIN_STORY.getMainStoryBrief(player);
   const loreSnippet = WORLD_LORE.getLorePromptSnippet({ revealRivalName, newbieDeception: newbieMask });
   const appraisalExamples = getAppraisalExampleLine(8);
@@ -2161,6 +2169,8 @@ ${npcDialogueSection}
 ${mainlinePinsSection}
 ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
 ${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
+${truthGatePrompt ? `\n${truthGatePrompt}` : ''}
+${missionNarrativeRule ? `\n【關鍵任務敘事規則】\n${missionNarrativeRule}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationInstruction ? `\n【導航約束】\n${navigationInstruction}` : ''}
 ${openingBeatSection}
@@ -2202,6 +2212,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 28. 「玩家：${safePlayerName}」是主角唯一名稱，禁止把同名當成其他 NPC 或通訊器另一端人物；若要新增角色，必須使用不同名字
 29. 避免地理刻板描寫與舊套路意象（例如沙漠駱駝、武林門派式修行），改以「收藏品真偽、供應鏈、滲透、證據」推進劇情
 30. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可提前揭露為已知真相，只能做模糊預告
+30a. 若【跨島真相邊界】指定「唯一來源 NPC + 城市」，只有在該 NPC 且該城市才能寫成「已取得關鍵證據」；其他情況最多只能寫成傳聞或疑點
 31. 戰鬥節奏僅作敘事節拍參考：第 4/5 可拉高張力、第 5/5 可推向衝突，但不可硬跳不連貫場景
 32. 若通緝熱度 >= ${WANTED_AMBUSH_MIN_LEVEL}，可讓敵對勢力主動接近，但要明確交代「誰靠近、如何接觸」
 33. 若要讓 NPC 主動出現，必須在當前地點或附近可互動地點內合理登場，不可跨區瞬移
@@ -2337,6 +2348,21 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     'zh-CN': '請用簡體中文輸出',
     'en': 'Please output in English'
   }[playerLang] || '請用繁體中文輸出';
+  const truthGatePrompt = typeof MAIN_STORY.getTruthGatePrompt === 'function'
+    ? MAIN_STORY.getTruthGatePrompt(player, location)
+    : '';
+  const missionInfo = typeof MAIN_STORY.getCurrentRegionMission === 'function'
+    ? MAIN_STORY.getCurrentRegionMission(player, location)
+    : null;
+  const missionChoiceRule = missionInfo && !missionInfo.keyFound
+    ? (missionInfo.regionId === 'island_routes'
+      ? '本區關鍵任務未完成：四巨頭未全滅前，只能鋪陳追蹤或備戰，不能寫成已拿到終章核心憑證。'
+      : (
+        String(location || '').trim() === String(missionInfo.npcLocation || '').trim()
+          ? `本區關鍵任務未完成：你現在在唯一來源城市。5 個選項中至少 1 個要自然導向接觸「${missionInfo.npcName}」或其行動軌跡；不得直接寫成已取得「${missionInfo.evidenceName}」。`
+          : `本區關鍵任務未完成：不可在本地直接取得「${missionInfo.evidenceName}」，只能鋪陳為蒐集路徑、比對線索，或朝「${missionInfo.npcLocation}」推進。`
+      ))
+    : '';
   
   const focusedMemory = summarizeContext(memoryContext, 560, 8);
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
@@ -2372,22 +2398,6 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     focusedMemory ? `記憶摘要：${focusedMemory}` : '',
     islandGuidePrompt ? `島內引導：${islandGuidePrompt}` : ''
   ].filter(Boolean).join('\n');
-  const bridgeChoicePromise = (!islandCompleted && stageGoal)
-    ? generateMainlineBridgeChoiceWithAI({
-      playerLang,
-      location,
-      stageGoal,
-      stage: safeStage,
-      stageCount: islandStageCount,
-      storyTail: bridgeTail || fullStoryText.slice(-320),
-      storyContext: fullStoryText,
-      bridgeContext
-    }).catch((bridgeErr) => {
-      console.log('[AI][mainlineBridgeChoice] parallel fallback:', bridgeErr?.message || bridgeErr);
-      return null;
-    })
-    : Promise.resolve(null);
-  
   const prompt = `你是 Renaiss 世界的冒險策劃師，設計的選項要有創意、刺激。
 風格限制：原創「科技收藏×真偽鑑識」敘事，禁止武俠語氣，禁止既有 IP 名詞（寶可夢、數碼寶貝、斗羅大陸等）。
 
@@ -2412,6 +2422,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 ${memorySection}
 ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
 ${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
+${truthGatePrompt ? `\n${truthGatePrompt}` : ''}
+${missionChoiceRule ? `\n【關鍵任務選項規則】\n${missionChoiceRule}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationTarget ? `\n【導航約束】\n玩家已在地圖設定導航目標「${navigationTarget}」，至少 1 個選項必須是朝該地點推進的具體行動。` : ''}
 
@@ -2444,11 +2456,15 @@ ${anchorText}
 9. 地名只能用於「在某地調查/前往某地」，禁止把地名當物件（例如禁止「把廣州送去檢測」）
 10. 避免與「最近已做過的選擇」重複同動詞同目的（例如連續多次「檢測」「詢問」「追查同線索」）
 11. 5 個選項要有足夠發散度，避免都在做同一件事
+11a. 禁止模板句型：不可出現「沿著/沿XX繼續追查來源與流向」「先處理本區關鍵」「回到核心線索」這類制式措辭
+11b. 每個選項都要有具體對象（人/物/地點/行動），不能只寫抽象目標
 12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
 13. 若島嶼劇情進行中，至少 1 個選項要明確推進島內主題（來自島內引導段），且不得超過 1 個主線強引導選項
 14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例
 15. 玩家名稱「${playerName}」只能指主角本人；禁止再創建同名 NPC
 16. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可直接當成已知真相寫進選項
+16a. 若【跨島真相邊界】指定「唯一來源 NPC + 城市」，禁止產生「在其他人/其他城市直接拿到關鍵證據」的選項
+16b. 若有【關鍵任務選項規則】，必須完整遵守
 17. ${cadenceRequirement}
 18. ${wantedRequirement}
 19. 若通緝熱度偏高，5 個選項中最多只允許 1 個「敵對主動逼近/立即戰鬥」類，其餘需維持調查、移動、社交或交易分散度
@@ -2528,26 +2544,6 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       } else {
         throw new Error(`choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
       }
-    }
-
-    const precomputedBridgeChoice = await bridgeChoicePromise;
-
-    try {
-      validatedChoices = await injectMainlineBridgeChoiceWithAI(validatedChoices, {
-        playerLang,
-        location,
-        stageGoal,
-        stage: safeStage,
-        stageCount: islandStageCount,
-        storyTail: bridgeTail || fullStoryText.slice(-320),
-        storyContext: fullStoryText,
-        bridgeContext,
-        bridgeChoice: precomputedBridgeChoice,
-        bridgeChoiceResolved: true,
-        islandCompleted
-      });
-    } catch (bridgeErr) {
-      console.log('[AI][choices] injectMainlineBridgeChoiceWithAI skipped:', bridgeErr?.message || bridgeErr);
     }
 
     recordAIPerf('choices', Date.now() - startedAt);
