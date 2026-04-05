@@ -1066,8 +1066,6 @@ async function showFriendsMenu(interaction, user, notice = '') {
     return;
   }
   const social = ensurePlayerFriendState(player);
-  pruneMissingFriendLinksForPlayer(player);
-  CORE.savePlayer(player);
 
   const friends = social.friends
     .map((id) => ({ id, name: getPlayerDisplayNameById(id) }))
@@ -1165,10 +1163,7 @@ async function showFriendCharacter(interaction, user, friendId = '') {
 
   const target = CORE.loadPlayer(targetId);
   if (!target) {
-    const social = ensurePlayerFriendState(viewer);
-    social.friends = removeFriendIdFromList(social.friends, targetId);
-    CORE.savePlayer(viewer);
-    await showFriendsMenu(interaction, user, '該玩家資料不存在，已自動從好友名單移除。');
+    await showFriendsMenu(interaction, user, '該玩家資料目前不可用，請稍後再試。');
     return;
   }
   const targetPet = PET.loadPet(targetId);
@@ -8105,7 +8100,7 @@ function getWorldIntroTemplate(lang = 'zh-TW') {
       '你身在 Renaiss 海域。這片星域由 Renaiss 長年維運，是航道、交易與居住秩序的核心。',
       '但在明面秩序之外，另一股勢力正與既有體系長期角力，雙方在各區節點不斷拉鋸。',
       '主角群由你與你的夥伴寵物展開；你每一次探索、交易、戰鬥、撤退，都會改寫下一段劇情。',
-      'Renaiss 的前線核心由 Winchman、Tom、Harry、Kathy、Yuzu、Leslie 協同維持，重點是守住航道與民生據點。',
+      'Renaiss 的前線核心由 Winchman、Tom、Harry、Kathy、Ryan 協同維持，重點是守住航道與民生據點。',
       '這是開放世界，沒有固定主線按鈕；章節、流言、戰況與角色命運都由你的選擇被動推進。',
       '世界會記住你做過的事，並把後果擴散成所有玩家可見的長期傳聞。'
     ].join('\n'),
@@ -8113,7 +8108,7 @@ function getWorldIntroTemplate(lang = 'zh-TW') {
       '你身在 Renaiss 海域。这片星域长期由 Renaiss 维运，是航道、交易与居住秩序的核心。',
       '但在明面秩序之外，另一股势力正与既有体系长期角力，双方在各区节点持续拉锯。',
       '主角群由你与伙伴宠物展开；你每一次探索、交易、战斗、撤退，都会改写下一段剧情。',
-      'Renaiss 前线核心由 Winchman、Tom、Harry、Kathy、Yuzu、Leslie 协同维持，重点是守住航道与民生据点。',
+      'Renaiss 前线核心由 Winchman、Tom、Harry、Kathy、Ryan 协同维持，重点是守住航道与民生据点。',
       '这是开放世界，没有固定主线按钮；章节、流言、战况与角色命运都由你的选择被动推进。',
       '世界会记住你做过的事，并把后果扩散成所有玩家可见的长期传闻。'
     ].join('\n'),
@@ -8121,7 +8116,7 @@ function getWorldIntroTemplate(lang = 'zh-TW') {
       'You are in the Renaiss Sea, a star region long maintained by Renaiss as the backbone of routes, trade, and civil order.',
       'Beyond the visible order, a rival force keeps contesting that system across multiple regional nodes.',
       'The protagonists are you and your partner creature; each exploration, trade, battle, or retreat rewrites your next chapter.',
-      'Renaiss frontline operations are coordinated by Winchman, Tom, Harry, Kathy, Yuzu, and Leslie to keep routes and civilian hubs stable.',
+      'Renaiss frontline operations are coordinated by Winchman, Tom, Harry, Kathy, and Ryan to keep routes and civilian hubs stable.',
       'This is an open world with no fixed main-story button; chapters, rumors, and outcomes are passively triggered by your choices.',
       'The world remembers your actions and propagates the consequences as shared long-term rumors.'
     ].join('\n')
@@ -9054,6 +9049,15 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'battle_mode_manual_online' ||
       customId.startsWith('fdonline_move_') ||
       customId.startsWith('fdonline_wait_');
+    const isFriendFlowButton =
+      customId === 'open_friends' ||
+      customId === 'friend_refresh' ||
+      customId === 'open_friend_add_modal' ||
+      customId.startsWith('friend_') ||
+      customId === 'battle_mode_manual' ||
+      customId === 'battle_mode_manual_offline' ||
+      customId === 'battle_mode_manual_online' ||
+      customId === 'battle_mode_ai';
     // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
@@ -9072,7 +9076,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
       !isShopFlowButton &&
       !isPetFlowButton &&
       !isInventoryFlowButton &&
-      !isFriendOnlineBattleButton
+      !isFriendOnlineBattleButton &&
+      !isFriendFlowButton
     ) {
       // 不阻塞互動主流程，避免先鎖按鈕時超過 Discord 互動 3 秒時限
       lockPressedButtonImmediately(interaction).catch(() => {});
@@ -16876,7 +16881,7 @@ async function startManualBattleOnline(interaction, user) {
   const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
   const pet = petResolved?.pet || fallbackPet;
   if (!player || !pet || !player?.battleState?.enemy || !player?.battleState?.friendDuel) {
-    await interaction.update({ content: '❌ 目前不是可啟用線上模式的好友友誼戰。', components: [] }).catch(() => {});
+    await interaction.reply({ content: '❌ 目前不是可啟用線上模式的好友友誼戰。', ephemeral: true }).catch(() => {});
     return;
   }
   if (petResolved?.changed) CORE.savePlayer(player);
@@ -16884,7 +16889,7 @@ async function startManualBattleOnline(interaction, user) {
   const duel = player.battleState.friendDuel || {};
   const friendId = String(duel.friendId || '').trim();
   if (!friendId) {
-    await interaction.update({ content: '❌ 找不到好友對戰對象。', components: [] }).catch(() => {});
+    await interaction.reply({ content: '❌ 找不到好友對戰對象。', ephemeral: true }).catch(() => {});
     return;
   }
 
@@ -17011,7 +17016,7 @@ async function startManualBattle(interaction, user) {
   const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
   const pet = petResolved?.pet || fallbackPet;
   if (!player || !pet) {
-    await interaction.update({ content: '❌ 沒有可用招式，無法開始戰鬥。', components: [] });
+    await interaction.reply({ content: '❌ 沒有可用招式，無法開始戰鬥。', ephemeral: true }).catch(() => {});
     return;
   }
   const previousOnlineRoomId = String(player?.battleState?.friendDuel?.online?.roomId || '').trim();
@@ -17329,7 +17334,7 @@ async function handleFight(interaction, user) {
   const pet = petResolved?.pet || fallbackPet;
 
   if (!player || !pet) {
-    await interaction.update({ content: '❌ 沒有招式！', components: [] });
+    await interaction.reply({ content: '❌ 沒有招式！', ephemeral: true }).catch(() => {});
     return;
   }
 
