@@ -759,6 +759,8 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
   return {
     id: `friend_duel_${String(friendPlayer?.id || 'unknown').trim()}`,
     name: `${ownerName} 的 ${petName}`,
+    element: normalizePetElementCode(friendPet?.type || friendPet?.element || '水'),
+    petElement: normalizePetElementCode(friendPet?.type || friendPet?.element || '水'),
     hp: Math.max(1, Number(friendPet?.hp || friendPet?.maxHp || 100)),
     maxHp: Math.max(1, Number(friendPet?.maxHp || friendPet?.hp || 100)),
     attack: Math.max(8, Number(friendPet?.attack || 20)),
@@ -773,6 +775,8 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
 function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = false) {
   const battleState = player?.battleState || {};
   const duel = battleState?.friendDuel || {};
+  const roomId = String(duel?.online?.roomId || '').trim();
+  if (roomId) clearOnlineFriendDuelTimer(roomId);
   const rivalId = String(duel.friendId || '').trim();
   const rivalName = String(duel.friendName || '好友').trim() || '好友';
   const sourceChoice = String(battleState?.sourceChoice || '').trim();
@@ -948,15 +952,87 @@ async function startFriendDuel(interaction, user, friendId = '') {
       `🏷️ 我方屬性：${allyElementText}\n` +
       `${relationText}\n` +
       `⚡ 戰鬥能量規則：每回合 +2，可結轉\n` +
+      `🌐 線上手動模式：雙方每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒內同時提交行動\n` +
       `🤝 友誼戰規則：不影響生死、無通緝、無金幣掉落\n` +
       `📊 勝率預估：${estimate.rank}（約 ${format1(estimate.winRate)}%）\n\n` +
       `請選擇戰鬥模式：`
     );
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('battle_mode_manual').setLabel('⚔️ 手動戰鬥').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel('⚔️ 手動戰鬥（線下模式）').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('battle_mode_manual_online').setLabel('🌐 手動戰鬥（線上模式）').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 AI戰鬥').setStyle(ButtonStyle.Primary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
+}
+
+function parseOnlineFriendDuelAction(customId = '') {
+  const text = String(customId || '').trim();
+  let matched = text.match(/^fdonline_move_([^_]+)_(\d+)$/);
+  if (matched) {
+    return {
+      kind: 'move',
+      hostId: String(matched[1] || '').trim(),
+      moveIndex: Math.max(0, Number.parseInt(matched[2], 10) || 0)
+    };
+  }
+  matched = text.match(/^fdonline_wait_([^_]+)$/);
+  if (matched) {
+    return {
+      kind: 'wait',
+      hostId: String(matched[1] || '').trim(),
+      moveIndex: -1
+    };
+  }
+  return null;
+}
+
+function getOnlineFriendDuelState(player) {
+  const online = player?.battleState?.friendDuel?.online;
+  if (!online || typeof online !== 'object' || !online.enabled) return null;
+  return online;
+}
+
+function getOnlineFriendDuelHostPlayer(hostId = '') {
+  const id = String(hostId || '').trim();
+  if (!id) return null;
+  const host = CORE.loadPlayer(id);
+  if (!host) return null;
+  const online = getOnlineFriendDuelState(host);
+  if (!online) return null;
+  if (String(online.hostId || '').trim() !== id) return null;
+  return host;
+}
+
+function canOperateOnlineFriendDuel(hostPlayer, userId = '', channelId = '') {
+  const online = getOnlineFriendDuelState(hostPlayer);
+  if (!online) return false;
+  const uid = String(userId || '').trim();
+  if (!uid) return false;
+  const hostId = String(online.hostId || '').trim();
+  const rivalId = String(online.rivalId || '').trim();
+  if (uid !== hostId && uid !== rivalId) return false;
+  const duelChannelId = String(online.channelId || '').trim();
+  if (duelChannelId && String(channelId || '').trim() && duelChannelId !== String(channelId || '').trim()) {
+    return false;
+  }
+  return true;
+}
+
+function shouldBypassThreadGuardForOnlineFriendDuel(interaction, userId = '') {
+  if (!interaction?.isButton?.()) return false;
+  const action = parseOnlineFriendDuelAction(interaction.customId || '');
+  if (!action?.hostId) return false;
+  const hostPlayer = getOnlineFriendDuelHostPlayer(action.hostId);
+  if (!hostPlayer) return false;
+  return canOperateOnlineFriendDuel(hostPlayer, userId, interaction.channelId);
+}
+
+function clearOnlineFriendDuelTimer(roomId = '') {
+  const key = String(roomId || '').trim();
+  if (!key) return;
+  const timer = ONLINE_FRIEND_DUEL_TIMERS.get(key);
+  if (timer) clearTimeout(timer);
+  ONLINE_FRIEND_DUEL_TIMERS.delete(key);
 }
 
 function trimButtonLabel(text = '', maxLen = 18) {
@@ -1127,6 +1203,7 @@ async function showFriendCharacter(interaction, user, friendId = '') {
 }
 
 async function rejectIfNotThreadOwner(interaction, userId) {
+  if (shouldBypassThreadGuardForOnlineFriendDuel(interaction, userId)) return false;
   if (!interaction.channel?.isThread?.()) return false;
   const ownerId = getThreadOwnerUserId(interaction.channelId);
   if (!ownerId) return false;
@@ -1142,6 +1219,7 @@ async function rejectIfNotThreadOwner(interaction, userId) {
 }
 
 async function rejectIfNotLatestThread(interaction, userId) {
+  if (shouldBypassThreadGuardForOnlineFriendDuel(interaction, userId)) return false;
   const latestThreadId = getPlayerThread(userId);
   if (!latestThreadId) return false;
   if (!interaction.channel?.isThread?.()) return false;
@@ -1348,7 +1426,127 @@ const SHOP_HEAL_CRYSTAL_COST = 200;
 const SHOP_HEAL_CRYSTAL_RECOVER = Math.max(10, Number(process.env.SHOP_HEAL_CRYSTAL_RECOVER || 30));
 const SHOP_ENERGY_CRYSTAL_COST = 2000;
 const SHOP_ENERGY_CRYSTAL_RECOVER = Math.max(20, Number(process.env.SHOP_ENERGY_CRYSTAL_RECOVER || 100));
+const TELEPORT_DEVICE_COST = Math.max(100, Number(process.env.TELEPORT_DEVICE_COST || 200));
+const TELEPORT_DEVICE_DURATION_HOURS = Math.max(1, Number(process.env.TELEPORT_DEVICE_DURATION_HOURS || 6));
+const TELEPORT_DEVICE_DURATION_MS = TELEPORT_DEVICE_DURATION_HOURS * 60 * 60 * 1000;
+const TELEPORT_DEVICE_STOCK_LIMIT = Math.max(10, Number(process.env.TELEPORT_DEVICE_STOCK_LIMIT || 999));
+const TELEPORT_DEVICE_INVENTORY_ITEM = '傳送裝置（區內）';
 const DIGITAL_CRYSTAL_EFFECT_FAIL_RATE = Math.max(0, Math.min(1, Number(process.env.DIGITAL_CRYSTAL_EFFECT_FAIL_RATE || 0.5)));
+
+function formatTeleportDeviceRemaining(ms = 0) {
+  const safe = Math.max(0, Number(ms || 0));
+  const totalMinutes = Math.ceil(safe / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours <= 0) return `${minutes}m`;
+  if (minutes <= 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+function normalizeTeleportDeviceStock(player, options = {}) {
+  if (!player || typeof player !== 'object') return [];
+  const nowMs = Number(options.nowMs || Date.now());
+  const existingRaw = Array.isArray(player.teleportDeviceStock) ? player.teleportDeviceStock : [];
+  const existing = [];
+  for (const item of existingRaw) {
+    if (Number.isFinite(Number(item))) {
+      existing.push(Number(item));
+      continue;
+    }
+    if (item && typeof item === 'object' && Number.isFinite(Number(item.expiresAt))) {
+      existing.push(Number(item.expiresAt));
+    }
+  }
+
+  let legacyCount = 0;
+  if (Boolean(player.teleportDeviceOwned)) legacyCount += 1;
+  if (Array.isArray(player.inventory) && player.inventory.length > 0) {
+    const kept = [];
+    for (const item of player.inventory) {
+      const text = String(item || '').trim();
+      if (/Teleport Device/i.test(text) || /傳送裝置/u.test(text)) {
+        const countMatch = text.match(/x\s*(\d+)/i) || text.match(/×\s*(\d+)/u);
+        legacyCount += Math.max(1, Number(countMatch?.[1] || 1));
+        continue;
+      }
+      kept.push(item);
+    }
+    if (kept.length !== player.inventory.length) {
+      player.inventory = kept;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(player, 'teleportDeviceOwned')) {
+    delete player.teleportDeviceOwned;
+  }
+
+  const normalized = existing
+    .filter((expiresAt) => Number.isFinite(expiresAt) && expiresAt > nowMs)
+    .sort((a, b) => a - b)
+    .slice(0, TELEPORT_DEVICE_STOCK_LIMIT);
+
+  if (legacyCount > 0 && normalized.length === 0) {
+    const count = Math.max(1, Math.min(legacyCount, TELEPORT_DEVICE_STOCK_LIMIT));
+    for (let i = 0; i < count; i += 1) {
+      normalized.push(nowMs + TELEPORT_DEVICE_DURATION_MS);
+    }
+  }
+
+  player.teleportDeviceStock = normalized;
+  return normalized;
+}
+
+function getTeleportDeviceStockInfo(player, options = {}) {
+  const nowMs = Number(options.nowMs || Date.now());
+  const stock = normalizeTeleportDeviceStock(player, { nowMs });
+  const count = stock.length;
+  const soonestExpiresAt = count > 0 ? stock[0] : 0;
+  const soonestRemainingMs = Math.max(0, soonestExpiresAt - nowMs);
+  return {
+    count,
+    stock,
+    soonestExpiresAt,
+    soonestRemainingMs
+  };
+}
+
+function playerOwnsTeleportDevice(player) {
+  const info = getTeleportDeviceStockInfo(player);
+  return info.count > 0;
+}
+
+function grantTeleportDevice(player, count = 1, options = {}) {
+  if (!player || typeof player !== 'object') return;
+  const nowMs = Number(options.nowMs || Date.now());
+  const info = getTeleportDeviceStockInfo(player, { nowMs });
+  const add = Math.max(1, Number(count || 1));
+  const capped = Math.max(0, TELEPORT_DEVICE_STOCK_LIMIT - info.count);
+  const actual = Math.min(add, capped);
+  for (let i = 0; i < actual; i += 1) {
+    info.stock.push(nowMs + TELEPORT_DEVICE_DURATION_MS);
+  }
+  info.stock.sort((a, b) => a - b);
+  player.teleportDeviceStock = info.stock.slice(0, TELEPORT_DEVICE_STOCK_LIMIT);
+  return actual;
+}
+
+function consumeTeleportDevice(player, options = {}) {
+  if (!player || typeof player !== 'object') return null;
+  const nowMs = Number(options.nowMs || Date.now());
+  const stock = normalizeTeleportDeviceStock(player, { nowMs });
+  if (stock.length <= 0) return null;
+  const consumedExpiresAt = stock.shift();
+  player.teleportDeviceStock = stock;
+  return {
+    consumedExpiresAt,
+    remainingCount: stock.length
+  };
+}
+
+function isMainPortalHubLocation(location = '') {
+  const loc = String(location || '').trim();
+  if (!loc || typeof getLocationPortalHub !== 'function') return false;
+  return String(getLocationPortalHub(loc) || '').trim() === loc;
+}
 
 function tryAcquireStoryLock(userId, reason = 'story') {
   if (!userId) return true;
@@ -5019,6 +5217,8 @@ const WAIT_COMBAT_MOVE = {
   desc: '本回合不攻擊，保留節奏與能量'
 };
 const MANUAL_ENEMY_RESPONSE_DELAY_MS = 1000;
+const FRIEND_DUEL_ONLINE_TURN_MS = Math.max(5000, Number(process.env.FRIEND_DUEL_ONLINE_TURN_MS || 10000));
+const ONLINE_FRIEND_DUEL_TIMERS = new Map();
 
 function summarizeBattleDetailForStory(detail = '', maxLen = 260) {
   const text = String(detail || '').replace(/\s+/g, ' ').trim();
@@ -5353,9 +5553,71 @@ function formatPetHpWithRecovery(pet) {
   return hp;
 }
 
-function buildMainStatusBar(player, pet) {
+function getAdventureText(lang = 'zh-TW') {
+  const code = normalizeLangCode(lang);
+  const map = {
+    'zh-TW': {
+      statusLabel: '狀態',
+      statusHp: '氣血',
+      statusEnergy: '能量',
+      statusSatiety: '飽腹度',
+      statusCurrency: 'Rns 代幣',
+      mainlineDone: (location) => `📖 本區主線：已完成（${location}）`,
+      mainlineProgress: (location) => `📖 本區主線：進行中（${location}）`,
+      missionBoss: (done) => `｜關鍵任務：擊敗四巨頭全員（${done ? '已完成' : '未完成'}）`,
+      missionNpc: (name, location, done) => `｜關鍵NPC：${name}@${location}（${done ? '已完成' : '未完成'}）`,
+      sectionChoices: '🆕 選項',
+      sectionNewChoices: '🆕 新選項',
+      chooseNumber: (max) => `請選擇編號（1-${max}）`,
+      sectionWorldEvents: '📢 世界事件',
+      lastChoice: '📍 上個選擇',
+      sectionPrevStory: '📜 前情提要',
+      sectionUpcomingChoices: '🆕 即將更新選項'
+    },
+    'zh-CN': {
+      statusLabel: '状态',
+      statusHp: '气血',
+      statusEnergy: '能量',
+      statusSatiety: '饱腹度',
+      statusCurrency: 'Rns 代币',
+      mainlineDone: (location) => `📖 本区主线：已完成（${location}）`,
+      mainlineProgress: (location) => `📖 本区主线：进行中（${location}）`,
+      missionBoss: (done) => `｜关键任务：击败四巨头全员（${done ? '已完成' : '未完成'}）`,
+      missionNpc: (name, location, done) => `｜关键NPC：${name}@${location}（${done ? '已完成' : '未完成'}）`,
+      sectionChoices: '🆕 选项',
+      sectionNewChoices: '🆕 新选项',
+      chooseNumber: (max) => `请选择编号（1-${max}）`,
+      sectionWorldEvents: '📢 世界事件',
+      lastChoice: '📍 上个选择',
+      sectionPrevStory: '📜 前情提要',
+      sectionUpcomingChoices: '🆕 即将更新选项'
+    },
+    en: {
+      statusLabel: 'Status',
+      statusHp: 'HP',
+      statusEnergy: 'Energy',
+      statusSatiety: 'Satiety',
+      statusCurrency: 'Rns Tokens',
+      mainlineDone: (location) => `📖 Local Mainline: Completed (${location})`,
+      mainlineProgress: (location) => `📖 Local Mainline: In Progress (${location})`,
+      missionBoss: (done) => ` | Key Mission: Defeat all Four Commanders (${done ? 'Done' : 'Pending'})`,
+      missionNpc: (name, location, done) => ` | Key NPC: ${name}@${location} (${done ? 'Done' : 'Pending'})`,
+      sectionChoices: '🆕 Choices',
+      sectionNewChoices: '🆕 New Choices',
+      chooseNumber: (max) => `Choose a number (1-${max})`,
+      sectionWorldEvents: '📢 World Events',
+      lastChoice: '📍 Previous Choice',
+      sectionPrevStory: '📜 Previous Context',
+      sectionUpcomingChoices: '🆕 Incoming Choices'
+    }
+  };
+  return map[code] || map['zh-TW'];
+}
+
+function buildMainStatusBar(player, pet, lang = '') {
+  const tx = getAdventureText(lang || player?.language || 'zh-TW');
   const hpText = formatPetHpWithRecovery(pet);
-  return `氣血 ${hpText} | 能量 ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | 飽腹度 ${player.stats.飽腹度} | Rns 代幣 ${player.stats.財富} | ${player.location}`;
+  return `${tx.statusHp} ${hpText} | ${tx.statusEnergy} ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | ${tx.statusSatiety} ${player.stats.飽腹度} | ${tx.statusCurrency} ${player.stats.財富} | ${player.location}`;
 }
 
 function getIslandMainlineProgressMeta(player) {
@@ -5376,7 +5638,8 @@ function getIslandMainlineProgressMeta(player) {
   };
 }
 
-function buildMainlineProgressLine(player) {
+function buildMainlineProgressLine(player, lang = '') {
+  const tx = getAdventureText(lang || player?.language || 'zh-TW');
   const meta = getIslandMainlineProgressMeta(player);
   if (!meta) return '';
   const mission = (MAIN_STORY && typeof MAIN_STORY.getCurrentRegionMission === 'function')
@@ -5384,13 +5647,13 @@ function buildMainlineProgressLine(player) {
     : null;
   const missionLine = mission
     ? (mission.regionId === 'island_routes'
-      ? `｜關鍵任務：擊敗四巨頭全員（${mission.keyFound ? '已完成' : '未完成'}）`
-      : `｜關鍵NPC：${mission.npcName}@${mission.npcLocation}（${mission.keyFound ? '已完成' : '未完成'}）`)
+      ? tx.missionBoss(Boolean(mission.keyFound))
+      : tx.missionNpc(String(mission.npcName || 'Unknown'), String(mission.npcLocation || 'Unknown'), Boolean(mission.keyFound)))
     : '';
   if (meta.completed) {
-    return `📖 本區主線：已完成（${meta.location}）${missionLine}`;
+    return `${tx.mainlineDone(meta.location)}${missionLine}`;
   }
-  return `📖 本區主線：${meta.progressText}${missionLine}`;
+  return `${tx.mainlineProgress(meta.location)}${missionLine}`;
 }
 
 function detectStitchedBattleStory(story = '') {
@@ -6669,6 +6932,7 @@ function snapshotHasUsableComponents(snapshot) {
       if (customId === 'map_back_main') continue;
       if (customId.startsWith('map_')) continue;
       if (customId.startsWith('portal_')) continue;
+      if (customId.startsWith('device_')) continue;
       return true;
     }
   }
@@ -6696,6 +6960,7 @@ function getMapText(lang = 'zh-TW') {
       mapBtnNext: '下一頁 ➡️',
       mapBtnBackStory: '📖 返回故事',
       mapBtnPortal: '🌀 傳送門',
+      mapBtnDevice: '🧭 傳送裝置',
       mapBtnText: '📄 文字版',
       mapBtnAscii: '🧩 ASCII版',
       mapTitle: '🗺️ Renaiss 群島海圖',
@@ -6733,10 +6998,11 @@ function getMapText(lang = 'zh-TW') {
       mapFieldMapPages: '地圖頁數',
       mapFreeExploreOpen: '已開放（可用下拉選單設定區內目的地）',
       mapFreeExploreLocked: '未開放（先完成本地劇情）',
-      mapHintMoveRule: '_區內移動請用下拉選單，跨區移動請用傳送門。_',
+      mapHintMoveRule: '_區內可用「🧭 傳送裝置」即時移動；跨區請站在主傳送門使用「🌀 傳送門」。_',
       mapCurrentLocationSuffix: '（地圖中已高亮）',
       mapInfoNearbyPrefix: '附近',
-      mapPortalGuide: (preview) => `🌀 **傳送門操作：** 先按「🗺️ 地圖」→ 再按「🌀 傳送門」→ 選目的地（如：${preview}）。`,
+      mapPortalGuide: (preview) => `🌀 **主傳送門操作：** 先移動到「主傳送門地點」→ 按「🌀 傳送門」→ 選目的地（如：${preview}）。`,
+      mapDeviceGuide: (preview, count, ttlText) => `🧭 **傳送裝置操作：** 按「🧭 傳送裝置」→ 選同島目的地（如：${preview}）。目前可用 ${count} 顆（最早到期：${ttlText}）。`,
       mapNotFoundPlayer: '❌ 找不到角色資料，請先 /start',
       mapUseInThread: '⚠️ 請回到遊戲討論串使用。',
       portalTitle: '🌀 傳送門目的地',
@@ -6746,7 +7012,21 @@ function getMapText(lang = 'zh-TW') {
       portalDesc4: '請點選要傳送到的目的地：',
       portalBackMap: '🗺️ 返回地圖',
       portalBackStory: '📖 返回故事',
-      portalNotReady: '⚠️ 你目前尚未啟用傳送門。請先在故事選項中選擇「前往附近傳送門」。',
+      portalNotReady: '⚠️ 你目前不在主傳送門地點。請先在島內移動到主傳送門所在城市。',
+      deviceTitle: '🧭 傳送裝置｜同島目的地',
+      deviceNotOwned: `⚠️ 你目前沒有可用的傳送裝置。請先在鑑價站購買（${TELEPORT_DEVICE_COST} Rns，單顆效期 ${TELEPORT_DEVICE_DURATION_HOURS} 小時）。`,
+      deviceDesc: (count, ttlText) => `你啟動了隨身傳送裝置。此裝置僅支援同島（同大區）內瞬間位移。\n可用數量：${count} 顆｜最早到期：${ttlText}\n每次傳送會消耗 1 顆。`,
+      deviceBackMap: '🗺️ 返回地圖',
+      deviceBackStory: '📖 返回故事',
+      deviceInvalidDestination: '⚠️ 無效的傳送裝置目的地。',
+      deviceAlreadyHere: (target) => `✅ 你已經在 ${target}。`,
+      deviceTeleportStory: (from, to, tail = '') => {
+        const carry = String(tail || '').trim();
+        const intro = carry ? `📖 承接前情：${carry}\n` : '';
+        return `${intro}🧭 你在${from}迅速啟動隨身傳送裝置，藍白光紋包覆全身後瞬間折返定位。\n你已從 **${from}** 抵達 **${to}**，現場張力被你強行切換到新地點。`;
+      },
+      deviceDoneTitle: '✅ 傳送裝置完成定位',
+      deviceDoneDesc: (from, to, remaining) => `你已使用傳送裝置由 **${from}** 抵達 **${to}**。\n剩餘可用：${remaining} 顆。\n\n按「📖 返回故事」可在新地點承接前情繼續冒險。`,
       mapModeSwitchText: '✅ 已切換為文字地圖',
       mapModeSwitchAscii: '✅ 已切換為 ASCII 地圖',
       mapExploreLockedNotice: '🧭 本地劇情尚未完成，還不能自由探索。先推進本島故事。',
@@ -6777,6 +7057,7 @@ function getMapText(lang = 'zh-TW') {
       mapBtnNext: '下一页 ➡️',
       mapBtnBackStory: '📖 返回故事',
       mapBtnPortal: '🌀 传送门',
+      mapBtnDevice: '🧭 传送装置',
       mapBtnText: '📄 文字版',
       mapBtnAscii: '🧩 ASCII版',
       mapTitle: '🗺️ Renaiss 群岛海图',
@@ -6814,10 +7095,11 @@ function getMapText(lang = 'zh-TW') {
       mapFieldMapPages: '地图页数',
       mapFreeExploreOpen: '已开放（可用下拉选单设置区内目的地）',
       mapFreeExploreLocked: '未开放（先完成本地剧情）',
-      mapHintMoveRule: '_区内移动请用下拉选单，跨区移动请用传送门。_',
+      mapHintMoveRule: '_区内可用「🧭 传送装置」即时移动；跨区请站在主传送门使用「🌀 传送门」。_',
       mapCurrentLocationSuffix: '（地图中已高亮）',
       mapInfoNearbyPrefix: '附近',
-      mapPortalGuide: (preview) => `🌀 **传送门操作：** 先按「🗺️ 地图」→ 再按「🌀 传送门」→ 选目的地（如：${preview}）。`,
+      mapPortalGuide: (preview) => `🌀 **主传送门操作：** 先移动到「主传送门地点」→ 按「🌀 传送门」→ 选目的地（如：${preview}）。`,
+      mapDeviceGuide: (preview, count, ttlText) => `🧭 **传送装置操作：** 按「🧭 传送装置」→ 选同岛目的地（如：${preview}）。目前可用 ${count} 个（最早到期：${ttlText}）。`,
       mapNotFoundPlayer: '❌ 找不到角色资料，请先 /start',
       mapUseInThread: '⚠️ 请回到游戏讨论串使用。',
       portalTitle: '🌀 传送门目的地',
@@ -6827,7 +7109,21 @@ function getMapText(lang = 'zh-TW') {
       portalDesc4: '请点选要传送到的目的地：',
       portalBackMap: '🗺️ 返回地图',
       portalBackStory: '📖 返回故事',
-      portalNotReady: '⚠️ 你目前尚未启用传送门。请先在故事选项中选择「前往附近传送门」。',
+      portalNotReady: '⚠️ 你目前不在主传送门地点。请先在岛内移动到主传送门所在城市。',
+      deviceTitle: '🧭 传送装置｜同岛目的地',
+      deviceNotOwned: `⚠️ 你目前没有可用的传送装置。请先在鉴价站购买（${TELEPORT_DEVICE_COST} Rns，单个有效期 ${TELEPORT_DEVICE_DURATION_HOURS} 小时）。`,
+      deviceDesc: (count, ttlText) => `你启动了随身传送装置。此装置仅支持同岛（同大区）内瞬间位移。\n可用数量：${count} 个｜最早到期：${ttlText}\n每次传送会消耗 1 个。`,
+      deviceBackMap: '🗺️ 返回地图',
+      deviceBackStory: '📖 返回故事',
+      deviceInvalidDestination: '⚠️ 无效的传送装置目的地。',
+      deviceAlreadyHere: (target) => `✅ 你已经在 ${target}。`,
+      deviceTeleportStory: (from, to, tail = '') => {
+        const carry = String(tail || '').trim();
+        const intro = carry ? `📖 承接前情：${carry}\n` : '';
+        return `${intro}🧭 你在${from}迅速启动随身传送装置，蓝白光纹包覆全身后瞬间折返定位。\n你已从 **${from}** 抵达 **${to}**，现场张力被你强行切换到新地点。`;
+      },
+      deviceDoneTitle: '✅ 传送装置完成定位',
+      deviceDoneDesc: (from, to, remaining) => `你已使用传送装置由 **${from}** 抵达 **${to}**。\n剩余可用：${remaining} 个。\n\n按「📖 返回故事」可在新地点承接前情继续冒险。`,
       mapModeSwitchText: '✅ 已切换为文字地图',
       mapModeSwitchAscii: '✅ 已切换为 ASCII 地图',
       mapExploreLockedNotice: '🧭 本地剧情尚未完成，还不能自由探索。先推进本岛故事。',
@@ -6858,6 +7154,7 @@ function getMapText(lang = 'zh-TW') {
       mapBtnNext: 'Next ➡️',
       mapBtnBackStory: '📖 Back to Story',
       mapBtnPortal: '🌀 Portal',
+      mapBtnDevice: '🧭 Teleport Device',
       mapBtnText: '📄 Text',
       mapBtnAscii: '🧩 ASCII',
       mapTitle: '🗺️ Renaiss Archipelago Map',
@@ -6895,10 +7192,11 @@ function getMapText(lang = 'zh-TW') {
       mapFieldMapPages: 'Map Pages',
       mapFreeExploreOpen: 'Unlocked (set in-region destination via dropdown)',
       mapFreeExploreLocked: 'Locked (finish local story first)',
-      mapHintMoveRule: '_Use dropdown for in-region movement. Use portal for cross-region movement._',
+      mapHintMoveRule: '_Use "🧭 Teleport Device" for instant in-island movement. For cross-region travel, stand at the main portal hub and use "🌀 Portal"._',
       mapCurrentLocationSuffix: '(highlighted on map)',
       mapInfoNearbyPrefix: 'Nearby',
-      mapPortalGuide: (preview) => `🌀 **Portal Guide:** Press "🗺️ Map" -> "🌀 Portal" -> choose destination (e.g. ${preview}).`,
+      mapPortalGuide: (preview) => `🌀 **Main Portal Guide:** Move to the portal-hub city first -> press "🌀 Portal" -> choose destination (e.g. ${preview}).`,
+      mapDeviceGuide: (preview, count, ttlText) => `🧭 **Teleport Device Guide:** Press "🧭 Teleport Device" -> choose in-island destination (e.g. ${preview}). Usable: ${count} (soonest expiry: ${ttlText}).`,
       mapNotFoundPlayer: '❌ Character not found. Please run /start first.',
       mapUseInThread: '⚠️ Please use this in your game thread.',
       portalTitle: '🌀 Portal Destinations',
@@ -6908,7 +7206,21 @@ function getMapText(lang = 'zh-TW') {
       portalDesc4: 'Choose a destination:',
       portalBackMap: '🗺️ Back to Map',
       portalBackStory: '📖 Back to Story',
-      portalNotReady: '⚠️ Portal is not enabled yet. In story choices, pick "Go to nearby portal" first.',
+      portalNotReady: '⚠️ You are not standing at the main portal hub. Move to the hub city first.',
+      deviceTitle: '🧭 Teleport Device | In-Island Destinations',
+      deviceNotOwned: `⚠️ You currently have no usable teleport devices. Buy one at an appraisal station (${TELEPORT_DEVICE_COST} Rns, each expires in ${TELEPORT_DEVICE_DURATION_HOURS}h).`,
+      deviceDesc: (count, ttlText) => `You activated a portable teleport device. It only supports instant travel within the same island (same region).\nUsable stock: ${count} | Soonest expiry: ${ttlText}\nEach teleport consumes 1 device.`,
+      deviceBackMap: '🗺️ Back to Map',
+      deviceBackStory: '📖 Back to Story',
+      deviceInvalidDestination: '⚠️ Invalid teleport-device destination.',
+      deviceAlreadyHere: (target) => `✅ You are already at ${target}.`,
+      deviceTeleportStory: (from, to, tail = '') => {
+        const carry = String(tail || '').trim();
+        const intro = carry ? `📖 Carry-over: ${carry}\n` : '';
+        return `${intro}🧭 You trigger the portable teleport device at ${from}. Blue-white vectors wrap around you and snap to a new local coordinate.\nYou moved from **${from}** to **${to}**, forcing the scene tension to continue at the new location.`;
+      },
+      deviceDoneTitle: '✅ Teleport Device Relocation Complete',
+      deviceDoneDesc: (from, to, remaining) => `You used the teleport device from **${from}** to **${to}**.\nRemaining usable stock: ${remaining}.\n\nPress "📖 Back to Story" to continue from the new location with carry-over context.`,
       mapModeSwitchText: '✅ Switched to Text Map',
       mapModeSwitchAscii: '✅ Switched to ASCII Map',
       mapExploreLockedNotice: '🧭 Local story arc not finished. Free exploration is still locked.',
@@ -7010,6 +7322,20 @@ function buildPortalUsageGuide(player, lang = '') {
   const destinations = Array.isArray(allDestinations) ? allDestinations : [];
   const preview = destinations.length > 0 ? joinByLang(destinations.slice(0, 3), uiLang) : tx.mapNoPortal;
   return tx.mapPortalGuide(preview);
+}
+
+function buildDeviceUsageGuide(player, lang = '') {
+  const uiLang = normalizeLangCode(lang || player?.language || 'zh-TW');
+  const tx = getMapText(uiLang);
+  const info = getTeleportDeviceStockInfo(player);
+  const allInRegion = typeof getRegionLocationsByLocation === 'function'
+    ? getRegionLocationsByLocation(player?.location || '')
+    : [];
+  const preview = Array.isArray(allInRegion) && allInRegion.length > 0
+    ? joinByLang(allInRegion.filter((loc) => String(loc || '').trim() !== String(player?.location || '').trim()).slice(0, 3), uiLang)
+    : tx.mapNoCities;
+  const ttlText = info.count > 0 ? formatTeleportDeviceRemaining(info.soonestRemainingMs) : (uiLang === 'en' ? 'N/A' : '無');
+  return tx.mapDeviceGuide(preview || tx.mapNoCities, info.count, ttlText);
 }
 
 function hasRoamTravelIntentText(text = '') {
@@ -7217,7 +7543,7 @@ async function maybeGenerateTradeGoodFromChoice(event, player, result, selectedC
   return null;
 }
 
-function buildMapComponents(page, currentLocation, canOpenPortal = false, mapViewMode = 'text', regionLocations = [], lang = 'zh-TW') {
+function buildMapComponents(page, currentLocation, canOpenPortal = false, canOpenDevice = false, mapViewMode = 'text', regionLocations = [], lang = 'zh-TW') {
   const tx = getMapText(lang);
   const sourceLocations = Array.isArray(regionLocations) && regionLocations.length > 0
     ? regionLocations
@@ -7259,6 +7585,12 @@ function buildMapComponents(page, currentLocation, canOpenPortal = false, mapVie
     navButtons.splice(2, 0, new ButtonBuilder()
       .setCustomId('map_open_portal')
       .setLabel(tx.mapBtnPortal)
+      .setStyle(ButtonStyle.Primary));
+  }
+  if (canOpenDevice) {
+    navButtons.splice(Math.min(3, navButtons.length - 1), 0, new ButtonBuilder()
+      .setCustomId('map_open_device')
+      .setLabel(tx.mapBtnDevice)
       .setStyle(ButtonStyle.Primary));
   }
   rows.push(new ActionRowBuilder().addComponents(navButtons));
@@ -7306,12 +7638,15 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const nearbyPortals = typeof getPortalDestinations === 'function'
     ? getPortalDestinations(player.location || '')
     : [];
-  const canOpenPortal = Boolean(player.portalMenuOpen && Array.isArray(nearbyPortals) && nearbyPortals.length > 0);
+  const atPortalHub = isMainPortalHubLocation(player.location || '');
+  const canOpenPortal = Boolean(atPortalHub && Array.isArray(nearbyPortals) && nearbyPortals.length > 0);
+  const canOpenDevice = playerOwnsTeleportDevice(player);
   const mapViewMode = getPlayerMapViewMode(player);
   const { rows, safePage, maxPage, pageLocations } = buildMapComponents(
     page,
     player.location,
     canOpenPortal,
+    canOpenDevice,
     mapViewMode,
     regionLocations,
     uiLang
@@ -7400,6 +7735,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
       `\n- ${tx.mapFieldPortalTo}：${nearbyPortalsText}` +
       `\n**${tx.mapFieldMapPages}：** ${safePage + 1}/${maxPage + 1}` +
       (canOpenPortal ? `\n\n${buildPortalUsageGuide(player, uiLang)}` : '') +
+      (canOpenDevice ? `\n${buildDeviceUsageGuide(player, uiLang)}` : '') +
       `\n${tx.mapHintMoveRule}` +
       (notice ? `\n${notice}` : '')
     )
@@ -7425,6 +7761,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
       (locationSummary ? `\n\n**${tx.mapSectionRegionCities}**\n${locationSummary}` : '') +
       (!hasRenderedMapImage && useWideAnsiMap && pageSummary ? `\n\n**${tx.mapSectionRegionInfo}**\n${pageSummary}` : '') +
       (canOpenPortal ? `\n\n${buildPortalUsageGuide(player, uiLang)}` : '') +
+      (canOpenDevice ? `\n${buildDeviceUsageGuide(player, uiLang)}` : '') +
       `\n${tx.mapHintMoveRule}` +
       (notice ? `\n${notice}` : '')
     );
@@ -7472,7 +7809,7 @@ async function showPortalSelection(interaction, user) {
     ? getPortalDestinations(player.location || '')
     : [];
   const destinations = Array.isArray(allDestinations) ? allDestinations : [];
-  if (!player.portalMenuOpen || allDestinations.length === 0) {
+  if (!isMainPortalHubLocation(player.location || '') || allDestinations.length === 0) {
     await interaction.reply({
       content: tx.portalNotReady,
       ephemeral: true
@@ -7504,6 +7841,67 @@ async function showPortalSelection(interaction, user) {
       `${tx.portalDesc1} ${player.location} ${tx.portalDesc2}\n` +
       `${tx.portalDesc3}\n` +
       `${tx.portalDesc4}\n\n` +
+      destinations.map((loc, idx) => `${idx + 1}. ${loc}`).join('\n')
+    );
+
+  await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
+  if (interaction.message?.id) {
+    trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+  }
+}
+
+async function showTeleportDeviceSelection(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const tx = getMapText(uiLang);
+  if (!player) {
+    await interaction.reply({ content: tx.mapNotFoundPlayer, ephemeral: true }).catch(() => {});
+    return;
+  }
+  const stockInfo = getTeleportDeviceStockInfo(player);
+  if (stockInfo.count <= 0) {
+    await interaction.reply({
+      content: tx.deviceNotOwned,
+      ephemeral: true
+    }).catch(() => {});
+    return;
+  }
+  const rawDestinations = typeof getRegionLocationsByLocation === 'function'
+    ? getRegionLocationsByLocation(player.location || '')
+    : [];
+  const destinations = Array.isArray(rawDestinations) ? rawDestinations.filter(Boolean) : [];
+  if (destinations.length === 0) {
+    await interaction.reply({
+      content: tx.mapInvalidDestination,
+      ephemeral: true
+    }).catch(() => {});
+    return;
+  }
+
+  const rows = [];
+  for (let i = 0; i < destinations.length; i += 4) {
+    const buttons = destinations.slice(i, i + 4).map((loc, idx) => {
+      const absoluteIdx = i + idx;
+      const isCurrent = String(loc || '').trim() === String(player.location || '').trim();
+      return new ButtonBuilder()
+        .setCustomId(`device_jump_${absoluteIdx}`)
+        .setLabel(String(loc || '').substring(0, 12))
+        .setStyle(isCurrent ? ButtonStyle.Success : ButtonStyle.Primary);
+    });
+    rows.push(new ActionRowBuilder().addComponents(buttons));
+  }
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('map_page_0').setLabel(tx.deviceBackMap).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('map_back_main').setLabel(tx.deviceBackStory).setStyle(ButtonStyle.Success)
+    )
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle(tx.deviceTitle)
+    .setColor(0x22c55e)
+    .setDescription(
+      `${tx.deviceDesc(stockInfo.count, formatTeleportDeviceRemaining(stockInfo.soonestRemainingMs))}\n\n` +
       destinations.map((loc, idx) => `${idx + 1}. ${loc}`).join('\n')
     );
 
@@ -7547,6 +7945,7 @@ function getLanguageText(lang) {
       welcome: '歡迎來到 Renaiss 星球！',
       welcomeDesc: '在這個世界，你需要：\n• 選擇你的角色性別並先命名角色\n• 選擇夥伴寵物屬性（水/火/草）並命名寵物\n• 完成開局抽獎後開始探索事件、戰鬥與任務',
       chooseGenderHint: '請先選擇你的角色性別：',
+      onboardingFooter: '選完性別先命名角色，再選寵物屬性與寵物名字即可開局',
       male: '男生角色',
       maleDesc: '主角為男性形象，劇情稱謂會對應調整',
       female: '女生角色',
@@ -7557,12 +7956,20 @@ function getLanguageText(lang) {
       fire: '火屬性',
       fireDesc: '爆發 + 壓制 + 反制，節奏強攻',
       grass: '草屬性',
-      grassDesc: '防禦 + 毒蝕 + 回復，續戰能力強'
+      grassDesc: '防禦 + 毒蝕 + 回復，續戰能力強',
+      charNameModalTitle: '📛 為你的角色取個名字',
+      charNameLabel: '角色名字',
+      charNamePlaceholder: '輸入你在 Renaiss 星球的名字',
+      petNameModalTitle: '🐾 為你的寵物取名',
+      petNameLabel: '寵物名字',
+      petNamePlaceholder: '輸入名字（1-6個字）',
+      elementChoiceInvalid: '⚠️ 屬性選擇資料錯誤，請重新操作。'
     },
     'zh-CN': {
       welcome: '欢迎来到 Renaiss 星球！',
       welcomeDesc: '在这个世界，你需要：\n• 选择你的角色性别并先命名角色\n• 选择伙伴宠物属性（水/火/草）并命名宠物\n• 完成开局抽奖后开始探索事件、战斗与任务',
       chooseGenderHint: '请先选择你的角色性别：',
+      onboardingFooter: '选完性别先命名角色，再选宠物属性与宠物名字即可开局',
       male: '男生角色',
       maleDesc: '主角为男性形象，剧情称谓会对应调整',
       female: '女生角色',
@@ -7573,12 +7980,20 @@ function getLanguageText(lang) {
       fire: '火属性',
       fireDesc: '爆发 + 压制 + 反制，节奏强攻',
       grass: '草属性',
-      grassDesc: '防御 + 毒蚀 + 回复，续战能力强'
+      grassDesc: '防御 + 毒蚀 + 回复，续战能力强',
+      charNameModalTitle: '📛 为你的角色取个名字',
+      charNameLabel: '角色名字',
+      charNamePlaceholder: '输入你在 Renaiss 星球的名字',
+      petNameModalTitle: '🐾 为你的宠物取名',
+      petNameLabel: '宠物名字',
+      petNamePlaceholder: '输入名字（1-6个字）',
+      elementChoiceInvalid: '⚠️ 属性选择资料错误，请重新操作。'
     },
     'en': {
       welcome: 'Welcome to Renaiss Planet!',
       welcomeDesc: 'In this world, you need to:\n• Choose character gender and name your character first\n• Choose starter pet element (Water / Fire / Grass) and name your pet\n• Finish the starter draw, then begin exploration, battles, and quests',
       chooseGenderHint: 'Choose your character gender first:',
+      onboardingFooter: 'Choose gender, name your character, then pick pet element and pet name to start.',
       male: 'Male',
       maleDesc: 'Story pronouns and role narration follow male profile',
       female: 'Female',
@@ -7589,7 +8004,14 @@ function getLanguageText(lang) {
       fire: 'Fire',
       fireDesc: 'Burst + pressure + counterattack',
       grass: 'Grass',
-      grassDesc: 'Defense + poison + recovery'
+      grassDesc: 'Defense + poison + recovery',
+      charNameModalTitle: '📛 Name Your Character',
+      charNameLabel: 'Character Name',
+      charNamePlaceholder: 'Enter your name on Renaiss',
+      petNameModalTitle: '🐾 Name Your Pet',
+      petNameLabel: 'Pet Name',
+      petNamePlaceholder: 'Enter a name (1-6 chars)',
+      elementChoiceInvalid: '⚠️ Invalid element selection. Please try again.'
     }
   };
   return texts[lang] || texts['zh-TW'];
@@ -7786,7 +8208,7 @@ function buildGenderSelectionPayload(lang = 'zh-TW', username = '') {
       { name: `♀️ ${langText.female}`, value: langText.femaleDesc, inline: true }
     );
   if (username) {
-    embed.setFooter({ text: `${username}，選完性別先命名角色，再選寵物屬性與寵物名字即可開局` });
+    embed.setFooter({ text: `${username}，${langText.onboardingFooter}` });
   }
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('choose_gender_male').setLabel(`♂️ ${langText.male}`).setStyle(ButtonStyle.Primary),
@@ -7817,18 +8239,19 @@ function buildElementSelectionPayload(lang = 'zh-TW', gender = '男') {
   return { embed, row };
 }
 
-async function showCharacterNameModal(interaction, gender = '男') {
+async function showCharacterNameModal(interaction, gender = '男', lang = 'zh-TW') {
   const safeGender = normalizeCharacterGender(gender);
   const genderCode = safeGender === '女' ? 'female' : 'male';
+  const langText = getLanguageText(lang);
   const modal = new ModalBuilder()
     .setCustomId(`char_name_submit_${genderCode}`)
-    .setTitle('📛 為你的角色取個名字');
+    .setTitle(langText.charNameModalTitle);
 
   const nameInput = new TextInputBuilder()
     .setCustomId('player_name')
-    .setLabel('角色名字')
+    .setLabel(langText.charNameLabel)
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder('輸入你在Renaiss星球的名字')
+    .setPlaceholder(langText.charNamePlaceholder)
     .setRequired(true)
     .setMaxLength(20);
 
@@ -7836,16 +8259,17 @@ async function showCharacterNameModal(interaction, gender = '男') {
   await interaction.showModal(modal);
 }
 
-async function showOnboardingPetNameModal(interaction) {
+async function showOnboardingPetNameModal(interaction, lang = 'zh-TW') {
+  const langText = getLanguageText(lang);
   const modal = new ModalBuilder()
     .setCustomId('pet_onboard_name_submit')
-    .setTitle('🐾 為你的寵物取名');
+    .setTitle(langText.petNameModalTitle);
 
   const nameInput = new TextInputBuilder()
     .setCustomId('pet_name')
-    .setLabel('寵物名字')
+    .setLabel(langText.petNameLabel)
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder('輸入名字（1-6個字）')
+    .setPlaceholder(langText.petNamePlaceholder)
     .setMinLength(1)
     .setMaxLength(6)
     .setRequired(true);
@@ -8523,10 +8947,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'open_map' ||
       customId === 'map_back_main' ||
       customId === 'map_open_portal' ||
+      customId === 'map_open_device' ||
       customId.startsWith('map_page_') ||
       customId.startsWith('map_view_') ||
       customId.startsWith('map_loc_') ||
       customId.startsWith('portal_jump_') ||
+      customId.startsWith('device_jump_') ||
       customId.startsWith('map_goto_');
     const isShopFlowButton = customId.startsWith('shop_');
     const isPetFlowButton =
@@ -8542,6 +8968,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'show_finance_ledger' ||
       customId === 'show_memory_audit' ||
       customId.startsWith('pmkt_');
+    const isFriendOnlineBattleButton =
+      customId === 'battle_mode_manual_online' ||
+      customId.startsWith('fdonline_move_') ||
+      customId.startsWith('fdonline_wait_');
     // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
     const isModalLauncherButton =
       customId === 'open_wallet_modal' ||
@@ -8559,7 +8989,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
       !isModalLauncherButton &&
       !isShopFlowButton &&
       !isPetFlowButton &&
-      !isInventoryFlowButton
+      !isInventoryFlowButton &&
+      !isFriendOnlineBattleButton
     ) {
       // 不阻塞互動主流程，避免先鎖按鈕時超過 Discord 互動 3 秒時限
       lockPressedButtonImmediately(interaction).catch(() => {});
@@ -9347,6 +9778,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId === 'map_open_device') {
+    await showTeleportDeviceSelection(interaction, user);
+    return;
+  }
+
   if (customId.startsWith('portal_jump_')) {
     const idx = parseInt(customId.replace('portal_jump_', ''), 10);
     const player = CORE.loadPlayer(user.id);
@@ -9368,22 +9804,19 @@ CLIENT.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    const gate = canEnterLocation(player, targetLocation);
-    if (!gate.allowed) {
-      await interaction.reply({
-        content: tx.portalGateDenied(targetLocation, gate.winRate),
-        ephemeral: true
-      }).catch(() => {});
+    if (!isMainPortalHubLocation(player.location || '')) {
+      await interaction.reply({ content: tx.portalNotReady, ephemeral: true }).catch(() => {});
       return;
     }
 
     const fromLocation = player.location;
+    const carryTail = extractStoryTailLine(player.currentStory || '', 96);
     player.location = targetLocation;
     syncLocationArcLocation(player);
     ensurePlayerIslandState(player);
     player.portalMenuOpen = false;
     player.navigationTarget = '';
-    player.currentStory = tx.portalTeleportStory(fromLocation, targetLocation);
+    player.currentStory = tx.portalTeleportStory(fromLocation, targetLocation, carryTail);
     player.eventChoices = [];
     if (player.mapReturnSnapshot) delete player.mapReturnSnapshot;
     rememberPlayer(player, {
@@ -9401,6 +9834,67 @@ CLIENT.on('interactionCreate', async (interaction) => {
       .setDescription(tx.portalDoneDesc(fromLocation, targetLocation));
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('map_back_main').setLabel(tx.portalBackStory).setStyle(ButtonStyle.Success)
+    );
+    await interaction.update({ embeds: [embed], components: [row] }).catch(() => {});
+    return;
+  }
+
+  if (customId.startsWith('device_jump_')) {
+    const idx = parseInt(customId.replace('device_jump_', ''), 10);
+    const player = CORE.loadPlayer(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getMapText(uiLang);
+    if (!player) {
+      await interaction.reply({ content: tx.mapNotFoundPlayer, ephemeral: true }).catch(() => {});
+      return;
+    }
+    const stockInfo = getTeleportDeviceStockInfo(player);
+    if (stockInfo.count <= 0) {
+      await interaction.reply({ content: tx.deviceNotOwned, ephemeral: true }).catch(() => {});
+      return;
+    }
+    const destinations = typeof getRegionLocationsByLocation === 'function'
+      ? getRegionLocationsByLocation(player.location || '')
+      : [];
+    const targetLocation = Array.isArray(destinations) ? destinations[Number.isNaN(idx) ? -1 : idx] : null;
+    if (!targetLocation) {
+      await interaction.reply({ content: tx.deviceInvalidDestination, ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (String(targetLocation || '').trim() === String(player.location || '').trim()) {
+      await interaction.reply({ content: tx.deviceAlreadyHere(targetLocation), ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const fromLocation = String(player.location || '').trim();
+    const carryTail = extractStoryTailLine(player.currentStory || '', 96);
+    const consumed = consumeTeleportDevice(player);
+    if (!consumed) {
+      await interaction.reply({ content: tx.deviceNotOwned, ephemeral: true }).catch(() => {});
+      return;
+    }
+    player.location = targetLocation;
+    syncLocationArcLocation(player);
+    ensurePlayerIslandState(player);
+    player.navigationTarget = '';
+    player.currentStory = tx.deviceTeleportStory(fromLocation, targetLocation, carryTail);
+    player.eventChoices = [];
+    if (player.mapReturnSnapshot) delete player.mapReturnSnapshot;
+    rememberPlayer(player, {
+      type: '移動',
+      content: `啟動傳送裝置由${fromLocation}前往${targetLocation}`,
+      outcome: `同島瞬間位移完成（剩餘 ${consumed.remainingCount}）`,
+      importance: 2,
+      tags: ['travel', 'teleport_device', 'intra_region']
+    });
+    CORE.savePlayer(player);
+
+    const embed = new EmbedBuilder()
+      .setTitle(tx.deviceDoneTitle)
+      .setColor(0x22c55e)
+      .setDescription(tx.deviceDoneDesc(fromLocation, targetLocation, consumed.remainingCount));
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('map_back_main').setLabel(tx.deviceBackStory).setStyle(ButtonStyle.Success)
     );
     await interaction.update({ embeds: [embed], components: [row] }).catch(() => {});
     return;
@@ -9495,6 +9989,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId === 'battle_mode_manual_offline') {
+    await startManualBattle(interaction, user);
+    return;
+  }
+
+  if (customId === 'battle_mode_manual_online') {
+    await startManualBattleOnline(interaction, user);
+    return;
+  }
+
   if (customId === 'battle_mode_ai') {
     await startAutoBattle(interaction, user);
     return;
@@ -9515,6 +10019,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (customId.startsWith('use_move_')) {
     const idx = parseInt(customId.split('_')[2]);
     await handleUseMove(interaction, user, idx);
+    return;
+  }
+
+  if (customId.startsWith('fdonline_move_') || customId.startsWith('fdonline_wait_')) {
+    await handleOnlineFriendDuelChoice(interaction, user, customId);
     return;
   }
 
@@ -10008,6 +10517,50 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId.startsWith('shop_buy_device_')) {
+    const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    ECON.ensurePlayerEconomy(player);
+    const beforeStock = getTeleportDeviceStockInfo(player);
+    if (beforeStock.count >= TELEPORT_DEVICE_STOCK_LIMIT) {
+      await interaction.reply({ content: '❌ 傳送裝置庫存已達上限，請先使用後再購買。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    const currentGold = Number(player?.stats?.財富 || 0);
+    if (currentGold < TELEPORT_DEVICE_COST) {
+      await interaction.reply({ content: `❌ Rns 不足，購買傳送裝置需要 ${TELEPORT_DEVICE_COST} Rns。`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    player.stats.財富 = Math.max(0, currentGold - TELEPORT_DEVICE_COST);
+    grantTeleportDevice(player, 1);
+    const stockInfo = getTeleportDeviceStockInfo(player);
+    recordCashflow(player, {
+      amount: -TELEPORT_DEVICE_COST,
+      category: 'shop_teleport_device',
+      source: `${getMarketTypeLabel(marketType)} 購買傳送裝置`,
+      marketType
+    });
+    rememberPlayer(player, {
+      type: '商店',
+      content: `在${getMarketTypeLabel(marketType)}購買傳送裝置`,
+      outcome: `新增 1 顆（效期 ${TELEPORT_DEVICE_DURATION_HOURS}h）｜現有 ${stockInfo.count} 顆`,
+      importance: 2,
+      tags: ['shop', marketType, 'teleport_device']
+    });
+    CORE.savePlayer(player);
+    await showWorldShopBuyPanel(
+      interaction,
+      user,
+      marketType,
+      `已購買傳送裝置 x1（花費 ${TELEPORT_DEVICE_COST} Rns，效期 ${TELEPORT_DEVICE_DURATION_HOURS}h）。目前可用 ${stockInfo.count} 顆（最早到期：${formatTeleportDeviceRemaining(stockInfo.soonestRemainingMs)}）。`
+    );
+    return;
+  }
+
   if (customId.startsWith('shop_buy_heal_crystal_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
     const player = CORE.loadPlayer(user.id);
@@ -10394,7 +10947,7 @@ async function handleChooseGender(interaction, user, customId) {
   const lang = getPlayerTempData(user.id, 'language') || 'zh-TW';
   setPlayerTempData(user.id, 'gender', gender);
   await interaction.message?.edit({ components: [] }).catch(() => {});
-  await showCharacterNameModal(interaction, gender).catch(async () => {
+  await showCharacterNameModal(interaction, gender, lang).catch(async () => {
     const payload = buildElementSelectionPayload(lang, gender);
     await interaction.reply({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
   });
@@ -10408,8 +10961,10 @@ async function handleChoosePetElement(interaction, user, customId) {
   }
 
   const match = String(customId || '').match(/^choose_element_(male|female)_(water|fire|grass)$/);
+  const lang = getPlayerTempData(user.id, 'language') || 'zh-TW';
+  const langText = getLanguageText(lang);
   if (!match) {
-    await interaction.reply({ content: '⚠️ 屬性選擇資料錯誤，請重新操作。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: langText.elementChoiceInvalid, ephemeral: true }).catch(() => {});
     return;
   }
   const gender = match[1] === 'female' ? '女' : '男';
@@ -10417,7 +10972,7 @@ async function handleChoosePetElement(interaction, user, customId) {
   setPlayerTempData(user.id, 'gender', gender);
   setPlayerTempData(user.id, 'petElement', element);
   await interaction.message?.edit({ components: [] }).catch(() => {});
-  await showOnboardingPetNameModal(interaction).catch(async () => {
+  await showOnboardingPetNameModal(interaction, lang).catch(async () => {
     const charName = normalizeCharacterName(getPlayerTempData(user.id, 'charName') || user.username, user.username);
     await createCharacterWithName(interaction, user, { gender, element, alignment: '正派' }, charName, {
       petName: pickDefaultPetNameByElement(element)
@@ -10959,12 +11514,13 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     const storyText = player.currentStory;
     
     player.stats.飽腹度 = player.stats.飽腹度 || 100;
-    const statusBar = buildMainStatusBar(player, pet);
+    const uiText = getAdventureText(player.language || 'zh-TW');
+    const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
     
     const optionsText = buildChoiceOptionsText(choices, { player, pet });
     
-    const mainlineLine = buildMainlineProgressLine(player);
-    const description = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${mainlineLine ? `\n${mainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n**🆕 選項：**${optionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
+    const mainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
+    const description = `${financeNoticeBlock}${worldIntroBlock}**${uiText.statusLabel}：【${statusBar}】**${mainlineLine ? `\n${mainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n**${uiText.sectionChoices}：**${optionsText}\n\n_${uiText.chooseNumber(CHOICE_DISPLAY_COUNT)}_`;
     
     const embed = new EmbedBuilder()
       .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -11040,15 +11596,16 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   
   // ===== 狀態列 =====
   player.stats.飽腹度 = player.stats.飽腹度 || 100;
-  const statusBar = buildMainStatusBar(player, pet);
-  const eventMainlineLine = buildMainlineProgressLine(player);
+  const uiText = getAdventureText(player.language || 'zh-TW');
+  const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
+  const eventMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
 
   // 先用 Loading 訊息回覆（先故事、後選項）
   const loadingHint = hasRecoverableStoryOnly
     ? 'AI 說書人正在補齊上次中斷的選項...'
     : (forceFreshStory ? 'AI 說書人正在承接戰鬥結果重塑新篇章...' : 'AI 說書人正在構思故事...');
-  const loadingMainlineLine = buildMainlineProgressLine(player);
-  const loadingDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${loadingMainlineLine ? `\n${loadingMainlineLine}` : ''}\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
+  const loadingMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
+  const loadingDesc = `${financeNoticeBlock}${worldIntroBlock}**${uiText.statusLabel}：【${statusBar}】**${loadingMainlineLine ? `\n${loadingMainlineLine}` : ''}\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
   
   const loadingEmbed = new EmbedBuilder()
     .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -11178,9 +11735,9 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         CORE.savePlayer(player);
       }
 
-      const storyFirstMainlineLine = buildMainlineProgressLine(player);
+      const storyFirstMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
       const storyFirstDesc =
-        `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${storyFirstMainlineLine ? `\n${storyFirstMainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n` +
+        `${financeNoticeBlock}${worldIntroBlock}**${uiText.statusLabel}：【${statusBar}】**${storyFirstMainlineLine ? `\n${storyFirstMainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n` +
         (hasRecoverableStoryOnly
           ? '⏳ *已恢復上次故事，正在補齊選項...*'
           : '⏳ *故事已送達，正在生成選項...*');
@@ -11253,8 +11810,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
         newComponents.push(new ActionRowBuilder().addComponents(newButtons.slice(i, i + 5)));
       }
 
-      const aiMainlineLine = buildMainlineProgressLine(player);
-      const aiDesc = `${financeNoticeBlock}${worldIntroBlock}**狀態：【${statusBar}】**${aiMainlineLine ? `\n${aiMainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n**🆕 新選項：**${newOptionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
+      const aiMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
+      const aiDesc = `${financeNoticeBlock}${worldIntroBlock}**${uiText.statusLabel}：【${statusBar}】**${aiMainlineLine ? `\n${aiMainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n**${uiText.sectionNewChoices}：**${newOptionsText}\n\n_${uiText.chooseNumber(CHOICE_DISPLAY_COUNT)}_`;
 
       const aiEmbed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -12464,6 +13021,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const stockInfo = getTeleportDeviceStockInfo(player);
   const allListings = ECON.getMarketListingsView({
     marketType: safeMarket,
     type: 'sell',
@@ -13585,7 +14143,9 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
       `頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}\n` +
       `回血水晶：${SHOP_HEAL_CRYSTAL_COST} Rns（恢復氣血）\n` +
       `回能水晶：${SHOP_ENERGY_CRYSTAL_COST} Rns（恢復能量）\n` +
-      `加成點數：花費 200 Rns 可獲得 +1 點。`
+      `加成點數：花費 200 Rns 可獲得 +1 點。\n` +
+      `傳送裝置：${TELEPORT_DEVICE_COST} Rns（同島瞬移，單顆效期 ${TELEPORT_DEVICE_DURATION_HOURS}h，每次消耗 1 顆）\n` +
+      `目前可用：${stockInfo.count} 顆${stockInfo.count > 0 ? `（最早到期：${formatTeleportDeviceRemaining(stockInfo.soonestRemainingMs)}）` : ''}`
     );
 
   const rows = [];
@@ -13612,7 +14172,8 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`shop_buy_heal_crystal_${safeMarket}`).setLabel(`🩸 回血水晶(${SHOP_HEAL_CRYSTAL_COST})`).setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`shop_buy_energy_crystal_${safeMarket}`).setLabel(`⚡ 回能水晶(${SHOP_ENERGY_CRYSTAL_COST})`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`shop_buy_device_${safeMarket}`).setLabel(`🧭 傳送裝置(${TELEPORT_DEVICE_COST})`).setStyle(ButtonStyle.Success)
   ));
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -14315,7 +14876,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         location: String(player.location || '').trim(),
         stage: eventMainlineStage,
         stageCount: eventMainlineStageCount,
-        progress: mainlineProgress || `地區進度 ${eventMainlineStage}/${eventMainlineStageCount}`,
+        progress: mainlineProgress || `本區主線進行中（${String(player.location || '').trim() || '當前地區'}）`,
         sourceChoice: selectedChoice
       });
     }
@@ -15061,8 +15622,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   }
   
-  const statusBar = buildMainStatusBar(player, pet);
-  const eventMainlineLine = buildMainlineProgressLine(player);
+  const uiText = getAdventureText(player.language || 'zh-TW');
+  const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
+  const eventMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
   
   // 立即確認按鈕（避免 Discord 顯示失敗）
   await interaction.deferUpdate().catch(() => {});
@@ -15077,7 +15639,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     embeds: [{
       title: `⚔️ ${player.name} - ${pet.name}`,
       color: getAlignmentColor(player.alignment),
-      description: `**狀態：【${statusBar}】**${eventMainlineLine ? `\n${eventMainlineLine}` : ''}\n\n**📍 上個選擇：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*\n\n**📜 前情提要：**\n${prevStory}${prevOptionsText ? '\n\n**🆕 即將更新選項：**' + prevOptionsText : ''}`
+      description: `**${uiText.statusLabel}：【${statusBar}】**${eventMainlineLine ? `\n${eventMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*\n\n**${uiText.sectionPrevStory}：**\n${prevStory}${prevOptionsText ? `\n\n**${uiText.sectionUpcomingChoices}：**${prevOptionsText}` : ''}`
     }]
   });
 
@@ -15172,14 +15734,14 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const worldEvents = getMergedWorldEvents(5);
       let worldEventsText = '';
       if (worldEvents.length > 0) {
-        worldEventsText = '\n\n📢 **世界事件：**\n' + worldEvents.map(e => e.message || e).join('\n');
+        worldEventsText = `\n\n**${uiText.sectionWorldEvents}：**\n` + worldEvents.map(e => e.message || e).join('\n');
       }
       const portalGuideText = extraStoryGuide || (player.portalMenuOpen ? buildPortalUsageGuide(player) : '');
       const portalGuideBlock = portalGuideText ? `\n\n${portalGuideText}` : '';
 
-      const storyOnlyMainlineLine = buildMainlineProgressLine(player);
+      const storyOnlyMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
       const storyOnlyDesc =
-        `**狀態：【${statusBar}】**${storyOnlyMainlineLine ? `\n${storyOnlyMainlineLine}` : ''}\n\n**📍 上個選擇：** ${selectedChoice}\n\n${storyText}` +
+        `**${uiText.statusLabel}：【${statusBar}】**${storyOnlyMainlineLine ? `\n${storyOnlyMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n${storyText}` +
         `${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}` +
         `${worldEventsText}${portalGuideBlock}\n\n⏳ *故事已送達，正在生成選項...*`;
 
@@ -15248,11 +15810,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const newChoices = player.eventChoices;
       const optionsText = buildChoiceOptionsText(newChoices, { player, pet });
 
-      const finalMainlineLine = buildMainlineProgressLine(player);
+      const finalMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
       const description =
-        `**狀態：【${statusBar}】**${finalMainlineLine ? `\n${finalMainlineLine}` : ''}\n\n**📍 上個選擇：** ${selectedChoice}\n\n${storyText}` +
+        `**${uiText.statusLabel}：【${statusBar}】**${finalMainlineLine ? `\n${finalMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n${storyText}` +
         `${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}` +
-        `${worldEventsText}${portalGuideBlock}\n\n**🆕 新選項：**${optionsText}\n\n_請選擇編號（1-${CHOICE_DISPLAY_COUNT}）_`;
+        `${worldEventsText}${portalGuideBlock}\n\n**${uiText.sectionNewChoices}：**${optionsText}\n\n_${uiText.chooseNumber(CHOICE_DISPLAY_COUNT)}_`;
 
       const embed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
@@ -15836,6 +16398,520 @@ async function continueBattleWithHuman(interaction, user) {
   );
 }
 
+function buildOnlineFriendDuelButtons(hostId = '') {
+  const id = String(hostId || '').trim();
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`fdonline_move_${id}_0`).setLabel('1').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`fdonline_move_${id}_1`).setLabel('2').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`fdonline_move_${id}_2`).setLabel('3').setStyle(ButtonStyle.Danger)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`fdonline_move_${id}_3`).setLabel('4').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`fdonline_move_${id}_4`).setLabel('5').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`fdonline_wait_${id}`).setLabel('⚡ 待機').setStyle(ButtonStyle.Primary)
+    )
+  ];
+}
+
+function getOnlineFriendDuelRivalMoves(enemy = null) {
+  const raw = Array.isArray(enemy?.moves) ? enemy.moves : [];
+  const fallbackDamage = Math.max(8, Number(enemy?.attack || 12));
+  const list = raw
+    .slice(0, PET_MOVE_LOADOUT_LIMIT)
+    .map((move) => ({
+      id: String(move?.id || '').trim(),
+      name: String(move?.name || '普通攻擊').trim() || '普通攻擊',
+      element: String(move?.element || '普通').trim() || '普通',
+      tier: Math.max(1, Math.min(3, Number(move?.tier || 1))),
+      priority: Math.max(-1, Math.min(3, Number(move?.priority || 0))),
+      speed: getMoveSpeedValue(move),
+      baseDamage: Math.max(1, Number(move?.baseDamage ?? move?.damage ?? fallbackDamage) || fallbackDamage),
+      damage: Math.max(1, Number(move?.baseDamage ?? move?.damage ?? fallbackDamage) || fallbackDamage),
+      effect: (move?.effect && typeof move.effect === 'object') ? { ...move.effect } : {},
+      desc: String(move?.desc || '').trim()
+    }))
+    .filter((move) => move.name);
+  if (list.length > 0) return list;
+  return [{
+    id: 'friend_duel_strike',
+    name: '友誼試探',
+    element: '普通',
+    tier: 1,
+    priority: 0,
+    speed: 10,
+    baseDamage: fallbackDamage,
+    damage: fallbackDamage,
+    effect: {},
+    desc: '穩定試探'
+  }];
+}
+
+function formatOnlineFriendDuelMoveList(moves = [], attacker = null, defender = null, energy = 0) {
+  const list = Array.isArray(moves) ? moves : [];
+  if (list.length <= 0) return '（本側無可用招式，逾時會自動待機）';
+  return list
+    .slice(0, PET_MOVE_LOADOUT_LIMIT)
+    .map((move, idx) => {
+      const cost = BATTLE.getMoveEnergyCost(move);
+      const speed = getMoveSpeedValue(move);
+      const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, attacker || {}).total || 0;
+      const est = Math.max(0, Number(dmg) - Math.max(0, Number(defender?.defense || 0)));
+      const canUse = Number(energy || 0) >= cost;
+      return `${idx + 1}. ${move.name} | 💥${format1(est)} | ⚡${cost} | 🚀${format1(speed)}${canUse ? '' : '（能量不足）'}`;
+    })
+    .join('\n');
+}
+
+function formatOnlineFriendChoiceText(choice = null, moves = []) {
+  if (!choice || typeof choice !== 'object') return '⌛ 尚未提交';
+  if (choice.kind === 'wait') return '⚡ 待機';
+  const idx = Math.max(0, Number(choice.moveIndex || 0));
+  const move = Array.isArray(moves) ? moves[idx] : null;
+  if (!move) return `⚠️ 索引${idx + 1}無效（將自動重算）`;
+  return `✅ ${move.name}`;
+}
+
+function buildOnlineFriendDuelActionView(roundResult = null) {
+  if (!roundResult || typeof roundResult !== 'object') {
+    return {
+      ally: { pending: true },
+      enemy: { pending: true }
+    };
+  }
+  return {
+    ally: {
+      move: roundResult.playerMoveName || '',
+      damage: Number.isFinite(Number(roundResult.playerDamage)) ? Number(roundResult.playerDamage) : null,
+      damageLabel: '對敵造成',
+      extra: extractActionExtra(roundResult.playerLines || [])
+    },
+    enemy: {
+      move: roundResult.enemyMoveName || '',
+      damage: Number.isFinite(Number(roundResult.enemyDamage)) ? Number(roundResult.enemyDamage) : null,
+      damageLabel: '對我造成',
+      extra: extractActionExtra(roundResult.enemyLines || [])
+    }
+  };
+}
+
+function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
+  const online = getOnlineFriendDuelState(hostPlayer);
+  const enemy = hostPlayer?.battleState?.enemy;
+  const combatant = getActiveCombatant(hostPlayer, hostPet);
+  const state = ensureBattleEnergyState(hostPlayer);
+  const hostMoves = getCombatantMoves(combatant, hostPet).slice(0, PET_MOVE_LOADOUT_LIMIT);
+  const rivalMoves = getOnlineFriendDuelRivalMoves(enemy).slice(0, PET_MOVE_LOADOUT_LIMIT);
+  const hostId = String(online?.hostId || hostPlayer?.id || '').trim();
+  const rivalId = String(online?.rivalId || hostPlayer?.battleState?.friendDuel?.friendId || '').trim();
+  const rivalName = String(hostPlayer?.battleState?.friendDuel?.friendName || '好友').trim() || '好友';
+  const hostName = String(hostPlayer?.name || '你').trim() || '你';
+  const hostEnergy = Number(state?.energy || 0);
+  const rivalEnergy = Math.max(0, Number(online?.rivalEnergy || 2));
+  const hostChoice = online?.choices?.[hostId] || null;
+  const rivalChoice = online?.choices?.[rivalId] || null;
+  const deadlineAt = Math.max(Date.now() + 1000, Number(online?.deadlineAt || Date.now() + FRIEND_DUEL_ONLINE_TURN_MS));
+  const countdownTs = Math.floor(deadlineAt / 1000);
+  const board = buildManualBattleBoard(enemy, combatant, state);
+  const actionPanels = buildDualActionPanels(options?.actionView || buildOnlineFriendDuelActionView(null));
+  const roundSummary = String(options?.roundSummary || '').trim();
+  const notice = String(options?.notice || '').trim();
+  const summaryBlock = roundSummary ? `\n📜 本回合結算：\n${roundSummary}\n` : '';
+  const noticeBlock = notice ? `\n${notice}\n` : '';
+  const readyText =
+    `提交狀態：${hostName} ${formatOnlineFriendChoiceText(hostChoice, hostMoves)} ｜ ${rivalName} ${formatOnlineFriendChoiceText(rivalChoice, rivalMoves)}`;
+
+  const content =
+    `🌐 **好友手動對戰（線上模式）**\n` +
+    `⏳ 本回合倒數：<t:${countdownTs}:R>（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）\n` +
+    `⚡ 能量：${hostName} ${hostEnergy} ｜ ${rivalName} ${rivalEnergy}\n` +
+    `${readyText}\n` +
+    `${board}` +
+    `${actionPanels}` +
+    `${summaryBlock}` +
+    `${noticeBlock}` +
+    `\n**${hostName} 的索引招式（按 1~5）**\n${formatOnlineFriendDuelMoveList(hostMoves, combatant, enemy, hostEnergy)}\n` +
+    `\n**${rivalName} 的索引招式（按 1~5）**\n${formatOnlineFriendDuelMoveList(rivalMoves, enemy, combatant, rivalEnergy)}\n` +
+    `\n在倒數內可改選；超時未提交會自動判定本回合行動。`;
+
+  return {
+    content,
+    embeds: [],
+    components: buildOnlineFriendDuelButtons(hostId)
+  };
+}
+
+async function editOnlineFriendDuelMessage(hostPlayer, payload) {
+  const online = getOnlineFriendDuelState(hostPlayer);
+  if (!online) return null;
+  const channelId = String(online.channelId || hostPlayer?.activeThreadId || '').trim();
+  const messageId = String(online.messageId || '').trim();
+  if (!channelId || !messageId) return null;
+  let channel = CLIENT.channels.cache.get(channelId);
+  if (!channel) {
+    channel = await CLIENT.channels.fetch(channelId).catch(() => null);
+  }
+  if (!channel) return null;
+  const msg = await findMessageInChannel(channel, messageId);
+  if (!msg) return null;
+  await msg.edit(payload).catch(() => {});
+  trackActiveGameMessage(hostPlayer, channelId, messageId);
+  return msg;
+}
+
+function pickBestMoveForOnlineEnemy(enemy, combatant, moves, availableEnergy = 0) {
+  const list = (Array.isArray(moves) ? moves : []).filter(Boolean);
+  const affordable = list.filter((move) => BATTLE.getMoveEnergyCost(move) <= Number(availableEnergy || 0));
+  const pool = affordable.length > 0 ? affordable : [];
+  if (pool.length <= 0) return WAIT_COMBAT_MOVE;
+  let best = pool[0];
+  let bestScore = -Infinity;
+  for (const move of pool) {
+    const cost = BATTLE.getMoveEnergyCost(move);
+    const speed = getMoveSpeedValue(move);
+    const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, enemy || {}).total || 0;
+    const net = Math.max(1, Number(dmg) - Math.max(0, Number(combatant?.defense || 0)));
+    const killBonus = Number(combatant?.hp || 0) <= net ? 120 : 0;
+    const efficiency = Math.max(0, 4 - cost) * 2;
+    const score = net + killBonus + efficiency + (speed - 10) * 0.4;
+    if (score > bestScore) {
+      best = move;
+      bestScore = score;
+    }
+  }
+  return best || WAIT_COMBAT_MOVE;
+}
+
+function resolveOnlineSubmittedMove(args = {}) {
+  const {
+    choice = null,
+    moves = [],
+    fallbackMove = WAIT_COMBAT_MOVE,
+    availableEnergy = 0
+  } = args;
+  const list = Array.isArray(moves) ? moves : [];
+  if (!choice || typeof choice !== 'object') {
+    return {
+      move: fallbackMove,
+      cost: BATTLE.getMoveEnergyCost(fallbackMove),
+      autoSelected: true,
+      reason: 'timeout_auto'
+    };
+  }
+  if (choice.kind === 'wait') {
+    return {
+      move: WAIT_COMBAT_MOVE,
+      cost: 0,
+      autoSelected: false,
+      reason: 'manual_wait'
+    };
+  }
+  const idx = Math.max(0, Number(choice.moveIndex || 0));
+  const move = list[idx];
+  if (!move) {
+    return {
+      move: fallbackMove,
+      cost: BATTLE.getMoveEnergyCost(fallbackMove),
+      autoSelected: true,
+      reason: 'invalid_index'
+    };
+  }
+  const cost = BATTLE.getMoveEnergyCost(move);
+  if (Number(availableEnergy || 0) < cost) {
+    return {
+      move: fallbackMove,
+      cost: BATTLE.getMoveEnergyCost(fallbackMove),
+      autoSelected: true,
+      reason: 'energy_insufficient'
+    };
+  }
+  return {
+    move,
+    cost,
+    autoSelected: false,
+    reason: 'manual_move'
+  };
+}
+
+function scheduleOnlineFriendDuelTimer(hostPlayer) {
+  const online = getOnlineFriendDuelState(hostPlayer);
+  if (!online) return;
+  const roomId = String(online.roomId || '').trim();
+  const hostId = String(online.hostId || hostPlayer?.id || '').trim();
+  if (!roomId || !hostId) return;
+  clearOnlineFriendDuelTimer(roomId);
+  const delay = Math.max(200, Number(online.deadlineAt || Date.now() + FRIEND_DUEL_ONLINE_TURN_MS) - Date.now());
+  const timer = setTimeout(() => {
+    resolveOnlineFriendDuelTurnByTimeout(hostId, roomId).catch((err) => {
+      console.error('[FriendDuelOnline] timeout resolve failed:', err?.message || err);
+    });
+  }, delay);
+  ONLINE_FRIEND_DUEL_TIMERS.set(roomId, timer);
+}
+
+async function resolveOnlineFriendDuelTurnByTimeout(hostId = '', roomId = '') {
+  const hostPlayer = getOnlineFriendDuelHostPlayer(hostId);
+  if (!hostPlayer) return;
+  const online = getOnlineFriendDuelState(hostPlayer);
+  if (!online) return;
+  const activeRoomId = String(online.roomId || '').trim();
+  if (roomId && activeRoomId !== String(roomId || '').trim()) return;
+  if (Date.now() + 80 < Number(online.deadlineAt || 0)) {
+    scheduleOnlineFriendDuelTimer(hostPlayer);
+    return;
+  }
+  await resolveOnlineFriendDuelTurn(hostPlayer, { trigger: 'timeout' });
+}
+
+async function resolveOnlineFriendDuelTurn(hostPlayer, options = {}) {
+  if (!hostPlayer || typeof hostPlayer !== 'object') return;
+  const online = getOnlineFriendDuelState(hostPlayer);
+  if (!online) return;
+  if (online.resolving) return;
+  const hostId = String(online.hostId || hostPlayer.id || '').trim();
+  const rivalId = String(online.rivalId || '').trim();
+  if (!hostId || !rivalId) return;
+
+  online.resolving = true;
+  CORE.savePlayer(hostPlayer);
+
+  try {
+    const fallbackPet = PET.loadPet(hostId);
+    const petResolved = resolvePlayerMainPet(hostPlayer, { preferBattle: true, fallbackPet });
+    const hostPet = petResolved?.pet || fallbackPet;
+    const enemy = hostPlayer?.battleState?.enemy;
+    const combatant = getActiveCombatant(hostPlayer, hostPet);
+    if (!hostPet || !enemy || !combatant) {
+      online.resolving = false;
+      CORE.savePlayer(hostPlayer);
+      return;
+    }
+    if (petResolved?.changed) CORE.savePlayer(hostPlayer);
+
+    const hostState = ensureBattleEnergyState(hostPlayer);
+    const hostEnergyBefore = Number(hostState.energy || 0);
+    const rivalEnergyBefore = Math.max(0, Number(online.rivalEnergy || 2));
+    const hostMoves = getCombatantMoves(combatant, hostPet).slice(0, PET_MOVE_LOADOUT_LIMIT);
+    const rivalMoves = getOnlineFriendDuelRivalMoves(enemy).slice(0, PET_MOVE_LOADOUT_LIMIT);
+    const hostChoice = online.choices?.[hostId] || null;
+    const rivalChoice = online.choices?.[rivalId] || null;
+
+    const hostAuto = pickBestMoveForAI(hostPlayer, hostPet, enemy, combatant, hostEnergyBefore) || WAIT_COMBAT_MOVE;
+    const rivalAuto = pickBestMoveForOnlineEnemy(enemy, combatant, rivalMoves, rivalEnergyBefore) || WAIT_COMBAT_MOVE;
+    const hostPicked = resolveOnlineSubmittedMove({
+      choice: hostChoice,
+      moves: hostMoves,
+      fallbackMove: hostAuto,
+      availableEnergy: hostEnergyBefore
+    });
+    const rivalPicked = resolveOnlineSubmittedMove({
+      choice: rivalChoice,
+      moves: rivalMoves,
+      fallbackMove: rivalAuto,
+      availableEnergy: rivalEnergyBefore
+    });
+
+    const roundRaw = BATTLE.executeBattleRound(
+      hostPlayer,
+      combatant,
+      enemy,
+      hostPicked.move,
+      rivalPicked.move,
+      { nonLethal: true }
+    );
+    const roundResult = maybeResolveMentorSparResult(hostPlayer, enemy, roundRaw);
+
+    const savedPet = persistCombatantState(hostPlayer, hostPet, combatant);
+    if (savedPet) PET.savePet(savedPet);
+
+    const roundNoteParts = [];
+    if (hostPicked.autoSelected) {
+      roundNoteParts.push(`⚠️ ${hostPlayer.name} 未在時限內完成有效提交，系統改為「${hostPicked.move?.name || '待機'}」。`);
+    }
+    const rivalName = String(hostPlayer?.battleState?.friendDuel?.friendName || '好友').trim() || '好友';
+    if (rivalPicked.autoSelected) {
+      roundNoteParts.push(`⚠️ ${rivalName} 未在時限內完成有效提交，系統改為「${rivalPicked.move?.name || '待機'}」。`);
+    }
+    const roundSummary = [String(roundResult?.message || '').trim(), ...roundNoteParts].filter(Boolean).join('\n');
+
+    if (roundResult?.victory === true || roundResult?.victory === false) {
+      const roomId = String(online.roomId || '').trim();
+      clearOnlineFriendDuelTimer(roomId);
+      const didWin = roundResult.victory === true;
+      const duel = finalizeFriendDuel(hostPlayer, hostPet, combatant, roundSummary, didWin);
+      const endEmbed = new EmbedBuilder()
+        .setTitle(didWin ? '🤝 好友友誼戰勝利（線上）' : '🤝 好友友誼戰落敗（線上）')
+        .setColor(0x8b5cf6)
+        .setDescription(`${roundSummary}\n\n${duel.summaryLine}`);
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success)
+      );
+      await editOnlineFriendDuelMessage(hostPlayer, { content: null, embeds: [endEmbed], components: [row] });
+      return;
+    }
+
+    hostPlayer.battleState.mode = 'manual_online';
+    const next = advanceBattleTurnEnergy(hostPlayer, hostPicked.cost);
+    online.rivalEnergy = Math.max(0, rivalEnergyBefore - rivalPicked.cost) + 2;
+    online.turn = Math.max(1, Number(next.turn || online.turn || 1));
+    online.deadlineAt = Date.now() + FRIEND_DUEL_ONLINE_TURN_MS;
+    online.choices = {};
+    online.resolving = false;
+    CORE.savePlayer(hostPlayer);
+    scheduleOnlineFriendDuelTimer(hostPlayer);
+
+    const payload = buildOnlineFriendDuelPayload(hostPlayer, hostPet, {
+      actionView: buildOnlineFriendDuelActionView(roundResult),
+      roundSummary,
+      notice: `✅ 本回合已結算，下一回合開始。`
+    });
+    await editOnlineFriendDuelMessage(hostPlayer, payload);
+  } catch (err) {
+    const latest = CORE.loadPlayer(String(hostPlayer?.id || '').trim());
+    const onlineLatest = getOnlineFriendDuelState(latest);
+    if (onlineLatest) {
+      onlineLatest.resolving = false;
+      CORE.savePlayer(latest);
+    }
+    console.error('[FriendDuelOnline] resolve failed:', err?.message || err);
+  }
+}
+
+async function startManualBattleOnline(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  const fallbackPet = PET.loadPet(user.id);
+  const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+  const pet = petResolved?.pet || fallbackPet;
+  if (!player || !pet || !player?.battleState?.enemy || !player?.battleState?.friendDuel) {
+    await interaction.update({ content: '❌ 目前不是可啟用線上模式的好友友誼戰。', components: [] }).catch(() => {});
+    return;
+  }
+  if (petResolved?.changed) CORE.savePlayer(player);
+
+  const duel = player.battleState.friendDuel || {};
+  const friendId = String(duel.friendId || '').trim();
+  if (!friendId) {
+    await interaction.update({ content: '❌ 找不到好友對戰對象。', components: [] }).catch(() => {});
+    return;
+  }
+
+  player.battleState.mode = 'manual_online';
+  ensureBattleEnergyState(player);
+  const online = {
+    enabled: true,
+    hostId: String(player.id || '').trim(),
+    rivalId: friendId,
+    roomId: `fd_${String(player.id || '').trim()}_${Date.now().toString(36)}`,
+    turn: Math.max(1, Number(player?.battleState?.turn || 1)),
+    deadlineAt: Date.now() + FRIEND_DUEL_ONLINE_TURN_MS,
+    rivalEnergy: 2,
+    choices: {},
+    channelId: String(interaction.channelId || '').trim(),
+    messageId: String(interaction.message?.id || '').trim(),
+    resolving: false
+  };
+  player.battleState.friendDuel.online = online;
+  CORE.savePlayer(player);
+  clearOnlineFriendDuelTimer(online.roomId);
+  scheduleOnlineFriendDuelTimer(player);
+
+  const payload = buildOnlineFriendDuelPayload(player, pet, {
+    notice: `📡 已建立即時友誼戰房間：每回合限時 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒提交。`
+  });
+  await interaction.update(payload).catch(async () => {
+    await interaction.reply({ content: '❌ 線上模式啟動失敗，請重試。', ephemeral: true }).catch(() => {});
+  });
+}
+
+async function handleOnlineFriendDuelChoice(interaction, user, customId = '') {
+  const action = parseOnlineFriendDuelAction(customId);
+  if (!action?.hostId) {
+    await interaction.reply({ content: '⚠️ 線上對戰按鈕格式錯誤。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const hostPlayer = getOnlineFriendDuelHostPlayer(action.hostId);
+  if (!hostPlayer) {
+    await interaction.reply({ content: '⚠️ 這個線上對戰房間已失效。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (!canOperateOnlineFriendDuel(hostPlayer, user.id, interaction.channelId)) {
+    await interaction.reply({ content: '⚠️ 你不是這場線上友誼戰的參戰者。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const online = getOnlineFriendDuelState(hostPlayer);
+  if (!online) {
+    await interaction.reply({ content: '⚠️ 線上友誼戰狀態不存在。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  if (Date.now() > Number(online.deadlineAt || 0) && !online.resolving) {
+    await interaction.deferUpdate().catch(() => {});
+    await resolveOnlineFriendDuelTurn(hostPlayer, { trigger: 'late_click' });
+    return;
+  }
+
+  const hostId = String(online.hostId || '').trim();
+  const rivalId = String(online.rivalId || '').trim();
+  const actorId = String(user.id || '').trim();
+  const actorIsHost = actorId === hostId;
+  const actorIsRival = actorId === rivalId;
+  if (!actorIsHost && !actorIsRival) {
+    await interaction.reply({ content: '⚠️ 你不是本場線上友誼戰參戰者。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const fallbackPet = PET.loadPet(hostId);
+  const petResolved = resolvePlayerMainPet(hostPlayer, { preferBattle: true, fallbackPet });
+  const hostPet = petResolved?.pet || fallbackPet;
+  const enemy = hostPlayer?.battleState?.enemy;
+  const combatant = getActiveCombatant(hostPlayer, hostPet);
+  if (!hostPet || !enemy || !combatant) {
+    await interaction.reply({ content: '❌ 戰鬥資料缺失，請重新發起友誼戰。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (petResolved?.changed) CORE.savePlayer(hostPlayer);
+
+  const hostEnergy = Number(ensureBattleEnergyState(hostPlayer).energy || 0);
+  const rivalEnergy = Math.max(0, Number(online.rivalEnergy || 2));
+  const hostMoves = getCombatantMoves(combatant, hostPet).slice(0, PET_MOVE_LOADOUT_LIMIT);
+  const rivalMoves = getOnlineFriendDuelRivalMoves(enemy).slice(0, PET_MOVE_LOADOUT_LIMIT);
+  const actorMoves = actorIsHost ? hostMoves : rivalMoves;
+  const actorEnergy = actorIsHost ? hostEnergy : rivalEnergy;
+  if (action.kind === 'move') {
+    const move = actorMoves[action.moveIndex];
+    if (!move) {
+      await interaction.reply({ content: `⚠️ 索引 ${action.moveIndex + 1} 不存在。`, ephemeral: true }).catch(() => {});
+      return;
+    }
+    const cost = BATTLE.getMoveEnergyCost(move);
+    if (actorEnergy < cost) {
+      await interaction.reply({ content: `⚠️ 能量不足：${move.name} 需要 ⚡${cost}，你目前只有 ⚡${actorEnergy}。`, ephemeral: true }).catch(() => {});
+      return;
+    }
+  }
+
+  await interaction.deferUpdate().catch(() => {});
+  if (!online.choices || typeof online.choices !== 'object') online.choices = {};
+  online.choices[actorId] = {
+    kind: action.kind,
+    moveIndex: action.kind === 'move' ? action.moveIndex : -1,
+    at: Date.now()
+  };
+  CORE.savePlayer(hostPlayer);
+
+  const bothReady = Boolean(online.choices?.[hostId]) && Boolean(online.choices?.[rivalId]);
+  if (bothReady) {
+    await resolveOnlineFriendDuelTurn(hostPlayer, { trigger: 'both_ready' });
+    return;
+  }
+
+  const payload = buildOnlineFriendDuelPayload(hostPlayer, hostPet, {
+    notice: `📝 ${user.username} 已提交本回合行動，等待另一位玩家。`
+  });
+  await editOnlineFriendDuelMessage(hostPlayer, payload);
+}
+
 async function startManualBattle(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const fallbackPet = PET.loadPet(user.id);
@@ -15844,6 +16920,13 @@ async function startManualBattle(interaction, user) {
   if (!player || !pet) {
     await interaction.update({ content: '❌ 沒有可用招式，無法開始戰鬥。', components: [] });
     return;
+  }
+  const previousOnlineRoomId = String(player?.battleState?.friendDuel?.online?.roomId || '').trim();
+  if (previousOnlineRoomId) {
+    clearOnlineFriendDuelTimer(previousOnlineRoomId);
+    if (player?.battleState?.friendDuel?.online) {
+      delete player.battleState.friendDuel.online;
+    }
   }
 
   let createdBattle = false;
@@ -15896,6 +16979,13 @@ async function startAutoBattle(interaction, user) {
   if (!player || !pet) {
     await interaction.update({ content: '❌ 沒有可用招式，無法開始 AI 戰鬥。', components: [] });
     return;
+  }
+  const previousOnlineRoomId = String(player?.battleState?.friendDuel?.online?.roomId || '').trim();
+  if (previousOnlineRoomId) {
+    clearOnlineFriendDuelTimer(previousOnlineRoomId);
+    if (player?.battleState?.friendDuel?.online) {
+      delete player.battleState.friendDuel.online;
+    }
   }
   ECON.ensurePlayerEconomy(player);
 
