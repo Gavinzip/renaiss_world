@@ -723,9 +723,11 @@ function restoreFriendDuelSnapshot(player, snapshot, activePet = null) {
   return restored;
 }
 
-function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
+function buildFriendDuelEnemyFromPet(friendPlayer, friendPet) {
   const petName = String(friendPet?.name || '夥伴').trim() || '夥伴';
+  const ownerId = String(friendPlayer?.id || 'unknown').trim() || 'unknown';
   const ownerName = String(friendPlayer?.name || '好友').trim() || '好友';
+  const petId = String(friendPet?.id || '').trim();
   const sourceMoves = Array.isArray(friendPet?.moves) ? friendPet.moves : [];
   const moves = sourceMoves
     .slice(0, 6)
@@ -756,13 +758,16 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
     desc: '以穩定節奏測試彼此實力'
   };
 
+  const fullHp = Math.max(1, Number(friendPet?.maxHp || friendPet?.hp || 100));
   return {
-    id: `friend_duel_${String(friendPlayer?.id || 'unknown').trim()}`,
+    id: `friend_duel_${ownerId}_${petId || 'pet'}`,
     name: `${ownerName} 的 ${petName}`,
+    ownerId,
+    friendPetId: petId || null,
     element: normalizePetElementCode(friendPet?.type || friendPet?.element || '水'),
     petElement: normalizePetElementCode(friendPet?.type || friendPet?.element || '水'),
-    hp: Math.max(1, Number(friendPet?.hp || friendPet?.maxHp || 100)),
-    maxHp: Math.max(1, Number(friendPet?.maxHp || friendPet?.hp || 100)),
+    hp: fullHp,
+    maxHp: fullHp,
     attack: Math.max(8, Number(friendPet?.attack || 20)),
     defense: Math.max(1, Number(friendPet?.defense || 12)),
     moves: moves.length > 0 ? moves : [fallbackMove],
@@ -770,6 +775,77 @@ function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
     isMonster: false,
     nonLethal: true
   };
+}
+
+function buildFriendDuelEnemyTeamFromPlayer(friendPlayer, preferredPet = null) {
+  const ownerId = String(friendPlayer?.id || '').trim();
+  const ownedPets = getPlayerOwnedPets(ownerId).filter((p) => Boolean(p?.hatched));
+  const preferredId = String(preferredPet?.id || '').trim();
+  let activePet = ownedPets.find((p) => String(p?.id || '').trim() === preferredId) || null;
+  if (!activePet && preferredPet && CORE.canPetFight(preferredPet)) activePet = preferredPet;
+  if (!activePet) activePet = ownedPets[0] || preferredPet;
+
+  const activeId = String(activePet?.id || '').trim();
+  const reservePetIds = ownedPets
+    .map((p) => String(p?.id || '').trim())
+    .filter((id) => id && id !== activeId);
+
+  return {
+    activePet,
+    reservePetIds,
+    enemy: buildFriendDuelEnemyFromPet(friendPlayer, activePet || preferredPet || {})
+  };
+}
+
+function trySwitchFriendDuelEnemy(player, defeatedEnemyName = '') {
+  const battle = player?.battleState;
+  const duel = battle?.friendDuel;
+  if (!battle || !duel) return { switched: false };
+  const friendId = String(duel.friendId || '').trim();
+  if (!Array.isArray(duel.enemyReservePetIds) || duel.enemyReservePetIds.length <= 0) {
+    return { switched: false };
+  }
+
+  const rivalPlayer = friendId ? CORE.loadPlayer(friendId) : null;
+  const rivalName = String(duel.friendName || rivalPlayer?.name || '好友').trim() || '好友';
+  while (duel.enemyReservePetIds.length > 0) {
+    const nextPetId = String(duel.enemyReservePetIds.shift() || '').trim();
+    if (!nextPetId) continue;
+    const nextPet = PET.getPetById(nextPetId);
+    if (!nextPet) continue;
+    if (friendId && String(nextPet.ownerId || '').trim() !== friendId) continue;
+    if (!nextPet.hatched) continue;
+    const enemy = buildFriendDuelEnemyFromPet(rivalPlayer || { id: friendId, name: rivalName }, nextPet);
+    battle.enemy = enemy;
+    duel.currentEnemyPetId = nextPetId;
+    const defeatedName = String(defeatedEnemyName || '').trim() || '對手寵物';
+    return {
+      switched: true,
+      enemy,
+      message: `🔁 ${defeatedName} 倒下，${rivalName} 改派 ${enemy.name} 上場。`
+    };
+  }
+  return { switched: false };
+}
+
+function trySwitchFriendDuelPlayerPet(player, currentPet = null, combatant = null) {
+  const battle = player?.battleState;
+  if (!battle?.friendDuel) return { switched: false };
+  const currentPetId = String(combatant?.id || currentPet?.id || battle.activePetId || '').trim();
+  const nextPet = getBattleSwitchCandidates(player, currentPetId)[0] || null;
+  if (!nextPet) return { switched: false };
+  battle.activePetId = String(nextPet.id || '').trim() || battle.activePetId;
+  battle.fighter = 'pet';
+  const downName = String(currentPet?.name || combatant?.name || '目前寵物').trim() || '目前寵物';
+  return {
+    switched: true,
+    nextPet,
+    message: `🔁 ${downName} 倒下，你自動換上 ${nextPet.name} 繼續作戰。`
+  };
+}
+
+function buildFriendDuelEnemyFromPlayer(friendPlayer, friendPet) {
+  return buildFriendDuelEnemyTeamFromPlayer(friendPlayer, friendPet).enemy;
 }
 
 function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = false) {
@@ -889,8 +965,21 @@ async function startFriendDuel(interaction, user, friendId = '') {
     return;
   }
 
-  const enemy = buildFriendDuelEnemyFromPlayer(targetPlayer, targetPet);
-  const fighterType = CORE.canPetFight(myPet) ? 'pet' : 'player';
+  const enemyTeam = buildFriendDuelEnemyTeamFromPlayer(targetPlayer, targetPet);
+  if (!enemyTeam?.activePet) {
+    await showFriendsMenu(interaction, user, `${targetPlayer.name} 目前沒有可出戰的寵物，稍後再試。`);
+    return;
+  }
+  const enemy = enemyTeam.enemy;
+  const fighterType = 'pet';
+  const duelOwnedPets = getPlayerOwnedPets(String(challenger.id || '').trim()).filter((p) => Boolean(p?.hatched));
+  const duelPetStates = {};
+  for (const p of duelOwnedPets) {
+    const id = String(p?.id || '').trim();
+    if (!id) continue;
+    const fullHp = Math.max(1, Number(p?.maxHp || p?.hp || 100));
+    duelPetStates[id] = { hp: fullHp, status: {} };
+  }
   const sourceChoice = `向好友 ${targetPlayer.name} 發起友誼戰`;
   const duelSnapshot = buildFriendDuelSnapshot(challenger);
   const preservedStory = String(challenger.currentStory || '').trim();
@@ -900,7 +989,13 @@ async function startFriendDuel(interaction, user, friendId = '') {
       .map((choice) => ({ ...choice }))
     : [];
   const preBattleStory = composeActionBridgeStory(challenger, sourceChoice, `你鎖定了 ${targetPlayer.name} 的夥伴 ${targetPet.name || '夥伴'}，準備切磋。`);
-  const estimate = estimateBattleOutcome(challenger, myPet, enemy, fighterType);
+  const myDuelPetPreview = {
+    ...myPet,
+    hp: Math.max(1, Number(myPet?.maxHp || myPet?.hp || 100)),
+    maxHp: Math.max(1, Number(myPet?.maxHp || myPet?.hp || 100)),
+    status: {}
+  };
+  const estimate = estimateBattleOutcome(challenger, myDuelPetPreview, enemy, fighterType);
   const fighterLabel = fighterType === 'pet'
     ? `🐾 ${myPet.name}`
     : `🧍 ${challenger.name}(ATK 10)`;
@@ -924,13 +1019,15 @@ async function startFriendDuel(interaction, user, friendId = '') {
     sourceChoice,
     preBattleStory,
     humanState: null,
-    petState: null,
+    petState: duelPetStates[String(myPet?.id || '').trim()] || { hp: Math.max(1, Number(myPet?.maxHp || myPet?.hp || 100)), status: {} },
     activePetId: String(myPet?.id || '').trim() || null,
-    petStates: {},
+    petStates: duelPetStates,
     friendDuel: {
       friendId: targetId,
       friendName: String(targetPlayer.name || '').trim() || `玩家(${targetId})`,
       friendPetName: String(targetPet?.name || '').trim() || '夥伴',
+      currentEnemyPetId: String(enemyTeam?.activePet?.id || targetPet?.id || '').trim() || null,
+      enemyReservePetIds: Array.isArray(enemyTeam?.reservePetIds) ? enemyTeam.reservePetIds.slice() : [],
       startedTurn: getPlayerStoryTurns(challenger),
       returnStory: preservedStory,
       returnChoices: preservedChoices,
@@ -5100,7 +5197,7 @@ const WAIT_COMBAT_MOVE = {
   desc: '本回合不攻擊，保留節奏與能量'
 };
 const MANUAL_ENEMY_RESPONSE_DELAY_MS = 1000;
-const FRIEND_DUEL_ONLINE_TURN_MS = Math.max(5000, Number(process.env.FRIEND_DUEL_ONLINE_TURN_MS || 10000));
+const FRIEND_DUEL_ONLINE_TURN_MS = Math.max(20000, Number(process.env.FRIEND_DUEL_ONLINE_TURN_MS || 20000));
 const ONLINE_FRIEND_DUEL_TIMERS = new Map();
 
 function summarizeBattleDetailForStory(detail = '', maxLen = 260) {
@@ -5781,9 +5878,19 @@ function hasPetSwapBlockingStatus(status = {}) {
 function getBattleSwitchCandidates(player, currentPetId = '') {
   const owned = getPlayerOwnedPets(player?.id);
   const currentId = String(currentPetId || '').trim();
+  const petStates = (player?.battleState?.petStates && typeof player.battleState.petStates === 'object')
+    ? player.battleState.petStates
+    : {};
+  const isFriendDuel = Boolean(player?.battleState?.friendDuel);
   return owned.filter((pet) => {
     const id = String(pet?.id || '').trim();
     if (!id || id === currentId) return false;
+    if (isFriendDuel) {
+      if (!Object.prototype.hasOwnProperty.call(petStates, id)) return false;
+      const snapHp = Number(petStates?.[id]?.hp);
+      if (Number.isFinite(snapHp)) return snapHp > 0;
+      return false;
+    }
     return CORE.canPetFight(pet);
   });
 }
@@ -16468,17 +16575,38 @@ async function continueBattleWithHuman(interaction, user) {
   );
 }
 
-function buildOnlineFriendDuelButtons(hostId = '') {
+function buildOnlineFriendDuelButtons(hostId = '', hostMoves = [], hostEnergy = 0) {
   const id = String(hostId || '').trim();
+  const safeMoves = Array.isArray(hostMoves) ? hostMoves.slice(0, 5) : [];
+  const moveButtons = [];
+  for (let i = 0; i < Math.min(5, PET_MOVE_LOADOUT_LIMIT); i++) {
+    const move = safeMoves[i];
+    if (!move) {
+      moveButtons.push(
+        new ButtonBuilder()
+          .setCustomId(`fdonline_move_${id}_${i}`)
+          .setLabel('（空）')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      );
+      continue;
+    }
+    const cost = BATTLE.getMoveEnergyCost(move);
+    const canUse = Number(hostEnergy || 0) >= cost;
+    moveButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`fdonline_move_${id}_${i}`)
+        .setLabel(`${move.name} ⚡${cost}`.slice(0, 80))
+        .setStyle(canUse ? ButtonStyle.Danger : ButtonStyle.Secondary)
+        .setDisabled(!canUse)
+    );
+  }
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`fdonline_move_${id}_0`).setLabel('1').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(`fdonline_move_${id}_1`).setLabel('2').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(`fdonline_move_${id}_2`).setLabel('3').setStyle(ButtonStyle.Danger)
+      ...moveButtons.slice(0, 3)
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`fdonline_move_${id}_3`).setLabel('4').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`fdonline_move_${id}_4`).setLabel('5').setStyle(ButtonStyle.Secondary),
+      ...moveButtons.slice(3, 5),
       new ButtonBuilder().setCustomId(`fdonline_wait_${id}`).setLabel('⚡ 待機').setStyle(ButtonStyle.Primary)
     )
   ];
@@ -16486,7 +16614,8 @@ function buildOnlineFriendDuelButtons(hostId = '') {
 
 function buildFriendDuelResultRow() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 返回好友').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 返回好友').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('main_menu').setLabel('📖 回主選單').setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -16548,6 +16677,23 @@ function formatOnlineFriendChoiceText(choice = null, moves = []) {
   return `✅ ${move.name}`;
 }
 
+function formatOnlineHostMoveDetails(moves = [], attacker = null, defender = null, energy = 0) {
+  const list = Array.isArray(moves) ? moves : [];
+  if (list.length <= 0) return '（無可用招式）';
+  return list
+    .slice(0, PET_MOVE_LOADOUT_LIMIT)
+    .map((move) => {
+      const cost = BATTLE.getMoveEnergyCost(move);
+      const speed = getMoveSpeedValue(move);
+      const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, attacker || {}).total || 0;
+      const est = Math.max(0, Number(dmg) - Math.max(0, Number(defender?.defense || 0)));
+      const canUse = Number(energy || 0) >= cost;
+      const effectStr = describeMoveEffects(move);
+      return `⚔️ ${move.name} | ${format1(est)} dmg | ⚡${cost} | 🚀速度${format1(speed)} | ${canUse ? '可用' : '能量不足'} | ${effectStr || '無'}`;
+    })
+    .join('\n');
+}
+
 function buildOnlineFriendDuelActionView(roundResult = null) {
   if (!roundResult || typeof roundResult !== 'object') {
     return {
@@ -16587,13 +16733,20 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
   const hostChoice = online?.choices?.[hostId] || null;
   const rivalChoice = online?.choices?.[rivalId] || null;
   const deadlineAt = Math.max(Date.now() + 1000, Number(online?.deadlineAt || Date.now() + FRIEND_DUEL_ONLINE_TURN_MS));
-  const countdownTs = Math.floor(deadlineAt / 1000);
+  const remainSec = Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000));
   const board = buildManualBattleBoard(enemy, combatant, state);
   const actionPanels = buildDualActionPanels(options?.actionView || buildOnlineFriendDuelActionView(null));
   const roundSummary = String(options?.roundSummary || '').trim();
   const notice = String(options?.notice || '').trim();
   const summaryBlock = roundSummary ? `\n📜 本回合結算：\n${roundSummary}\n` : '';
-  const noticeBlock = notice ? `\n${notice}\n` : '';
+  const hostSubmitted = Boolean(hostChoice);
+  const rivalSubmitted = Boolean(rivalChoice);
+  const waitingHint = (hostSubmitted && !rivalSubmitted)
+    ? '⏳ 你已提交，正在等待對手按下按鈕...'
+    : (!hostSubmitted && rivalSubmitted)
+      ? '⏳ 對手已提交，請你按下招式按鈕...'
+      : '';
+  const noticeBlock = [notice, waitingHint].filter(Boolean).join('\n');
   const readyText =
     `提交狀態：${hostName} ${formatOnlineFriendChoiceText(hostChoice, hostMoves)} ｜ ${rivalName} ${formatOnlineFriendChoiceText(rivalChoice, rivalMoves)}`;
 
@@ -16619,21 +16772,20 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
 
   const content =
     `🌐 **好友手動對戰（線上模式）**\n` +
-    `⏳ 本回合倒數：<t:${countdownTs}:R>（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）\n` +
+    `⏳ 本回合倒數：${remainSec} 秒（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）\n` +
     `⚡ 能量：${hostName} ${hostEnergy} ｜ ${rivalName} ${rivalEnergy}\n` +
     `${readyText}\n` +
     `${board}` +
     `${actionPanels}` +
     `${summaryBlock}` +
-    `${noticeBlock}` +
-    `\n**${hostName} 的索引招式（按 1~5）**\n${formatOnlineFriendDuelMoveList(hostMoves, combatant, enemy, hostEnergy)}\n` +
-    `\n**${rivalName} 的索引招式（按 1~5）**\n${formatOnlineFriendDuelMoveList(rivalMoves, enemy, combatant, rivalEnergy)}\n` +
-    `\n在倒數內可改選；超時未提交會自動判定本回合行動。`;
+    `${noticeBlock ? `\n${noticeBlock}\n` : ''}` +
+    `\n**招式：**\n${formatOnlineHostMoveDetails(hostMoves, combatant, enemy, hostEnergy)}\n` +
+    `\n在倒數內可改選；雙方都提交後會立即結算。`;
 
   return {
     content,
     embeds: [],
-    components: buildOnlineFriendDuelButtons(hostId)
+    components: buildOnlineFriendDuelButtons(hostId, hostMoves, hostEnergy)
   };
 }
 
@@ -16774,9 +16926,9 @@ async function resolveOnlineFriendDuelTurn(hostPlayer, options = {}) {
   try {
     const fallbackPet = PET.loadPet(hostId);
     const petResolved = resolvePlayerMainPet(hostPlayer, { preferBattle: true, fallbackPet });
-    const hostPet = petResolved?.pet || fallbackPet;
-    const enemy = hostPlayer?.battleState?.enemy;
-    const combatant = getActiveCombatant(hostPlayer, hostPet);
+    let hostPet = petResolved?.pet || fallbackPet;
+    let enemy = hostPlayer?.battleState?.enemy;
+    let combatant = getActiveCombatant(hostPlayer, hostPet);
     if (!hostPet || !enemy || !combatant) {
       online.resolving = false;
       CORE.savePlayer(hostPlayer);
@@ -16828,15 +16980,58 @@ async function resolveOnlineFriendDuelTurn(hostPlayer, options = {}) {
     if (rivalPicked.autoSelected) {
       roundNoteParts.push(`⚠️ ${rivalName} 未在時限內完成有效提交，系統改為「${rivalPicked.move?.name || '待機'}」。`);
     }
-    const roundSummary = [String(roundResult?.message || '').trim(), ...roundNoteParts].filter(Boolean).join('\n');
+    const duelSwitchNotes = [];
+    if (roundResult?.victory === true) {
+      const switchedEnemy = trySwitchFriendDuelEnemy(hostPlayer, enemy?.name || '');
+      if (switchedEnemy?.switched) {
+        duelSwitchNotes.push(switchedEnemy.message);
+        enemy = hostPlayer?.battleState?.enemy;
+      } else {
+        const roundSummary = [String(roundResult?.message || '').trim(), ...roundNoteParts].filter(Boolean).join('\n');
+        const roomId = String(online.roomId || '').trim();
+        clearOnlineFriendDuelTimer(roomId);
+        const duel = finalizeFriendDuel(hostPlayer, hostPet, combatant, roundSummary, true);
+        const endEmbed = new EmbedBuilder()
+          .setTitle('🤝 好友友誼戰勝利（線上）')
+          .setColor(0x8b5cf6)
+          .setDescription(`${roundSummary}\n\n${duel.summaryLine}`);
+        const row = buildFriendDuelResultRow();
+        await editOnlineFriendDuelMessage(hostPlayer, { content: null, embeds: [endEmbed], components: [row] });
+        return;
+      }
+    } else if (roundResult?.victory === false || Number(combatant?.hp || 0) <= 0) {
+      const switchedPet = trySwitchFriendDuelPlayerPet(hostPlayer, hostPet, combatant);
+      if (switchedPet?.switched && switchedPet?.nextPet) {
+        duelSwitchNotes.push(switchedPet.message);
+        hostPet = switchedPet.nextPet;
+        combatant = getActiveCombatant(hostPlayer, hostPet);
+      } else {
+        const roundSummary = [String(roundResult?.message || '').trim(), ...roundNoteParts].filter(Boolean).join('\n');
+        const roomId = String(online.roomId || '').trim();
+        clearOnlineFriendDuelTimer(roomId);
+        const duel = finalizeFriendDuel(hostPlayer, hostPet, combatant, roundSummary, false);
+        const endEmbed = new EmbedBuilder()
+          .setTitle('🤝 好友友誼戰落敗（線上）')
+          .setColor(0x8b5cf6)
+          .setDescription(`${roundSummary}\n\n${duel.summaryLine}`);
+        const row = buildFriendDuelResultRow();
+        await editOnlineFriendDuelMessage(hostPlayer, { content: null, embeds: [endEmbed], components: [row] });
+        return;
+      }
+    }
 
-    if (roundResult?.victory === true || roundResult?.victory === false) {
+    const roundSummary = [
+      String(roundResult?.message || '').trim(),
+      ...duelSwitchNotes,
+      ...roundNoteParts
+    ].filter(Boolean).join('\n');
+
+    if (!combatant) {
       const roomId = String(online.roomId || '').trim();
       clearOnlineFriendDuelTimer(roomId);
-      const didWin = roundResult.victory === true;
-      const duel = finalizeFriendDuel(hostPlayer, hostPet, combatant, roundSummary, didWin);
+      const duel = finalizeFriendDuel(hostPlayer, hostPet, combatant, roundSummary, false);
       const endEmbed = new EmbedBuilder()
-        .setTitle(didWin ? '🤝 好友友誼戰勝利（線上）' : '🤝 好友友誼戰落敗（線上）')
+        .setTitle('🤝 好友友誼戰落敗（線上）')
         .setColor(0x8b5cf6)
         .setDescription(`${roundSummary}\n\n${duel.summaryLine}`);
       const row = buildFriendDuelResultRow();
@@ -16854,12 +17049,13 @@ async function resolveOnlineFriendDuelTurn(hostPlayer, options = {}) {
     CORE.savePlayer(hostPlayer);
     scheduleOnlineFriendDuelTimer(hostPlayer);
 
-    const payload = buildOnlineFriendDuelPayload(hostPlayer, hostPet, {
+    const refreshedFallbackPet = PET.loadPet(hostId);
+    const refreshedHostPet = resolvePlayerMainPet(hostPlayer, { preferBattle: true, fallbackPet: refreshedFallbackPet }).pet || hostPet || refreshedFallbackPet;
+    await editOnlineFriendDuelMessage(hostPlayer, buildOnlineFriendDuelPayload(hostPlayer, refreshedHostPet, {
       actionView: buildOnlineFriendDuelActionView(roundResult),
       roundSummary,
       notice: `✅ 本回合已結算，下一回合開始。`
-    });
-    await editOnlineFriendDuelMessage(hostPlayer, payload);
+    }));
   } catch (err) {
     const latest = CORE.loadPlayer(String(hostPlayer?.id || '').trim());
     const onlineLatest = getOnlineFriendDuelState(latest);
@@ -17204,7 +17400,7 @@ async function startAutoBattle(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const fallbackPet = PET.loadPet(user.id);
   const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
-  const pet = petResolved?.pet || fallbackPet;
+  let pet = petResolved?.pet || fallbackPet;
   const uiLang = getPlayerUILang(player);
   if (!player || !pet) {
     await interaction.update({ content: '❌ 沒有可用招式，無法開始 AI 戰鬥。', components: [] });
@@ -17258,8 +17454,8 @@ async function startAutoBattle(interaction, user) {
   if (petResolved?.changed) CORE.savePlayer(player);
   CORE.savePlayer(player);
 
-  const enemy = player.battleState.enemy;
-  const combatant = getActiveCombatant(player, pet);
+  let enemy = player.battleState.enemy;
+  let combatant = getActiveCombatant(player, pet);
   const candidateMoves = getCombatantMoves(combatant, pet);
   if (candidateMoves.length === 0) {
     await interaction.update({ content: '❌ 沒有可用招式，無法開始 AI 戰鬥。', components: [] });
@@ -17267,6 +17463,7 @@ async function startAutoBattle(interaction, user) {
   }
 
   const rounds = [];
+  const duelSwitchNotes = [];
   let finalResult = null;
   const maxTurns = 12;
   ensureBattleEnergyState(player);
@@ -17303,7 +17500,34 @@ async function startAutoBattle(interaction, user) {
       energyCost,
       energyAfter: nextEnergy
     });
+    {
+      const savedRoundPet = persistCombatantState(player, pet, combatant);
+      if (savedRoundPet) PET.savePet(savedRoundPet);
+    }
     advanceBattleTurnEnergy(player, energyCost);
+    if (player?.battleState?.friendDuel && roundResult?.victory === true) {
+      const switchedEnemy = trySwitchFriendDuelEnemy(player, enemy?.name || '');
+      if (switchedEnemy?.switched) {
+        duelSwitchNotes.push(switchedEnemy.message);
+        enemy = player.battleState.enemy;
+        CORE.savePlayer(player);
+        continue;
+      }
+    }
+    if (player?.battleState?.friendDuel && (roundResult?.victory === false || Number(combatant?.hp || 0) <= 0)) {
+      const switchedPet = trySwitchFriendDuelPlayerPet(player, pet, combatant);
+      if (switchedPet?.switched && switchedPet?.nextPet) {
+        duelSwitchNotes.push(switchedPet.message);
+        pet = switchedPet.nextPet;
+        combatant = getActiveCombatant(player, pet);
+        if (!combatant) {
+          finalResult = { victory: false, gold: 0, message: switchedPet.message };
+          break;
+        }
+        CORE.savePlayer(player);
+        continue;
+      }
+    }
     if (roundResult.victory !== null) {
       finalResult = roundResult;
       break;
@@ -17318,7 +17542,10 @@ async function startAutoBattle(interaction, user) {
 
   if (finalResult?.victory === true) {
     if (player?.battleState?.friendDuel) {
-      const detail = buildAIBattleStory(rounds, combatant, enemy, finalResult);
+      const detail = [
+        buildAIBattleStory(rounds, combatant, enemy, finalResult),
+        duelSwitchNotes.length > 0 ? duelSwitchNotes.join('\n') : ''
+      ].filter(Boolean).join('\n');
       const duel = finalizeFriendDuel(player, pet, combatant, detail, true);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰勝利')
@@ -17412,15 +17639,16 @@ async function startAutoBattle(interaction, user) {
 
   if (finalResult?.victory === false || combatant.hp <= 0) {
     if (player?.battleState?.friendDuel) {
-      const detail = buildAIBattleStory(rounds, combatant, enemy, finalResult);
+      const detail = [
+        buildAIBattleStory(rounds, combatant, enemy, finalResult),
+        duelSwitchNotes.length > 0 ? duelSwitchNotes.join('\n') : ''
+      ].filter(Boolean).join('\n');
       const duel = finalizeFriendDuel(player, pet, combatant, detail, false);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰落敗')
         .setColor(0x8b5cf6)
         .setDescription(`${detail}\n\n${duel.summaryLine}`);
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await interaction.update({ embeds: [embed], content: null, components: [row] });
       return;
     }
@@ -17553,6 +17781,19 @@ async function handleUseMove(interaction, user, moveIndex) {
 
   if (playerPhase.victory === true) {
     if (player?.battleState?.friendDuel) {
+      const switchedEnemy = trySwitchFriendDuelEnemy(player, enemy?.name || '');
+      if (switchedEnemy?.switched) {
+        const activePet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet: pet }).pet || pet;
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          activePet,
+          `${playerPhase.message}\n\n${switchedEnemy.message}`,
+          { mode: 'update' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message, true);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰勝利')
@@ -17645,14 +17886,24 @@ async function handleUseMove(interaction, user, moveIndex) {
 
   if (playerPhase.victory === false) {
     if (player?.battleState?.friendDuel) {
+      const switchedPet = trySwitchFriendDuelPlayerPet(player, pet, combatant);
+      if (switchedPet?.switched && switchedPet?.nextPet) {
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          switchedPet.nextPet,
+          `${playerPhase.message}\n\n${switchedPet.message}`,
+          { mode: 'update' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message, false);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰落敗')
         .setColor(0x8b5cf6)
         .setDescription(`${playerPhase.message}\n\n${duel.summaryLine}`);
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
@@ -17712,6 +17963,19 @@ async function handleUseMove(interaction, user, moveIndex) {
 
   if (enemyPhase.victory === true) {
     if (player?.battleState?.friendDuel) {
+      const switchedEnemy = trySwitchFriendDuelEnemy(player, enemy?.name || '');
+      if (switchedEnemy?.switched) {
+        const activePet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet: pet }).pet || pet;
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          activePet,
+          `${combinedMessage}\n\n${switchedEnemy.message}`,
+          { mode: 'edit' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage, true);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰勝利')
@@ -17802,14 +18066,24 @@ async function handleUseMove(interaction, user, moveIndex) {
 
   if (enemyPhase.victory === false) {
     if (player?.battleState?.friendDuel) {
+      const switchedPet = trySwitchFriendDuelPlayerPet(player, pet, combatant);
+      if (switchedPet?.switched && switchedPet?.nextPet) {
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          switchedPet.nextPet,
+          `${combinedMessage}\n\n${switchedPet.message}`,
+          { mode: 'edit' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage, false);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰落敗')
         .setColor(0x8b5cf6)
         .setDescription(`${combinedMessage}\n\n${duel.summaryLine}`);
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
       return;
     }
@@ -17886,6 +18160,19 @@ async function handleBattleWait(interaction, user) {
 
   if (playerPhase.victory === true) {
     if (player?.battleState?.friendDuel) {
+      const switchedEnemy = trySwitchFriendDuelEnemy(player, enemy?.name || '');
+      if (switchedEnemy?.switched) {
+        const activePet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet: pet }).pet || pet;
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          activePet,
+          `${playerPhase.message}\n\n${switchedEnemy.message}`,
+          { mode: 'update' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message, true);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰勝利')
@@ -17975,14 +18262,24 @@ async function handleBattleWait(interaction, user) {
 
   if (playerPhase.victory === false || combatant.hp <= 0) {
     if (player?.battleState?.friendDuel) {
+      const switchedPet = trySwitchFriendDuelPlayerPet(player, pet, combatant);
+      if (switchedPet?.switched && switchedPet?.nextPet) {
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          switchedPet.nextPet,
+          `${playerPhase.message || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`}\n\n${switchedPet.message}`,
+          { mode: 'update' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, playerPhase.message || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`, false);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰落敗')
         .setColor(0x8b5cf6)
         .setDescription(`${playerPhase.message || ''}\n\n${duel.summaryLine}`.trim());
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
@@ -18044,6 +18341,19 @@ async function handleBattleWait(interaction, user) {
 
   if (enemyPhase.victory === true) {
     if (player?.battleState?.friendDuel) {
+      const switchedEnemy = trySwitchFriendDuelEnemy(player, enemy?.name || '');
+      if (switchedEnemy?.switched) {
+        const activePet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet: pet }).pet || pet;
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          activePet,
+          `${combinedMessage}\n\n${switchedEnemy.message}`,
+          { mode: 'edit' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage, true);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰勝利')
@@ -18135,6 +18445,18 @@ async function handleBattleWait(interaction, user) {
 
   if (enemyPhase.victory === false || combatant.hp <= 0) {
     if (player?.battleState?.friendDuel) {
+      const switchedPet = trySwitchFriendDuelPlayerPet(player, pet, combatant);
+      if (switchedPet?.switched && switchedPet?.nextPet) {
+        CORE.savePlayer(player);
+        await renderManualBattle(
+          interaction,
+          player,
+          switchedPet.nextPet,
+          `${combinedMessage || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`}\n\n${switchedPet.message}`,
+          { mode: 'edit' }
+        );
+        return;
+      }
       const duel = finalizeFriendDuel(player, pet, combatant, combinedMessage || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`, false);
       const embed = new EmbedBuilder()
         .setTitle('🤝 好友友誼戰落敗')
