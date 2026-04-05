@@ -827,6 +827,8 @@ function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = fa
   if (player.pendingStoryTrigger) {
     clearPendingStoryTrigger(player);
   }
+  // 友誼戰為獨立流程：結束後若誤按舊版「回到冒險」，也要先導回好友頁，避免直接進主劇情。
+  player.pendingFriendDuelReturn = true;
   player.battleState = null;
   CORE.savePlayer(player);
   return {
@@ -9541,6 +9543,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const player = CORE.loadPlayer(user.id);
     const pet = PET.loadPet(user.id);
     if (player && pet) {
+      if (player.pendingFriendDuelReturn) {
+        player.pendingFriendDuelReturn = false;
+        CORE.savePlayer(player);
+        await showFriendsMenu(interaction, user, '已結束友誼戰，先返回好友頁。');
+        return;
+      }
       if (player.battleState) {
         const enemyName = player.battleState?.enemy?.name || '敵人';
         const sourceChoice = String(player.battleState?.sourceChoice || '').trim();
@@ -9668,6 +9676,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
 
   if (customId === 'open_friends') {
+    const player = CORE.loadPlayer(user.id);
+    if (player?.pendingFriendDuelReturn) {
+      player.pendingFriendDuelReturn = false;
+      CORE.savePlayer(player);
+    }
     await showFriendsMenu(interaction, user);
     return;
   }
@@ -16471,6 +16484,12 @@ function buildOnlineFriendDuelButtons(hostId = '') {
   ];
 }
 
+function buildFriendDuelResultRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 返回好友').setStyle(ButtonStyle.Success)
+  );
+}
+
 function getOnlineFriendDuelRivalMoves(enemy = null) {
   const raw = Array.isArray(enemy?.moves) ? enemy.moves : [];
   const fallbackDamage = Math.max(8, Number(enemy?.attack || 12));
@@ -16588,7 +16607,8 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
     const readyRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`fdonline_join_${hostId}`).setLabel('✅ 加入即時戰鬥').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel('⚔️ 改用手動（對手AI）').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 改用AI戰鬥').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 改用AI戰鬥').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel('↩️ 返回').setStyle(ButtonStyle.Primary)
     );
     return {
       content: waitingContent,
@@ -16819,9 +16839,7 @@ async function resolveOnlineFriendDuelTurn(hostPlayer, options = {}) {
         .setTitle(didWin ? '🤝 好友友誼戰勝利（線上）' : '🤝 好友友誼戰落敗（線上）')
         .setColor(0x8b5cf6)
         .setDescription(`${roundSummary}\n\n${duel.summaryLine}`);
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await editOnlineFriendDuelMessage(hostPlayer, { content: null, embeds: [endEmbed], components: [row] });
       return;
     }
@@ -16868,6 +16886,65 @@ async function startManualBattleOnline(interaction, user) {
   const friendId = String(duel.friendId || '').trim();
   if (!friendId) {
     await interaction.reply({ content: '❌ 找不到好友對戰對象。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  // 若好友已先建立等待中的線上房間，直接加入對方房間，避免雙方各自開房卡住。
+  const rivalHost = getOnlineFriendDuelHostPlayer(friendId);
+  const rivalOnline = getOnlineFriendDuelState(rivalHost);
+  if (
+    rivalHost &&
+    rivalOnline &&
+    rivalOnline.awaitingRival &&
+    String(rivalOnline.rivalId || '').trim() === String(player.id || '').trim()
+  ) {
+    rivalHost.battleState.mode = 'manual_online';
+    ensureBattleEnergyState(rivalHost);
+    rivalOnline.awaitingRival = false;
+    rivalOnline.deadlineAt = Date.now() + FRIEND_DUEL_ONLINE_TURN_MS;
+    rivalOnline.turn = Math.max(1, Number(rivalHost?.battleState?.turn || rivalOnline.turn || 1));
+    rivalOnline.choices = {};
+    rivalOnline.resolving = false;
+    CORE.savePlayer(rivalHost);
+    scheduleOnlineFriendDuelTimer(rivalHost);
+
+    const rivalFallbackPet = PET.loadPet(String(rivalHost.id || '').trim());
+    const rivalPetResolved = resolvePlayerMainPet(rivalHost, { preferBattle: true, fallbackPet: rivalFallbackPet });
+    const rivalPet = rivalPetResolved?.pet || rivalFallbackPet;
+    if (rivalPetResolved?.changed) CORE.savePlayer(rivalHost);
+    const payload = buildOnlineFriendDuelPayload(rivalHost, rivalPet, {
+      notice: `✅ ${player.name} 已加入即時戰鬥，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
+    });
+    const duelMsg = await editOnlineFriendDuelMessage(rivalHost, payload);
+
+    player.battleState.mode = 'manual_online';
+    if (player?.battleState?.friendDuel?.online) {
+      const oldRoomId = String(player.battleState.friendDuel.online.roomId || '').trim();
+      if (oldRoomId) clearOnlineFriendDuelTimer(oldRoomId);
+      delete player.battleState.friendDuel.online;
+    }
+    CORE.savePlayer(player);
+
+    const rows = [];
+    if (duelMsg?.url) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setStyle(ButtonStyle.Link).setURL(duelMsg.url).setLabel('🌐 前往即時戰鬥面板')
+        )
+      );
+    }
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel('↩️ 返回').setStyle(ButtonStyle.Secondary)
+      )
+    );
+    await interaction.update({
+      content: `✅ 已自動加入 ${String(rivalHost.name || '好友').trim() || '好友'} 的即時戰鬥房。`,
+      embeds: [],
+      components: rows
+    }).catch(async () => {
+      await interaction.reply({ content: '✅ 已自動加入好友的即時戰鬥房。', ephemeral: true }).catch(() => {});
+    });
     return;
   }
 
@@ -16943,6 +17020,47 @@ async function handleOnlineFriendDuelChoice(interaction, user, customId = '') {
       return;
     }
     if (!actorIsRival) {
+      // 若發生雙方各自開房（雙等待房），允許主機端一鍵合併到對手房，避免卡死。
+      const mirrorHost = getOnlineFriendDuelHostPlayer(rivalId);
+      const mirrorOnline = getOnlineFriendDuelState(mirrorHost);
+      if (
+        mirrorHost &&
+        mirrorOnline &&
+        mirrorOnline.awaitingRival &&
+        String(mirrorOnline.rivalId || '').trim() === hostId
+      ) {
+        await interaction.deferUpdate().catch(() => {});
+
+        mirrorHost.battleState.mode = 'manual_online';
+        ensureBattleEnergyState(mirrorHost);
+        mirrorOnline.awaitingRival = false;
+        mirrorOnline.deadlineAt = Date.now() + FRIEND_DUEL_ONLINE_TURN_MS;
+        mirrorOnline.turn = Math.max(1, Number(mirrorHost?.battleState?.turn || mirrorOnline.turn || 1));
+        mirrorOnline.choices = {};
+        mirrorOnline.resolving = false;
+        CORE.savePlayer(mirrorHost);
+        scheduleOnlineFriendDuelTimer(mirrorHost);
+
+        const staleRoomId = String(online.roomId || '').trim();
+        if (staleRoomId) clearOnlineFriendDuelTimer(staleRoomId);
+        if (hostPlayer?.battleState?.friendDuel?.online) {
+          delete hostPlayer.battleState.friendDuel.online;
+        }
+        CORE.savePlayer(hostPlayer);
+
+        const mirrorFallbackPet = PET.loadPet(String(mirrorHost.id || '').trim());
+        const mirrorPetResolved = resolvePlayerMainPet(mirrorHost, { preferBattle: true, fallbackPet: mirrorFallbackPet });
+        const mirrorPet = mirrorPetResolved?.pet || mirrorFallbackPet;
+        if (mirrorPetResolved?.changed) CORE.savePlayer(mirrorHost);
+        const payload = buildOnlineFriendDuelPayload(mirrorHost, mirrorPet, {
+          notice: `✅ 已自動合併雙等待房，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
+        });
+        const duelMsg = await editOnlineFriendDuelMessage(mirrorHost, payload);
+        const jump = duelMsg?.url ? `\n請前往面板：${duelMsg.url}` : '';
+        await interaction.followUp({ content: `✅ 已自動合併到對手房間。${jump}`, ephemeral: true }).catch(() => {});
+        return;
+      }
+
       await interaction.reply({ content: '⚠️ 只有對手可以按「加入即時戰鬥」。', ephemeral: true }).catch(() => {});
       return;
     }
@@ -17210,9 +17328,7 @@ async function startAutoBattle(interaction, user) {
           { name: '🤝 對手', value: duel.rivalName, inline: true },
           { name: '🩸 戰後 HP', value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await interaction.update({ embeds: [embed], content: null, components: [row] });
       return;
     }
@@ -17227,9 +17343,7 @@ async function startAutoBattle(interaction, user) {
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
           { name: '🩸 戰後 HP', value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await interaction.update({ embeds: [embed], content: null, components: [row] });
       return;
     }
@@ -17448,9 +17562,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: '🤝 對手', value: duel.rivalName, inline: true },
           { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
@@ -17464,9 +17576,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
           { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
@@ -17611,9 +17721,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: '🤝 對手', value: duel.rivalName, inline: true },
           { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
       return;
     }
@@ -17627,9 +17735,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
           { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
       return;
     }
@@ -17789,9 +17895,7 @@ async function handleBattleWait(interaction, user) {
           { name: '🤝 對手', value: duel.rivalName, inline: true },
           { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
@@ -17805,9 +17909,7 @@ async function handleBattleWait(interaction, user) {
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
           { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
       return;
     }
@@ -17951,9 +18053,7 @@ async function handleBattleWait(interaction, user) {
           { name: '🤝 對手', value: duel.rivalName, inline: true },
           { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
         );
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, 'edit');
       return;
     }
@@ -18040,9 +18140,7 @@ async function handleBattleWait(interaction, user) {
         .setTitle('🤝 好友友誼戰落敗')
         .setColor(0x8b5cf6)
         .setDescription(`${combinedMessage || ''}\n\n${duel.summaryLine}`.trim());
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
-      );
+      const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
       return;
     }
