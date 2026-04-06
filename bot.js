@@ -16782,6 +16782,49 @@ function buildDualActionPanelsMobile(actionView = {}, options = {}) {
   );
 }
 
+function buildBattleMobileCombinedLayout(enemy, combatant, state, actionView = {}) {
+  const enemyElement = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
+  const allyElement = combatant?.isHuman
+    ? '🧍 無屬性'
+    : formatBattleElementDisplay(combatant?.type || combatant?.element || '');
+  const relationText = getBattleElementRelation(
+    combatant?.isHuman ? '' : (combatant?.type || combatant?.element || ''),
+    resolveEnemyBattleElement(enemy)
+  ).text;
+  const turn = Number(state?.turn || 1);
+  const energy = Number(state?.energy || 0);
+
+  const ally = actionView?.ally || {};
+  const enemyAction = actionView?.enemy || {};
+  const enemyMove = enemyAction?.pending ? '（準備中...）' : (enemyAction?.move || '（尚未行動）');
+  const allyMove = ally?.pending ? '（準備中...）' : (ally?.move || '（尚未行動）');
+  const enemyDamage = Number.isFinite(Number(enemyAction?.damage)) ? format1(Math.max(0, Number(enemyAction.damage))) : '—';
+  const allyDamage = Number.isFinite(Number(ally?.damage)) ? format1(Math.max(0, Number(ally.damage))) : '—';
+  const enemyExtra = enemyAction?.pending ? '—' : (enemyAction?.extra || '無');
+  const allyExtra = ally?.pending ? '—' : (ally?.extra || '無');
+
+  return (
+    `第 ${turn} 回合\n` +
+    `👹 敵方：${enemy?.name || '敵人'}\n` +
+    `屬性：${enemyElement}\n` +
+    `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ATK：${format1(enemy?.attack || 0)}\n` +
+    `【敵方行動】\n` +
+    `招式：${enemyMove}\n` +
+    `對我造成：${enemyDamage}\n` +
+    `附加：${enemyExtra}\n` +
+    `--------------------------------\n` +
+    `🐾 我方：${combatant?.name || '我方'}\n` +
+    `屬性：${allyElement}\n` +
+    `${relationText}\n` +
+    `HP：${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}\n` +
+    `⚡ 能量：${energy}（每回 +2，可結轉）\n` +
+    `【我方行動】\n` +
+    `招式：${allyMove}\n` +
+    `對敵造成：${allyDamage}\n` +
+    `附加：${allyExtra}`
+  );
+}
+
 function buildActionViewFromPhase(playerPhase = null, enemyPhase = null, options = {}) {
   const enemyPending = Boolean(options?.enemyPending);
   return {
@@ -16934,12 +16977,13 @@ function buildManualBattlePayload(player, pet, options = {}) {
   const dmgInfo = buildBattleMoveDetails(player, pet, combatant);
   const fighterLabel = combatant.isHuman ? `🧍 ${combatant.name}` : `🐾 ${combatant.name}`;
   const layoutMode = getBattleLayoutMode(player);
+  const actionView = options?.actionView || {};
   const board = layoutMode === 'mobile'
-    ? buildManualBattleBoardMobile(enemy, combatant, state)
+    ? buildBattleMobileCombinedLayout(enemy, combatant, state, actionView)
     : buildManualBattleBoard(enemy, combatant, state);
   const actionPanels = layoutMode === 'mobile'
-    ? buildDualActionPanelsMobile(options?.actionView || {}, { allyName: combatant?.name || '我方' })
-    : buildDualActionPanels(options?.actionView || {});
+    ? ''
+    : buildDualActionPanels(actionView);
   const statusLines = []
     .concat(Array.isArray(options?.turnStartLines) ? options.turnStartLines : [])
     .concat(Array.isArray(options?.extraLines) ? options.extraLines : []);
@@ -16951,7 +16995,7 @@ function buildManualBattlePayload(player, pet, options = {}) {
   return {
     content:
       `⚔️ **戰鬥中：${fighterLabel} vs ${enemy.name}**\n` +
-      `${board}\n\n${actionPanels}` +
+      `${board}${actionPanels ? `\n\n${actionPanels}` : ''}` +
       `${statusText}` +
       `${noticeLine}` +
       `\n**招式：**\n${dmgInfo}`,
@@ -17362,12 +17406,13 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
   const deadlineAt = Math.max(Date.now() + 1000, Number(online?.deadlineAt || Date.now() + FRIEND_DUEL_ONLINE_TURN_MS));
   const remainSec = Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000));
   const layoutMode = getOnlineBattleLayoutMode(online);
+  const actionView = options?.actionView || buildOnlineFriendDuelActionView(null);
   const board = layoutMode === 'mobile'
-    ? buildManualBattleBoardMobile(enemy, combatant, state)
+    ? buildBattleMobileCombinedLayout(enemy, combatant, state, actionView)
     : buildManualBattleBoard(enemy, combatant, state);
   const actionPanels = layoutMode === 'mobile'
-    ? buildDualActionPanelsMobile(options?.actionView || buildOnlineFriendDuelActionView(null))
-    : buildDualActionPanels(options?.actionView || buildOnlineFriendDuelActionView(null));
+    ? ''
+    : buildDualActionPanels(actionView);
   const roundSummary = String(options?.roundSummary || '').trim();
   const notice = String(options?.notice || '').trim();
   const summaryBlock = roundSummary ? `\n📜 本回合結算：\n${roundSummary}\n` : '';
@@ -17411,8 +17456,7 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
     `⏳ 本回合倒數：${remainSec} 秒（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）\n` +
     `⚡ 能量：${hostName} ${hostEnergy} ｜ ${rivalName} ${rivalEnergy}\n` +
     `${readyText}\n` +
-    `${board}\n\n` +
-    `${actionPanels}` +
+    `${board}${actionPanels ? `\n\n${actionPanels}` : ''}` +
     `${summaryBlock}` +
     `${noticeBlock ? `\n${noticeBlock}\n` : ''}` +
     `\n**招式：**\n${formatOnlineHostMoveDetails(hostMoves, combatant, enemy, hostEnergy)}\n` +
