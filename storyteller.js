@@ -1828,8 +1828,11 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
       : (
         String(location || '').trim() === String(missionInfo.npcLocation || '').trim()
           ? `本區關鍵任務未完成：你現在就在唯一來源城市，可鋪陳接觸「${missionInfo.npcName}」，但證據「${missionInfo.evidenceName}」只能由他交付。`
-          : `本區關鍵任務未完成：證據「${missionInfo.evidenceName}」唯一來源是 ${missionInfo.npcLocation} 的 ${missionInfo.npcName}，本回合不可寫成已取得。`
+          : `本區關鍵任務未完成：證據「${missionInfo.evidenceName}」唯一來源是 ${missionInfo.npcLocation} 的 ${missionInfo.npcName}，本回合不可寫成已取得；且敘事必須自然引導玩家往「${missionInfo.npcLocation}」移動（透過在地口供/地標/路徑線索）。`
       ))
+    : '';
+  const missionMoveGuidance = missionInfo && !missionInfo.keyFound && missionInfo.regionId !== 'island_routes'
+    ? `關鍵NPC導引：${missionInfo.npcName}@${missionInfo.npcLocation}（未完成）。本段至少一次讓玩家明確知道「下一步要往該城市靠近」。`
     : '';
   const mainStoryBrief = MAIN_STORY.getMainStoryBrief(player);
   const loreSnippet = WORLD_LORE.getLorePromptSnippet({ revealRivalName, newbieDeception: newbieMask });
@@ -1983,6 +1986,7 @@ ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
 ${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
 ${truthGatePrompt ? `\n${truthGatePrompt}` : ''}
 ${missionNarrativeRule ? `\n【關鍵任務敘事規則】\n${missionNarrativeRule}` : ''}
+${missionMoveGuidance ? `\n【關鍵NPC移動導引】\n${missionMoveGuidance}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationInstruction ? `\n【導航約束】\n${navigationInstruction}` : ''}
 ${openingBeatSection}
@@ -2175,7 +2179,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
       }
       return `你已在任務城市（第${missionCityTurns}回合）：本回合至少 1 個選項可直接接觸「${missionInfo.npcName}」或其代理人；仍不可直接寫成已取得「${missionInfo.evidenceName}」。`;
     }
-    return `你尚未到任務城市：本回合至少 1 個選項要透過在地線索把路徑推向「${missionInfo.npcLocation}」，不可在當地直接拿到「${missionInfo.evidenceName}」。`;
+    return `你尚未到任務城市：本回合至少 1 個選項要透過在地線索把路徑推向「${missionInfo.npcLocation}」，並讓玩家看得懂「下一步應往該城市移動」；不可在當地直接拿到「${missionInfo.evidenceName}」。`;
   })();
   const missionChoiceRule = missionInfo && !missionInfo.keyFound
     ? missionApproachRule
@@ -2186,6 +2190,19 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const storyFocus = buildStoryFocusForChoices(previousStory || '');
   const fullStoryText = String(previousStory || '').trim();
   const sourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
+  const pendingConflict = player?.pendingConflictFollowup && typeof player.pendingConflictFollowup === 'object'
+    ? player.pendingConflictFollowup
+    : null;
+  const currentTurn = Math.max(0, Number(player?.storyTurns || 0));
+  const pendingConflictActive = Boolean(
+    pendingConflict?.active &&
+    currentTurn >= Number(pendingConflict?.triggerTurn || 0) &&
+    currentTurn <= Number(pendingConflict?.expireTurn || 0)
+  );
+  const pendingConflictName = String(pendingConflict?.displayName || '').trim();
+  const pendingConflictRule = pendingConflictActive
+    ? `你在上一輪採取了激進行動，衝突必須延續：本回合 5 個選項中，至少 1 個要直接對上「${pendingConflictName || '剛才出現的人'}」並可立刻進入戰鬥；不可改寫成匿名敵人或系統詞。`
+    : '';
   const recentChoiceText = Array.isArray(player?.recentChoiceHistory)
     ? player.recentChoiceHistory
       .slice(-5)
@@ -2241,6 +2258,7 @@ ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
 ${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
 ${truthGatePrompt ? `\n${truthGatePrompt}` : ''}
 ${missionChoiceRule ? `\n【關鍵任務選項規則】\n${missionChoiceRule}` : ''}
+${pendingConflictRule ? `\n【衝突延續硬規則】\n${pendingConflictRule}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationTarget ? `\n【導航約束】\n玩家已在地圖設定導航目標「${navigationTarget}」，至少 1 個選項必須是朝該地點推進的具體行動。` : ''}
 
@@ -2289,6 +2307,7 @@ ${anchorText}
 19. 若通緝熱度偏高，5 個選項中最多只允許 1 個「敵對主動逼近/立即戰鬥」類，其餘需維持調查、移動、社交或交易分散度
 20. 若故事已明確提到有人手持/背著封存艙，可允許其中 1 個選項走「直接搶奪封存艙」高風險路線（可進入戰鬥），但文句必須貼合當下人物與場景，不可模板化
 21. 封存艙一律視為便攜小型艙體（約小背包大小），不得描寫成人體尺寸或大型艙體
+${pendingConflictRule ? `22. ${pendingConflictRule}` : ''}
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗
