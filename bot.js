@@ -1050,7 +1050,7 @@ async function startFriendDuel(interaction, user, friendId = '') {
       `**友誼戰即將開始！**\n\n` +
       `對手：${enemy.name}\n` +
       `🏷️ 敵方屬性：${enemyElementText}\n` +
-      `❤️ 對手 HP：${enemy.hp}/${enemy.maxHp}\n` +
+      `❤️ 對手 HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)}\n` +
       `⚔️ 對手攻擊：${enemy.attack}\n` +
       `${fighterLabel} 出戰\n` +
       `🏷️ 我方屬性：${allyElementText}\n` +
@@ -6231,7 +6231,19 @@ async function showClaimPetElementPanel(interaction, user, notice = '') {
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Secondary)
   );
-  await interaction.update({ embeds: [embed], content: null, components: [row1, row2] });
+  const payload = { embeds: [embed], content: null, components: [row1, row2] };
+  try {
+    await updateInteractionMessage(interaction, payload);
+  } catch (err) {
+    console.error('[ClaimPet] show panel update failed:', err?.message || err);
+    if (interaction?.message?.edit) {
+      const edited = await interaction.message.edit(payload).then(() => true).catch(() => false);
+      if (edited) return;
+    }
+    if (interaction?.channel?.send) {
+      await interaction.channel.send(payload).catch(() => {});
+    }
+  }
 }
 
 async function showClaimPetNameModal(interaction, element = '水') {
@@ -9252,6 +9264,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const isShopFlowButton = customId.startsWith('shop_');
     const isPetFlowButton =
       customId === 'show_moves' ||
+      customId === 'claim_new_pet_start' ||
+      customId.startsWith('moves_page_') ||
       customId.startsWith('set_main_pet_') ||
       customId.startsWith('alloc_hp_');
     const isInventoryFlowButton =
@@ -10365,7 +10379,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
           `**友誼戰即將開始！**\n\n` +
           `對手：${enemy.name}\n` +
           `🏷️ 敵方屬性：${enemyElementText}\n` +
-          `❤️ 對手 HP：${enemy.hp}/${enemy.maxHp}\n` +
+          `❤️ 對手 HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)}\n` +
           `⚔️ 對手攻擊：${enemy.attack}\n` +
           `🐾 ${pet.name} 出戰\n` +
           `🏷️ 我方屬性：${allyElementText}\n` +
@@ -13122,7 +13136,19 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     components.push(row);
   }
   components.push(rowButtons);
-  await interaction.update({ embeds: [embed], content: null, components });
+  const payload = { embeds: [embed], content: null, components };
+  try {
+    await updateInteractionMessage(interaction, payload);
+  } catch (err) {
+    console.error('[Moves] show list update failed:', err?.message || err);
+    if (interaction?.message?.edit) {
+      const edited = await interaction.message.edit(payload).then(() => true).catch(() => false);
+      if (edited) return;
+    }
+    if (interaction?.channel?.send) {
+      await interaction.channel.send(payload).catch(() => {});
+    }
+  }
 }
 
 function recordCashflow(player, entry = {}) {
@@ -16111,7 +16137,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         `**戰鬥即將開始！**\n\n${player.currentStory}\n\n` +
         `👹 敵人：**${enemy.name}**\n` +
         `🏷️ 敵方屬性：${enemyElementText}\n` +
-        `❤️ 敵方 HP：${enemy.hp}/${enemy.maxHp}\n` +
+        `❤️ 敵方 HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)}\n` +
         `⚔️ 敵方攻擊：${enemy.attack}\n` +
         `${enemyPetLine}` +
         `${fighterLabel} 出戰\n` +
@@ -16719,6 +16745,10 @@ function padBattleLabel(text = '', width = 16) {
   return raw + ' '.repeat(width - raw.length);
 }
 
+function formatBattleHpValue(value, fallback = 0) {
+  return format1(value, fallback);
+}
+
 function buildManualBattleBoard(enemy, combatant, state) {
   const enemyName = padBattleLabel(enemy?.name || '敵人', 14);
   const allyName = padBattleLabel(combatant?.name || '我方', 14);
@@ -16730,8 +16760,8 @@ function buildManualBattleBoard(enemy, combatant, state) {
     combatant?.isHuman ? '' : (combatant?.type || combatant?.element || ''),
     resolveEnemyBattleElement(enemy)
   ).text.replace(/^([^\s]+\s)/u, '');
-  const enemyHp = `${enemy?.hp || 0}/${enemy?.maxHp || 0}`;
-  const allyHp = `${combatant?.hp || 0}/${combatant?.maxHp || 0}`;
+  const enemyHp = `${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)}`;
+  const allyHp = `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`;
   const turn = Number(state?.turn || 1);
   const energy = Number(state?.energy || 0);
   const roundText = `第 ${turn} 回合`;
@@ -16770,11 +16800,11 @@ function buildManualBattleBoardMobile(enemy, combatant, state) {
     `第 ${turn} 回合\n` +
     `👹 敵方：${enemy?.name || '敵人'}\n` +
     `屬性：${enemyElement}\n` +
-    `HP：${enemy?.hp || 0}/${enemy?.maxHp || 0} ｜ ATK：${enemy?.attack || 0}\n\n` +
+    `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ATK：${format1(enemy?.attack || 0)}\n\n` +
     `🐾 我方：${combatant?.name || '我方'}\n` +
     `屬性：${allyElement}\n` +
     `${relationText}\n` +
-    `HP：${combatant?.hp || 0}/${combatant?.maxHp || 0}\n` +
+    `HP：${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}\n` +
     `⚡ 能量：${energy}（每回 +2，可結轉）`
   );
 }
@@ -18079,7 +18109,7 @@ async function startAutoBattle(interaction, user) {
         .setDescription(`**AI 已完成好友友誼戰**\n\n${detail}\n\n${duel.summaryLine}`)
         .addFields(
           { name: '🤝 對手', value: duel.rivalName, inline: true },
-          { name: '🩸 戰後 HP', value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: '🩸 戰後 HP', value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await interaction.update({ embeds: [embed], content: null, components: [row] });
@@ -18094,7 +18124,7 @@ async function startAutoBattle(interaction, user) {
         .setDescription(`**AI 已完成友誼賽**\n\n${detail}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: '🩸 戰後 HP', value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: '🩸 戰後 HP', value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await interaction.update({ embeds: [embed], content: null, components: [row] });
@@ -18151,7 +18181,7 @@ async function startAutoBattle(interaction, user) {
       .setDescription(`**AI 已完成自動作戰**\n\n${buildAIBattleStory(rounds, combatant, enemy, finalResult)}`)
       .addFields(
         { name: '💰 獎勵', value: `${finalResult.gold} Rns 代幣`, inline: true },
-        { name: '🩸 剩餘 HP', value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: '🩸 剩餘 HP', value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
 
@@ -18327,7 +18357,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setDescription(`${playerPhase.message}\n\n${duel.summaryLine}`)
         .addFields(
           { name: '🤝 對手', value: duel.rivalName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
@@ -18341,7 +18371,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setDescription(`${playerPhase.message}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
@@ -18398,7 +18428,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       .setDescription(playerPhase.message)
       .addFields(
         { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
-        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     
@@ -18509,7 +18539,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setDescription(`${combinedMessage}\n\n${duel.summaryLine}`)
         .addFields(
           { name: '🤝 對手', value: duel.rivalName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
@@ -18523,7 +18553,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setDescription(`${combinedMessage}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
@@ -18580,7 +18610,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       .setDescription(combinedMessage)
       .addFields(
         { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
-        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
@@ -18706,7 +18736,7 @@ async function handleBattleWait(interaction, user) {
         .setDescription(`${playerPhase.message}\n\n${duel.summaryLine}`)
         .addFields(
           { name: '🤝 對手', value: duel.rivalName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
@@ -18720,7 +18750,7 @@ async function handleBattleWait(interaction, user) {
         .setDescription(`${playerPhase.message}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
@@ -18776,7 +18806,7 @@ async function handleBattleWait(interaction, user) {
       .setDescription(`${playerPhase.message}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
       .addFields(
         { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
-        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
@@ -18887,7 +18917,7 @@ async function handleBattleWait(interaction, user) {
         .setDescription(`${combinedMessage}\n\n${duel.summaryLine}`)
         .addFields(
           { name: '🤝 對手', value: duel.rivalName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
       await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, 'edit');
@@ -18901,7 +18931,7 @@ async function handleBattleWait(interaction, user) {
         .setDescription(`${combinedMessage}\n\n${mentorVictory.learnLine}`)
         .addFields(
           { name: '🎖️ 導師', value: mentorVictory.mentorName, inline: true },
-          { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true }
+          { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
@@ -18959,7 +18989,7 @@ async function handleBattleWait(interaction, user) {
       .setDescription(`${combinedMessage}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
       .addFields(
         { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
-        { name: t('hp', uiLang), value: `${combatant.hp}/${combatant.maxHp}`, inline: true },
+        { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
         { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
