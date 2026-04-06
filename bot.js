@@ -919,10 +919,18 @@ function finalizeFriendDuel(player, pet, combatant, detailText = '', didWin = fa
 }
 
 async function startFriendDuel(interaction, user, friendId = '') {
+  const replyEphemeral = async (content = '') => {
+    if (interaction?.deferred || interaction?.replied) {
+      await interaction.followUp({ content, ephemeral: true }).catch(() => {});
+      return;
+    }
+    await interaction.reply({ content, ephemeral: true }).catch(() => {});
+  };
+
   const challenger = CORE.loadPlayer(user.id);
   const targetId = normalizeFriendId(friendId);
   if (!challenger || !targetId) {
-    await interaction.reply({ content: '❌ 無法發起友誼戰。', ephemeral: true }).catch(() => {});
+    await replyEphemeral('❌ 無法發起友誼戰。');
     return;
   }
   const social = ensurePlayerFriendState(challenger);
@@ -960,7 +968,7 @@ async function startFriendDuel(interaction, user, friendId = '') {
   const targetPet = targetPetResolved?.pet || targetPetFallback;
   if (targetPetResolved?.changed) CORE.savePlayer(targetPlayer);
   if (!myPet || !myPet.hatched) {
-    await interaction.reply({ content: '⚠️ 你尚未完成寵物孵化，無法友誼戰。', ephemeral: true }).catch(() => {});
+    await replyEphemeral('⚠️ 你尚未完成寵物孵化，無法友誼戰。');
     return;
   }
   if (!targetPet || !targetPet.hatched) {
@@ -998,7 +1006,7 @@ async function startFriendDuel(interaction, user, friendId = '') {
     maxHp: Math.max(1, Number(myPet?.maxHp || myPet?.hp || 100)),
     status: {}
   };
-  const estimate = estimateBattleOutcome(challenger, myDuelPetPreview, enemy, fighterType);
+  const estimate = estimateBattleOutcome(challenger, myDuelPetPreview, enemy, fighterType, { simulationCount: 24 });
   const fighterLabel = fighterType === 'pet'
     ? `🐾 ${myPet.name}`
     : `🧍 ${challenger.name}(ATK 10)`;
@@ -1068,7 +1076,7 @@ async function startFriendDuel(interaction, user, friendId = '') {
     new ButtonBuilder().setCustomId('battle_mode_manual').setLabel('⚔️ 手動模式').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 AI戰鬥').setStyle(ButtonStyle.Primary)
   );
-  await interaction.update({ embeds: [embed], components: [row] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
 async function showFriendManualModePicker(interaction, user) {
@@ -1215,7 +1223,7 @@ async function showFriendAddModal(interaction) {
 async function showFriendsMenu(interaction, user, notice = '') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] }).catch(() => {});
     return;
   }
   const social = ensurePlayerFriendState(player);
@@ -1298,13 +1306,13 @@ async function showFriendsMenu(interaction, user, notice = '') {
     );
   }
 
-  await interaction.update({ embeds: [embed], components: rows });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
 }
 
 async function showFriendCharacter(interaction, user, friendId = '') {
   const viewer = CORE.loadPlayer(user.id);
   if (!viewer) {
-    await interaction.update({ content: '❌ 找不到角色！', embeds: [], components: [] }).catch(() => {});
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', embeds: [], components: [] }).catch(() => {});
     return;
   }
   ensurePlayerFriendState(viewer);
@@ -1347,7 +1355,7 @@ async function showFriendCharacter(interaction, user, friendId = '') {
     new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 返回好友').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel('🔙 返回主選單').setStyle(ButtonStyle.Secondary)
   );
-  await interaction.update({ embeds: [embed], components: [row] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
 async function rejectIfNotThreadOwner(interaction, userId) {
@@ -6718,7 +6726,7 @@ function simulateBattleOnceForEstimate(player, pet, enemy, fighterType = null) {
   };
 }
 
-function estimateBattleOutcome(player, pet, enemy, fighterType = null) {
+function estimateBattleOutcome(player, pet, enemy, fighterType = null, options = {}) {
   const resolvedType = fighterType || getBattleFighterType(player, pet);
   const combatant = resolvedType === 'player' ? buildHumanCombatant(player) : getActiveCombatant(player, pet);
   const moves = getCombatantMoves(combatant, pet);
@@ -6736,7 +6744,10 @@ function estimateBattleOutcome(player, pet, enemy, fighterType = null) {
     };
   }
 
-  const simulationCount = BATTLE_ESTIMATE_SIMULATIONS;
+  const requestedSimulationCount = Number(options?.simulationCount);
+  const simulationCount = Number.isFinite(requestedSimulationCount)
+    ? Math.max(12, Math.min(BATTLE_ESTIMATE_SIMULATIONS, Math.floor(requestedSimulationCount)))
+    : BATTLE_ESTIMATE_SIMULATIONS;
   let wins = 0;
   let totalPlayerDamage = 0;
   let totalEnemyDamage = 0;
@@ -10106,7 +10117,23 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   if (customId.startsWith('friend_duel_')) {
     const targetId = customId.replace('friend_duel_', '').trim();
-    await startFriendDuel(interaction, user, targetId);
+    await interaction.deferUpdate().catch(() => {});
+    try {
+      await startFriendDuel(interaction, user, targetId);
+    } catch (err) {
+      console.error('[FriendDuel] start failed:', err?.message || err);
+      const player = CORE.loadPlayer(user.id);
+      if (player?.battleState) {
+        const previousOnlineRoomId = String(player?.battleState?.friendDuel?.online?.roomId || '').trim();
+        if (previousOnlineRoomId) clearOnlineFriendDuelTimer(previousOnlineRoomId);
+        player.battleState = null;
+        CORE.savePlayer(player);
+      }
+      await interaction.followUp({
+        content: '⚠️ 友誼戰啟動失敗，已重置舊對戰狀態。請再按一次「發起友誼戰」。',
+        ephemeral: true
+      }).catch(() => {});
+    }
     return;
   }
 
@@ -10403,7 +10430,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
         return;
       }
       if (petResolved?.changed) CORE.savePlayer(player);
-      const estimate = estimateBattleOutcome(player, pet, enemy, player?.battleState?.fighter || 'pet');
+      const estimate = estimateBattleOutcome(player, pet, enemy, player?.battleState?.fighter || 'pet', { simulationCount: 24 });
       const enemyElementText = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
       const allyElementText = formatBattleElementDisplay(pet?.type || pet?.element || '');
       const relationText = getBattleElementRelation(
