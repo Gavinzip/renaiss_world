@@ -97,6 +97,7 @@ try {
 const TEXT = {
   'zh-TW': {
     welcome: '歡迎來到 Renaiss 星球！',
+    welcomeBack: '你回來了！繼續你的冒險吧！',
     choosePath: '選擇你的道路',
     journey: 'Renaiss 星球探險之旅',
     continue: '➡️ 繼續',
@@ -118,6 +119,7 @@ const TEXT = {
   },
   'zh-CN': {
     welcome: '欢迎来到 Renaiss 星球！',
+    welcomeBack: '你回来了！继续你的冒险吧！',
     choosePath: '选择你的道路',
     journey: 'Renaiss 星球探险之旅',
     continue: '➡️ 继续',
@@ -139,6 +141,7 @@ const TEXT = {
   },
   en: {
     welcome: 'Welcome to Renaiss Planet!',
+    welcomeBack: 'Welcome back! Continue your adventure!',
     choosePath: 'Choose Your Path',
     journey: 'Renaiss Adventure Journey',
     continue: '➡️ Continue',
@@ -1453,6 +1456,87 @@ async function disableMessageComponents(channel, messageId) {
 async function lockPressedButtonImmediately(interaction) {
   if (!interaction?.isButton?.() || !interaction.message?.id) return;
   await disableMessageComponents(interaction.channel, interaction.message.id);
+}
+
+function isModalLauncherButtonId(customId = '') {
+  const cid = String(customId || '').trim();
+  if (!cid) return false;
+  return (
+    cid === 'open_wallet_modal' ||
+    cid === 'open_profile' ||
+    cid === 'open_character' ||
+    cid === 'open_friends' ||
+    cid === 'open_settings' ||
+    cid === 'open_gacha' ||
+    cid === 'main_menu' ||
+    cid === 'open_friend_add_modal' ||
+    cid === 'sync_wallet_now' ||
+    cid.startsWith('claim_new_pet_element_')
+  );
+}
+
+function snapshotMessageComponentsForRestore(message) {
+  if (!message || !Array.isArray(message.components)) return [];
+  return message.components
+    .map((row) => {
+      try {
+        return typeof row?.toJSON === 'function' ? row.toJSON() : row;
+      } catch {
+        return null;
+      }
+    })
+    .filter((row) => row && Array.isArray(row.components) && row.components.length > 0);
+}
+
+function createButtonInteractionTemplateContext(interaction, customId = '') {
+  const context = {
+    enabled: false,
+    restored: false,
+    customId: String(customId || '').trim(),
+    messageId: String(interaction?.message?.id || '').trim(),
+    snapshot: []
+  };
+  if (!interaction?.isButton?.() || !context.messageId) return context;
+  if (isModalLauncherButtonId(customId)) return context;
+  const snapshot = snapshotMessageComponentsForRestore(interaction.message);
+  if (!Array.isArray(snapshot) || snapshot.length <= 0) return context;
+  context.enabled = true;
+  context.snapshot = snapshot;
+  // 不阻塞主流程：按下後立刻隱藏，後續由成功流程重繪；失敗則回補。
+  lockPressedButtonImmediately(interaction).catch(() => {});
+  return context;
+}
+
+function attachButtonTemplateReplyAutoRestore(interaction, context) {
+  if (!interaction || !context?.enabled || context?._hooked) return;
+  context._hooked = true;
+  const wrapMethod = (methodName) => {
+    const original = interaction?.[methodName];
+    if (typeof original !== 'function') return;
+    interaction[methodName] = async (...args) => {
+      try {
+        return await original.apply(interaction, args);
+      } finally {
+        await restoreButtonTemplateSnapshot(interaction, context).catch(() => {});
+      }
+    };
+  };
+  wrapMethod('reply');
+  wrapMethod('followUp');
+}
+
+async function restoreButtonTemplateSnapshot(interaction, context) {
+  if (!context?.enabled || context?.restored) return false;
+  if (!Array.isArray(context.snapshot) || context.snapshot.length <= 0) return false;
+  const channel = interaction?.channel;
+  if (!channel) return false;
+  const messageId = String(context.messageId || interaction?.message?.id || '').trim();
+  if (!messageId) return false;
+  const msg = await findMessageInChannel(channel, messageId);
+  if (!msg) return false;
+  const ok = await msg.edit({ components: context.snapshot }).then(() => true).catch(() => false);
+  if (ok) context.restored = true;
+  return ok;
 }
 
 async function updateInteractionMessage(interaction, payload) {
@@ -9056,8 +9140,8 @@ async function handleStart(interaction, user) {
     }
     
     // 有存檔 → 在 thread 繼續遊戲
-    await thread.send({ 
-      content: `👋 <@${user.id}> 你回來了！繼續你的冒險吧！` 
+    await thread.send({
+      content: `👋 <@${user.id}> ${t('welcomeBack', player.language || 'zh-TW')}`
     });
     await sendMainMenuToThread(thread, player, pet, null);
     return;
@@ -9224,6 +9308,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton() && !interaction.isModalSubmit() && !interaction.isStringSelectMenu()) return;
   
   const { customId, user } = interaction;
+  let buttonTemplateContext = null;
   try {
     if (String(customId || '').startsWith('event_')) {
       console.log(
@@ -9248,73 +9333,10 @@ CLIENT.on('interactionCreate', async (interaction) => {
     }
   }
 
-  // 全域防重複點擊：按到按鈕就先把該訊息按鈕鎖住
+  // 全域按鈕模板：按下先隱藏；若失敗由 catch 自動回補原按鈕。
   if (interaction.isButton()) {
-    const isMapFlowButton =
-      customId === 'open_map' ||
-      customId === 'map_back_main' ||
-      customId === 'map_open_portal' ||
-      customId === 'map_open_device' ||
-      customId.startsWith('map_page_') ||
-      customId.startsWith('map_view_') ||
-      customId.startsWith('map_loc_') ||
-      customId.startsWith('portal_jump_') ||
-      customId.startsWith('device_jump_') ||
-      customId.startsWith('map_goto_');
-    const isShopFlowButton = customId.startsWith('shop_');
-    const isPetFlowButton =
-      customId === 'show_moves' ||
-      customId === 'claim_new_pet_start' ||
-      customId.startsWith('moves_page_') ||
-      customId.startsWith('set_main_pet_') ||
-      customId.startsWith('alloc_hp_');
-    const isInventoryFlowButton =
-      customId === 'show_inventory' ||
-      customId.startsWith('inv_page_') ||
-      customId === 'show_codex' ||
-      customId === 'show_codex_npc' ||
-      customId === 'show_codex_skill' ||
-      customId === 'show_finance_ledger' ||
-      customId === 'show_memory_audit' ||
-      customId === 'show_memory_recap' ||
-      customId.startsWith('pmkt_');
-    const isFriendOnlineBattleButton =
-      customId === 'battle_mode_manual_online' ||
-      customId.startsWith('fdonline_');
-    const isFriendFlowButton =
-      customId === 'open_friends' ||
-      customId === 'friend_refresh' ||
-      customId === 'open_friend_add_modal' ||
-      customId.startsWith('friend_') ||
-      customId === 'battle_mode_manual' ||
-      customId === 'battle_mode_manual_back' ||
-      customId === 'battle_mode_manual_offline' ||
-      customId === 'battle_mode_manual_online' ||
-      customId === 'battle_mode_ai';
-    // 這些按鈕會先開 modal；若使用者按右上角 X 取消，不應把原按鈕整排清空
-    const isModalLauncherButton =
-      customId === 'open_wallet_modal' ||
-      customId === 'open_profile' ||
-      customId === 'open_character' ||
-      customId === 'open_friends' ||
-      customId === 'open_settings' ||
-      customId === 'open_gacha' ||
-      customId === 'main_menu' ||
-      customId === 'open_friend_add_modal' ||
-      customId === 'sync_wallet_now' ||
-      customId.startsWith('claim_new_pet_element_');
-    if (
-      !isMapFlowButton &&
-      !isModalLauncherButton &&
-      !isShopFlowButton &&
-      !isPetFlowButton &&
-      !isInventoryFlowButton &&
-      !isFriendOnlineBattleButton &&
-      !isFriendFlowButton
-    ) {
-      // 不阻塞互動主流程，避免先鎖按鈕時超過 Discord 互動 3 秒時限
-      lockPressedButtonImmediately(interaction).catch(() => {});
-    }
+    buttonTemplateContext = createButtonInteractionTemplateContext(interaction, customId);
+    attachButtonTemplateReplyAutoRestore(interaction, buttonTemplateContext);
   }
 
   // ===== 招式配置下拉 =====
@@ -11127,9 +11149,13 @@ CLIENT.on('interactionCreate', async (interaction) => {
     } catch (_) {}
 
     try {
-      if (String(customId || '').startsWith('event_')) {
+      let recovered = false;
+      if (interaction?.isButton?.()) {
+        recovered = await restoreButtonTemplateSnapshot(interaction, buttonTemplateContext);
+      }
+      if (!recovered && String(customId || '').startsWith('event_')) {
         await tryRecoverEventButtonsAfterFailure(interaction, user?.id);
-      } else if (interaction?.isButton?.()) {
+      } else if (!recovered && interaction?.isButton?.()) {
         await tryRecoverMainMenuAfterFailure(interaction, user?.id);
       }
     } catch (_) {}
