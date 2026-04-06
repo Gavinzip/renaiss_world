@@ -8,7 +8,7 @@ const WORLD_LORE = {
       name: 'Renaiss',
       identity: '星域維運方',
       values: ['秩序', '信任', '穩定'],
-      leaders: ['Winchman', 'Tom', 'Harry', 'Kathy', 'Yuzu', 'Leslie'],
+      leaders: ['Winchman', 'Tom', 'Harry', 'Kathy', 'Ryan'],
       appraisalNetwork: '主鑑價網絡（全球）',
       appraisalScope: '提供跨區鑑定、回收、寄售與再流通，任何鑑定品皆可進站處理'
     },

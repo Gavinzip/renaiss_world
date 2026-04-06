@@ -9351,9 +9351,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (interaction.isButton()) {
     buttonTemplateContext = createButtonInteractionTemplateContext(interaction, customId);
     attachButtonTemplateReplyAutoRestore(interaction, buttonTemplateContext);
-    if (buttonTemplateContext?.enabled && buttonTemplateContext?.hidePromise) {
-      await buttonTemplateContext.hidePromise;
-    }
+    // 不阻塞互動回應，避免 3 秒逾時造成「互動處理失敗」。
+    buttonTemplateContext?.hidePromise?.catch(() => {});
   }
 
   // ===== 招式配置下拉 =====
@@ -13317,8 +13316,16 @@ async function showMemoryRecap(interaction, user) {
   const uiLang = getPlayerUILang(player);
   const tx = getMemoryRecapText(uiLang);
 
-  // 避免 3 秒互動超時
-  await interaction.deferUpdate().catch(() => {});
+  // 先即時更新成 loading，避免按鈕互動逾時。
+  const loadingEmbed = new EmbedBuilder()
+    .setTitle(tx.title)
+    .setColor(0x3b82f6)
+    .setDescription(tx.loading);
+  const loadingRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('open_profile').setLabel(tx.backProfile).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu).setStyle(ButtonStyle.Secondary)
+  );
+  await updateInteractionMessage(interaction, { embeds: [loadingEmbed], components: [loadingRow] }).catch(() => {});
 
   const currentStory = String(player?.currentStory || '').trim();
   const historyStories = Array.isArray(player?.generationHistory)
@@ -13338,7 +13345,7 @@ async function showMemoryRecap(interaction, user) {
       new ButtonBuilder().setCustomId('open_profile').setLabel(tx.backProfile).setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu).setStyle(ButtonStyle.Secondary)
     );
-    await interaction.editReply({ embeds: [emptyEmbed], components: [emptyRow] });
+    await updateInteractionMessage(interaction, { embeds: [emptyEmbed], components: [emptyRow] });
     return;
   }
 
@@ -13403,7 +13410,7 @@ async function showMemoryRecap(interaction, user) {
     new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu).setStyle(ButtonStyle.Secondary)
   );
 
-  await interaction.editReply({ embeds: [embed], components: [row] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
 function parseMarketTypeFromCustomId(customId = '', fallback = 'renaiss') {
@@ -16710,9 +16717,10 @@ function buildDualActionPanels(actionView = {}) {
   return `\`\`\`text\n${rows.join('\n')}\n\`\`\``;
 }
 
-function buildDualActionPanelsMobile(actionView = {}) {
+function buildDualActionPanelsMobile(actionView = {}, options = {}) {
   const ally = actionView?.ally || {};
   const enemy = actionView?.enemy || {};
+  const allyName = String(options?.allyName || '我方').trim();
   const allyMove = ally?.pending ? '（準備中...）' : (ally?.move || '（尚未行動）');
   const enemyMove = enemy?.pending ? '（準備中...）' : (enemy?.move || '（尚未行動）');
   const allyDamage = Number.isFinite(Number(ally?.damage)) ? format1(Math.max(0, Number(ally.damage))) : '—';
@@ -16720,14 +16728,16 @@ function buildDualActionPanelsMobile(actionView = {}) {
   const allyExtra = ally?.pending ? '—' : (ally?.extra || '無');
   const enemyExtra = enemy?.pending ? '—' : (enemy?.extra || '無');
   return (
-    `【我方行動】\n` +
-    `招式：${allyMove}\n` +
-    `對敵造成：${allyDamage}\n` +
-    `附加：${allyExtra}\n\n` +
     `【敵方行動】\n` +
     `招式：${enemyMove}\n` +
     `對我造成：${enemyDamage}\n` +
-    `附加：${enemyExtra}`
+    `附加：${enemyExtra}\n` +
+    `--------------------------------\n` +
+    `戰況更新：🐾 我方：${allyName}\n` +
+    `【我方行動】\n` +
+    `招式：${allyMove}\n` +
+    `對敵造成：${allyDamage}\n` +
+    `附加：${allyExtra}`
   );
 }
 
@@ -16887,7 +16897,7 @@ function buildManualBattlePayload(player, pet, options = {}) {
     ? buildManualBattleBoardMobile(enemy, combatant, state)
     : buildManualBattleBoard(enemy, combatant, state);
   const actionPanels = layoutMode === 'mobile'
-    ? buildDualActionPanelsMobile(options?.actionView || {})
+    ? buildDualActionPanelsMobile(options?.actionView || {}, { allyName: combatant?.name || '我方' })
     : buildDualActionPanels(options?.actionView || {});
   const statusLines = []
     .concat(Array.isArray(options?.turnStartLines) ? options.turnStartLines : [])

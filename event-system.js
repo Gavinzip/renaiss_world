@@ -464,8 +464,7 @@ const MASTERS = [
   { id: 'tom', name: '🧠 Tom', element: '策略', teaches: ['雷矢超載', '地脈衝撞', '堡壘力場'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長穩定局勢與戰場節奏' },
   { id: 'harry', name: '🛡️ Harry', element: '守御', teaches: ['堡壘力場', '熱盾回路', '再生矩陣'], price: 1600, region: 'Renaiss', desc: '副手之一，擅長反制與續戰' },
   { id: 'kathy', name: '✨ Kathy', element: '複合', teaches: ['風暴聚變', '日核裂解', '孢子刃雨'], price: 1400, region: 'Renaiss', desc: '核心幹部，精通爆發與連段' },
-  { id: 'yuzu', name: '🌊 Yuzu', element: '水木', teaches: ['潮汐奇點', '低溫衝擊', '再生矩陣'], price: 1400, region: 'Renaiss', desc: '核心幹部，擅長控場與回復' },
-  { id: 'leslie', name: '⚡ Leslie', element: '雷火', teaches: ['雷矢超載', '電漿盛放', '碎晶風暴'], price: 1500, region: 'Renaiss', desc: '核心幹部，高壓進攻與破防專家' },
+  { id: 'yuzu', name: '🌊 Ryan', element: '水木', teaches: ['潮汐奇點', '低溫衝擊', '再生矩陣'], price: 1400, region: 'Renaiss', desc: '核心幹部，擅長控場與回復' },
 
   // 注意：Digital 四巨頭是敵對壓力來源，不可拜訪導師。
 ];
