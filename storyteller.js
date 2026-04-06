@@ -881,9 +881,12 @@ async function injectStorageHeistChoice(choices, playerLang = 'zh-TW', location 
 
   const storySignals = options?.storySignals || {};
   const hasCarrierCue = Boolean(storySignals?.storageCarrier);
-  if (!hasCarrierCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
+  const hasSuspiciousTradeCue = Boolean(storySignals?.suspiciousTrade);
+  if (!hasCarrierCue && !hasSuspiciousTradeCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
   const hasThreatCueSignal = Boolean(storySignals?.threat);
-  const chance = hasThreatCueSignal ? 0.78 : 0.62;
+  const chance = hasCarrierCue
+    ? (hasThreatCueSignal ? 0.98 : 0.9)
+    : (hasThreatCueSignal ? 0.86 : 0.72);
   if (Math.random() > chance) return base.slice(0, CHOICE_OUTPUT_COUNT);
 
   let heistChoice = null;
@@ -1649,6 +1652,8 @@ function buildStorySystemSignals(story = '') {
   const storageVaultPattern = /封存[艙舱倉藏函]/u;
   const storageCarrierPattern =
     /(手(?:上|中|裡|里)|懷裡|怀里|背著|背着|抱著|抱着|提著|提着|攜帶|携带|拿著|拿着|夾著|夹着|腰間|腰间).{0,14}封存[艙舱倉藏函]|封存[艙舱倉藏函].{0,12}(在手上|在手中|在手裡|在手里|被抱著|被抱着|被提著|被提着|被背著|被背着|被攜帶|被携带|掛在腰間|挂在腰间)/u;
+  const suspiciousTradePattern =
+    /(可疑|低價|壓價|異常開價|友善供應|黑影商人|神秘鑑價站|來源不明|贗品|假貨|套走|攤位|鑑價品|貨樣).{0,10}(商人|攤販|隊伍|供應|開價|交易)|((商人|攤販|隊伍|供應|開價|交易).{0,12}(可疑|低價|壓價|友善供應|來源不明|贗品|假貨))/u;
   return {
     portal: /(傳送門|門紋|節點|躍遷|空間折疊|坐標轉移)/u.test(text),
     wishPool: /(許願|願望|祈願|祈福|祭壇|願池)/u.test(text),
@@ -1656,6 +1661,7 @@ function buildStorySystemSignals(story = '') {
     mentor: /(導師|名師|友誼賽|切磋|指導|拜師)/u.test(text),
     storageVault: storageVaultPattern.test(text),
     storageCarrier: storageCarrierPattern.test(text),
+    suspiciousTrade: suspiciousTradePattern.test(text),
     threat: hasThreatCue(text)
   };
 }

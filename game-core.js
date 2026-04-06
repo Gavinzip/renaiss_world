@@ -141,8 +141,7 @@ const MENTOR_MASTER_BLUEPRINTS = Object.freeze([
   { id: 'mentor_tom', name: 'Tom', title: '航道戰術導師', element: '水', battle: 95, hp: 232, energy: 116, wealth: 88 },
   { id: 'mentor_harry', name: 'Harry', title: '機動壓制導師', element: '火', battle: 96, hp: 236, energy: 118, wealth: 84 },
   { id: 'mentor_kathy', name: 'Kathy', title: '修復與反制導師', element: '草', battle: 93, hp: 228, energy: 122, wealth: 82 },
-  { id: 'mentor_yuzu', name: 'Yuzu', title: '節點追跡導師', element: '水', battle: 94, hp: 230, energy: 120, wealth: 80 },
-  { id: 'mentor_leslie', name: 'Leslie', title: '前哨守備導師', element: '火', battle: 97, hp: 238, energy: 118, wealth: 86 }
+  { id: 'mentor_yuzu', name: 'Ryan', title: '節點追跡導師', element: '水', battle: 94, hp: 230, energy: 120, wealth: 80 }
 ]);
 const PERSISTENT_NPC_BOSS_IDS = new Set(['bandit_king', 'traitor', 'chamberlain', 'shadow_assassin']);
 
@@ -176,8 +175,7 @@ const NPC_COMBAT_PROFILES = Object.freeze({
   mentor_tom: { element: '水', petName: '潮汐導師獸', moveIds: ['flood_torrent', 'golden_needle', 'mist_step', 'thunder_crash'] },
   mentor_harry: { element: '火', petName: '裂焰導師獸', moveIds: ['hell_fire', 'blaze_sky', 'wind_fire_blade', 'thunder_crash'] },
   mentor_kathy: { element: '草', petName: '纖維導師獸', moveIds: ['rejuvenation', 'spider_silk', 'ultimate_dark', 'golden_bell'] },
-  mentor_yuzu: { element: '水', petName: '鏡潮導師獸', moveIds: ['flood_torrent', 'mist_step', 'golden_needle', 'ice_palm'] },
-  mentor_leslie: { element: '火', petName: '守備導師獸', moveIds: ['blaze_sky', 'thunder_crash', 'flame_armor', 'ultimate_dark'] }
+  mentor_yuzu: { element: '水', petName: '鏡潮導師獸', moveIds: ['flood_torrent', 'mist_step', 'golden_needle', 'ice_palm'] }
 });
 const NPC_MOVE_TIER_PLAN_BY_DIFFICULTY = Object.freeze({
   1: [1, 1, 1, 2],
@@ -1452,6 +1450,29 @@ function clipText(text, maxChars = 120) {
   return source.slice(0, maxChars) + '...';
 }
 
+function hasFriendDuelTag(tags = []) {
+  if (!Array.isArray(tags)) return false;
+  return tags.some((tag) => String(tag || '').trim().toLowerCase() === 'friend_duel');
+}
+
+function isExcludedNarrativeMemoryEntry(entry = {}) {
+  if (!entry || typeof entry !== 'object') return false;
+  const type = String(entry.type || '').trim();
+  const content = String(entry.content || '').trim();
+  const outcome = String(entry.outcome || '').trim();
+  const merged = `${type} ${content} ${outcome}`.toLowerCase();
+  if (type.includes('好友友誼戰')) return true;
+  if (merged.includes('好友友誼戰')) return true;
+  if (merged.includes('friend_duel')) return true;
+  if (hasFriendDuelTag(entry.tags)) return true;
+  return false;
+}
+
+function getNarrativeEligibleMemories(memories = []) {
+  if (!Array.isArray(memories)) return [];
+  return memories.filter((item) => !isExcludedNarrativeMemoryEntry(item));
+}
+
 function normalizeMemoryDigest(digest) {
   if (!digest || typeof digest !== 'object') return null;
   const summary = String(digest.summary || '').trim();
@@ -1646,7 +1667,7 @@ function formatMemoryLine(entry) {
 }
 
 function buildLongTermMemoryDigest(player) {
-  const memories = Array.isArray(player?.memories) ? player.memories : [];
+  const memories = getNarrativeEligibleMemories(Array.isArray(player?.memories) ? player.memories : []);
   if (memories.length < LONG_TERM_MEMORY_CONFIG.minMemoriesForDigest) return null;
 
   const archived = memories.slice(LONG_TERM_MEMORY_CONFIG.recentWindow);
@@ -1707,7 +1728,7 @@ function ensureLongTermMemoryDigest(player, force = false) {
   if (!player || typeof player !== 'object') return null;
   normalizePlayerMemorySchema(player);
 
-  const memories = Array.isArray(player.memories) ? player.memories : [];
+  const memories = getNarrativeEligibleMemories(Array.isArray(player.memories) ? player.memories : []);
   const latestTs = Number(memories[0]?.timestamp || 0);
   const digest = normalizeMemoryDigest(player.memoryDigest);
   const canReuse = Boolean(
@@ -1768,6 +1789,7 @@ function appendPlayerMemory(player, memory) {
     'action'
   );
   if (!normalized) return null;
+  if (isExcludedNarrativeMemoryEntry(normalized)) return null;
 
   player.memories.unshift(normalized);
   if (player.memories.length > 80) player.memories.length = 80;
@@ -1801,7 +1823,7 @@ function addPlayerMemory(playerId, memory) {
 function buildShortAndLongMemoryContext(player) {
   if (!player || !player.memories || player.memories.length === 0) return '';
   const maxItems = 6;
-  const memories = Array.isArray(player.memories) ? player.memories : [];
+  const memories = getNarrativeEligibleMemories(Array.isArray(player.memories) ? player.memories : []);
   if (memories.length === 0) return '';
 
   const recent = memories.slice(0, 2);
@@ -1879,6 +1901,7 @@ async function getPlayerMemoryContextAsync(playerId, options = {}) {
   }
 
   const semanticLines = (Array.isArray(recalled) ? recalled : [])
+    .filter((item) => !isExcludedNarrativeMemoryEntry(item))
     .map(formatSemanticRecallLine)
     .filter(Boolean)
     .slice(0, 8);
@@ -3043,7 +3066,6 @@ function createPlayer(discordId, name, gender, sect) {
       魅力: 60 + Math.floor(Math.random() * 15),
       運氣: 60 + Math.floor(Math.random() * 15),
       財富: 50,
-      飽腹度: 100,
       賺錢倍率: 1.0
     },
     

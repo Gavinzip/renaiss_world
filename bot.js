@@ -1494,7 +1494,8 @@ function createButtonInteractionTemplateContext(interaction, customId = '') {
     restored: false,
     customId: String(customId || '').trim(),
     messageId: String(interaction?.message?.id || '').trim(),
-    snapshot: []
+    snapshot: [],
+    hidePromise: null
   };
   if (!interaction?.isButton?.() || !context.messageId) return context;
   if (isModalLauncherButtonId(customId)) return context;
@@ -1502,8 +1503,8 @@ function createButtonInteractionTemplateContext(interaction, customId = '') {
   if (!Array.isArray(snapshot) || snapshot.length <= 0) return context;
   context.enabled = true;
   context.snapshot = snapshot;
-  // 不阻塞主流程：按下後立刻隱藏，後續由成功流程重繪；失敗則回補。
-  lockPressedButtonImmediately(interaction).catch(() => {});
+  // 先隱藏按鈕再進主流程，避免與後續更新競態（更新完又被舊隱藏覆蓋）。
+  context.hidePromise = lockPressedButtonImmediately(interaction).catch(() => {});
   return context;
 }
 
@@ -3836,11 +3837,12 @@ function isAggressiveChoice(choice) {
 function createGuaranteedAggressiveChoice(player) {
   const location = String(player?.location || '附近區域').trim() || '附近區域';
   return {
-    action: 'conflict',
-    tag: '[🔥高風險]',
-    name: '強行追擊目標',
-    choice: `沿著${location}外圍強行追擊可疑目標，逼對方現身`,
-    desc: '高風險突進，可能引發埋伏或連續衝突'
+    action: 'location_story_battle',
+    tag: '[⚔️會戰鬥]',
+    name: '強奪可疑鑑價品',
+    choice: `攔下剛在${location}兜售可疑鑑價品的人，直接打倒並奪下貨樣（會進入戰鬥）`,
+    desc: '高風險：你選擇正面開打，嘗試奪取對方攜帶的可疑貨樣',
+    forceImmediateBattle: true
   };
 }
 
@@ -5837,7 +5839,6 @@ function getAdventureText(lang = 'zh-TW') {
       statusLabel: '狀態',
       statusHp: '氣血',
       statusEnergy: '能量',
-      statusSatiety: '飽腹度',
       statusCurrency: 'Rns 代幣',
       mainlineDone: (location) => `📖 本區主線：已完成（${location}）`,
       mainlineProgress: (location) => `📖 本區主線：進行中（${location}）`,
@@ -5855,7 +5856,6 @@ function getAdventureText(lang = 'zh-TW') {
       statusLabel: '状态',
       statusHp: '气血',
       statusEnergy: '能量',
-      statusSatiety: '饱腹度',
       statusCurrency: 'Rns 代币',
       mainlineDone: (location) => `📖 本区主线：已完成（${location}）`,
       mainlineProgress: (location) => `📖 本区主线：进行中（${location}）`,
@@ -5873,7 +5873,6 @@ function getAdventureText(lang = 'zh-TW') {
       statusLabel: 'Status',
       statusHp: 'HP',
       statusEnergy: 'Energy',
-      statusSatiety: 'Satiety',
       statusCurrency: 'Rns Tokens',
       mainlineDone: (location) => `📖 Local Mainline: Completed (${location})`,
       mainlineProgress: (location) => `📖 Local Mainline: In Progress (${location})`,
@@ -5894,7 +5893,7 @@ function getAdventureText(lang = 'zh-TW') {
 function buildMainStatusBar(player, pet, lang = '') {
   const tx = getAdventureText(lang || player?.language || 'zh-TW');
   const hpText = formatPetHpWithRecovery(pet);
-  return `${tx.statusHp} ${hpText} | ${tx.statusEnergy} ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | ${tx.statusSatiety} ${player.stats.飽腹度} | ${tx.statusCurrency} ${player.stats.財富} | ${player.location}`;
+  return `${tx.statusHp} ${hpText} | ${tx.statusEnergy} ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | ${tx.statusCurrency} ${player.stats.財富} | ${player.location}`;
 }
 
 function getIslandMainlineProgressMeta(player) {
@@ -7892,6 +7891,9 @@ async function maybeGenerateTradeGoodFromChoice(event, player, result, selectedC
   const herbHint = /採|草藥|藥草|靈草|植物|香氣|花/.test(text);
   const huntHint = /狩獵|打獵|追獵|獵物|野獸|捕捉|河魚|野兔|野雞|野豬|鹿/.test(text);
   const treasureHint = /礦|晶|寶|遺跡|寶藏|洞窟|礦洞|遺物|尋寶|探勘/.test(text);
+  const investigateHint = /追查|線索|來源|流向|訪談|口供|追蹤|觀察|比對|複核|鑑識|查驗/.test(text);
+  const appraisalHint = /鑑價|鑑定|真偽|攤位|商人|低價|可疑貨|贗品|封存艙|鑑價品|貨樣/.test(text);
+  const plunderHint = /搶|搶奪|強奪|奪取|打倒|擊敗|搜刮|劫走|逼問|先發制人/.test(text);
 
   if (action === 'forage' || herbHint) {
     if (Math.random() < (action === 'forage' ? 0.92 : 0.68)) {
@@ -7909,7 +7911,19 @@ async function maybeGenerateTradeGoodFromChoice(event, player, result, selectedC
       return ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' });
     }
   }
-  if (action === 'explore' && Math.random() < 0.18) {
+  if (action === 'fight' || action === 'location_story_battle' || plunderHint) {
+    if (Math.random() < 0.58) {
+      return Math.random() < 0.62
+        ? ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' })
+        : ECON.createHuntLoot(result?.item || event?.name || '可疑貨樣', location, luck, { lang: player?.language || 'zh-TW' });
+    }
+  }
+  if ((action === 'main_story' || action === 'social' || action === 'trade' || investigateHint || appraisalHint) && Math.random() < 0.42) {
+    return Math.random() < 0.55
+      ? ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' })
+      : ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' });
+  }
+  if (action === 'explore' && Math.random() < 0.36) {
     return Math.random() < 0.7
       ? ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' })
       : ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' });
@@ -9337,6 +9351,9 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (interaction.isButton()) {
     buttonTemplateContext = createButtonInteractionTemplateContext(interaction, customId);
     attachButtonTemplateReplyAutoRestore(interaction, buttonTemplateContext);
+    if (buttonTemplateContext?.enabled && buttonTemplateContext?.hidePromise) {
+      await buttonTemplateContext.hidePromise;
+    }
   }
 
   // ===== 招式配置下拉 =====
@@ -11977,7 +11994,6 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     }
     const storyText = player.currentStory;
     
-    player.stats.飽腹度 = player.stats.飽腹度 || 100;
     const uiText = getAdventureText(player.language || 'zh-TW');
     const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
     
@@ -12059,7 +12075,6 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   CORE.savePlayer(player);
   
   // ===== 狀態列 =====
-  player.stats.飽腹度 = player.stats.飽腹度 || 100;
   const uiText = getAdventureText(player.language || 'zh-TW');
   const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
   const eventMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
@@ -15805,7 +15820,19 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       }
     }
 
-    const tradeGood = await maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice);
+    let tradeGood = await maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice);
+    if (!tradeGood && result?.success !== false && String(result?.type || '') !== 'combat') {
+      player.noLootStreak = Math.max(0, Number(player.noLootStreak || 0)) + 1;
+      if (player.noLootStreak >= 4) {
+        const luck = Number(player?.stats?.運氣 || 50);
+        tradeGood = Math.random() < 0.6
+          ? ECON.createTreasureLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' })
+          : ECON.createForageLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' });
+        player.noLootStreak = 0;
+      }
+    } else if (tradeGood) {
+      player.noLootStreak = 0;
+    }
     if (tradeGood) {
       ECON.addTradeGood(player, tradeGood);
       result.loot = tradeGood;
@@ -15950,8 +15977,6 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     tags: [String(event.action || ''), String(result?.type || '')].filter(Boolean)
   });
   
-  // 減少飽腹度
-  player.stats.飽腹度 = Math.max(0, (player.stats.飽腹度 || 100) - Math.floor(Math.random() * 5 + 3));
   incrementPlayerStoryTurns(player, 1);
   const recoveryTick = applyPetRecoveryTurnTick(pet, 1);
   if (recoveryTick.changed) {
