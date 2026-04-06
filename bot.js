@@ -1306,7 +1306,16 @@ async function showFriendsMenu(interaction, user, notice = '') {
     );
   }
 
-  await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
+  try {
+    await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
+  } catch (err) {
+    console.error('[Friends] menu update failed:', err?.message || err);
+    if (interaction?.channel?.send) {
+      await interaction.channel.send({ embeds: [embed], components: rows }).catch(() => {});
+    } else {
+      throw err;
+    }
+  }
 }
 
 async function showFriendCharacter(interaction, user, friendId = '') {
@@ -1355,7 +1364,16 @@ async function showFriendCharacter(interaction, user, friendId = '') {
     new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 返回好友').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel('🔙 返回主選單').setStyle(ButtonStyle.Secondary)
   );
-  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
+  try {
+    await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
+  } catch (err) {
+    console.error('[Friends] character update failed:', err?.message || err);
+    if (interaction?.channel?.send) {
+      await interaction.channel.send({ embeds: [embed], components: [row] }).catch(() => {});
+    } else {
+      throw err;
+    }
+  }
 }
 
 async function rejectIfNotThreadOwner(interaction, userId) {
@@ -1502,8 +1520,7 @@ function createButtonInteractionTemplateContext(interaction, customId = '') {
     restored: false,
     customId: String(customId || '').trim(),
     messageId: String(interaction?.message?.id || '').trim(),
-    snapshot: [],
-    hidePromise: null
+    snapshot: []
   };
   if (!interaction?.isButton?.() || !context.messageId) return context;
   if (isModalLauncherButtonId(customId)) return context;
@@ -1511,8 +1528,7 @@ function createButtonInteractionTemplateContext(interaction, customId = '') {
   if (!Array.isArray(snapshot) || snapshot.length <= 0) return context;
   context.enabled = true;
   context.snapshot = snapshot;
-  // 先隱藏按鈕再進主流程，避免與後續更新競態（更新完又被舊隱藏覆蓋）。
-  context.hidePromise = lockPressedButtonImmediately(interaction).catch(() => {});
+  // 僅保留快照回補能力，不做前置隱藏，避免競態導致按鈕被後續清空。
   return context;
 }
 
@@ -9362,8 +9378,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (interaction.isButton()) {
     buttonTemplateContext = createButtonInteractionTemplateContext(interaction, customId);
     attachButtonTemplateReplyAutoRestore(interaction, buttonTemplateContext);
-    // 不阻塞互動回應，避免 3 秒逾時造成「互動處理失敗」。
-    buttonTemplateContext?.hidePromise?.catch(() => {});
   }
 
   // ===== 招式配置下拉 =====
