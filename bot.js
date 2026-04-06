@@ -16807,17 +16807,17 @@ function buildBattleMobileCombinedLayout(enemy, combatant, state, actionView = {
     `第 ${turn} 回合\n` +
     `👹 敵方：${enemy?.name || '敵人'}\n` +
     `屬性：${enemyElement}\n` +
-    `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ATK：${format1(enemy?.attack || 0)}\n` +
+    `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ATK：${format1(enemy?.attack || 0)}\n\n` +
     `【敵方行動】\n` +
     `招式：${enemyMove}\n` +
     `對我造成：${enemyDamage}\n` +
-    `附加：${enemyExtra}\n` +
-    `--------------------------------\n` +
+    `附加：${enemyExtra}\n\n` +
+    `--------------------------------\n\n` +
     `🐾 我方：${combatant?.name || '我方'}\n` +
     `屬性：${allyElement}\n` +
     `${relationText}\n` +
     `HP：${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}\n` +
-    `⚡ 能量：${energy}（每回 +2，可結轉）\n` +
+    `⚡ 能量：${energy}（每回 +2，可結轉）\n\n` +
     `【我方行動】\n` +
     `招式：${allyMove}\n` +
     `對敵造成：${allyDamage}\n` +
