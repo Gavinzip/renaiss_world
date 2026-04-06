@@ -743,7 +743,7 @@ function buildFriendDuelEnemyFromPet(friendPlayer, friendPet) {
       effect: (m?.effect && typeof m.effect === 'object') ? { ...m.effect } : {},
       desc: String(m?.desc || '').trim()
     }))
-    .filter((m) => m.name);
+    .filter((m) => m.name && !isFleeLikeMove(m));
 
   const fallbackMove = {
     id: 'friend_duel_strike',
@@ -1121,6 +1121,14 @@ function parseOnlineFriendDuelAction(customId = '') {
   if (matched) {
     return {
       kind: 'wait',
+      hostId: String(matched[1] || '').trim(),
+      moveIndex: -1
+    };
+  }
+  matched = text.match(/^fdonline_view_([^_]+)$/);
+  if (matched) {
+    return {
+      kind: 'view',
       hostId: String(matched[1] || '').trim(),
       moveIndex: -1
     };
@@ -1559,6 +1567,9 @@ const LOCATION_ENTRY_MIN_WINRATE = Math.max(1, Math.min(99, Number(process.env.L
 const AGGRESSIVE_CHOICE_TARGET_RATE = Math.max(0, Math.min(1, Number(process.env.AGGRESSIVE_CHOICE_TARGET_RATE || 0.9)));
 const BATTLE_CADENCE_TURNS = Math.max(3, Math.min(10, Number(process.env.BATTLE_CADENCE_TURNS || 5)));
 const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 1)));
+const AGGRESSIVE_FOLLOWUP_MIN_TURNS = Math.max(1, Math.min(2, Number(process.env.AGGRESSIVE_FOLLOWUP_MIN_TURNS || 1)));
+const AGGRESSIVE_FOLLOWUP_WINDOW_TURNS = Math.max(1, Math.min(4, Number(process.env.AGGRESSIVE_FOLLOWUP_WINDOW_TURNS || 2)));
+const AGGRESSIVE_FOLLOWUP_TARGET_MAX_LEN = Math.max(8, Math.min(28, Number(process.env.AGGRESSIVE_FOLLOWUP_TARGET_MAX_LEN || 20)));
 const SHOP_HEAL_CRYSTAL_COST = 200;
 const SHOP_HEAL_CRYSTAL_RECOVER = Math.max(10, Number(process.env.SHOP_HEAL_CRYSTAL_RECOVER || 30));
 const SHOP_ENERGY_CRYSTAL_COST = 2000;
@@ -1908,7 +1919,10 @@ function applyStoryThreatGate(player, choices = []) {
   const threatScore = computeStoryThreatScore(storyText);
   const allowImmediateBattle = threatScore >= STORY_THREAT_SCORE_THRESHOLD;
   if (allowImmediateBattle) return list;
-  return list.map((choice) => downgradeImmediateBattleChoice(choice));
+  return list.map((choice) => {
+    if (choice?.forceImmediateBattle) return choice;
+    return downgradeImmediateBattleChoice(choice);
+  });
 }
 
 function formatChoiceText(choice) {
@@ -3427,6 +3441,120 @@ function collectRecentStorySpeakerHints(player = null, storyText = '') {
   return hints;
 }
 
+function normalizeConflictTargetName(name = '') {
+  let text = String(name || '')
+    .replace(/[「」『』"'`“”‘’\[\]{}<>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  text = text
+    .replace(/^(?:那名|那位|剛才那名|剛才那位|刚才那名|刚才那位|一名|一位)\s*/u, '')
+    .replace(/^(?:對方|对方)\s*/u, '')
+    .trim();
+  if (!text) return '';
+  return text.slice(0, AGGRESSIVE_FOLLOWUP_TARGET_MAX_LEN);
+}
+
+function pickStoryConflictDisplayName(player = null, storyText = '', selectedChoice = '') {
+  const story = String(storyText || '').trim();
+  const sourceChoice = String(selectedChoice || '').trim();
+  const playerName = String(player?.name || '').trim();
+
+  const dialogues = extractStoryDialogues(story);
+  for (let i = dialogues.length - 1; i >= 0; i--) {
+    const speaker = normalizeConflictTargetName(dialogues[i]?.speaker || '');
+    if (!speaker) continue;
+    if (playerName && (speaker === playerName || speaker.includes(playerName))) continue;
+    if (/^(冒險者|冒险者|你|我|主角|旁白)$/u.test(speaker)) continue;
+    return speaker;
+  }
+
+  const speakerHints = collectRecentStorySpeakerHints(player, story);
+  const nearbyRows = getNearbyStoryBattleNpcCandidates(player)
+    .map((npc) => ({
+      npc,
+      score: scoreStoryBindingForNpc(npc, story, speakerHints)
+    }))
+    .sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  const boundNpc = nearbyRows.find((row) => Number(row?.score || 0) > 0)?.npc;
+  if (boundNpc?.name) return normalizeConflictTargetName(boundNpc.name);
+
+  const tailSource = `${extractStoryEndingFocus(story)}\n${sourceChoice}`;
+  const directPhrase = tailSource.match(/(?:那名|那位|剛才那名|剛才那位|刚才那名|刚才那位)([^，。；、\n]{1,14})/u);
+  if (directPhrase && directPhrase[1]) {
+    const normalized = normalizeConflictTargetName(directPhrase[1]);
+    if (normalized) return normalized;
+  }
+  if (/(女子|少女|女聲|女声|女人|姑娘|她)/u.test(tailSource)) return '神秘女子';
+  if (/(男子|男聲|男声|男人|他)/u.test(tailSource)) return '神秘男子';
+  return '可疑人士';
+}
+
+function normalizePendingConflictFollowupState(raw = null, currentTurn = 0) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!raw.active) return null;
+  const sourceTurn = Math.max(0, Math.floor(Number(raw.sourceTurn || 0)));
+  const triggerTurn = Math.max(sourceTurn + AGGRESSIVE_FOLLOWUP_MIN_TURNS, Math.floor(Number(raw.triggerTurn || sourceTurn + AGGRESSIVE_FOLLOWUP_MIN_TURNS)));
+  const expireTurn = Math.max(triggerTurn, Math.floor(Number(raw.expireTurn || (sourceTurn + AGGRESSIVE_FOLLOWUP_WINDOW_TURNS))));
+  if (Math.max(0, Math.floor(Number(currentTurn || 0))) > expireTurn) return null;
+  const displayName = normalizeConflictTargetName(raw.displayName || '') || '可疑人士';
+  return {
+    active: true,
+    sourceTurn,
+    triggerTurn,
+    expireTurn,
+    location: String(raw.location || '').trim().slice(0, 32),
+    sourceChoice: String(raw.sourceChoice || '').trim().slice(0, 220),
+    displayName,
+    injectedTurn: Math.max(0, Math.floor(Number(raw.injectedTurn || 0))),
+    noNpcRetry: Math.max(0, Math.min(3, Math.floor(Number(raw.noNpcRetry || 0))))
+  };
+}
+
+function getPendingConflictFollowup(player = null) {
+  if (!player || typeof player !== 'object') return null;
+  const normalized = normalizePendingConflictFollowupState(
+    player.pendingConflictFollowup,
+    getPlayerStoryTurns(player)
+  );
+  if (!normalized) {
+    if (Object.prototype.hasOwnProperty.call(player, 'pendingConflictFollowup')) {
+      delete player.pendingConflictFollowup;
+    }
+    return null;
+  }
+  if (JSON.stringify(player.pendingConflictFollowup || {}) !== JSON.stringify(normalized)) {
+    player.pendingConflictFollowup = normalized;
+  }
+  return normalized;
+}
+
+function clearPendingConflictFollowup(player = null) {
+  if (!player || typeof player !== 'object') return;
+  if (Object.prototype.hasOwnProperty.call(player, 'pendingConflictFollowup')) {
+    delete player.pendingConflictFollowup;
+  }
+}
+
+function setPendingConflictFollowup(player = null, payload = {}) {
+  if (!player || typeof player !== 'object') return null;
+  const currentTurn = getPlayerStoryTurns(player);
+  const displayName = normalizeConflictTargetName(payload.displayName || '') || '可疑人士';
+  const state = {
+    active: true,
+    sourceTurn: currentTurn,
+    triggerTurn: currentTurn + AGGRESSIVE_FOLLOWUP_MIN_TURNS,
+    expireTurn: currentTurn + AGGRESSIVE_FOLLOWUP_WINDOW_TURNS,
+    location: String(payload.location || player.location || '').trim().slice(0, 32),
+    sourceChoice: String(payload.sourceChoice || '').trim().slice(0, 220),
+    displayName,
+    injectedTurn: 0,
+    noNpcRetry: 0
+  };
+  player.pendingConflictFollowup = state;
+  return state;
+}
+
 function scoreStoryBindingForNpc(npc = null, storyText = '', speakerHints = new Set()) {
   if (!npc || typeof npc !== 'object') return 0;
   const fullText = String(storyText || '').trim();
@@ -3530,20 +3658,30 @@ function createGuaranteedLocationStoryBattleChoice(player, storyText = '', optio
     wantedLevel
   });
   if (!target?.enemy) return null;
-  const location = String(player?.location || '附近據點').trim();
-  const displayNpcName = /匿名滲透者/u.test(String(target.npcName || ''))
-    ? '可疑尾隨者'
-    : String(target.npcName || '可疑敵手');
+  const location = String(player?.location || '附近據點').trim() || '附近據點';
+  const forcedDisplayName = normalizeConflictTargetName(options?.displayName || '');
+  const displayNpcName = forcedDisplayName || (
+    /匿名滲透者/u.test(String(target.npcName || ''))
+      ? '可疑尾隨者'
+      : String(target.npcName || '可疑敵手')
+  );
   const reason = String(options?.reason || 'story').trim();
   const hunterText = escalation.active && escalation.hunterCount > 1
     ? `${escalation.hunterCount} 組追兵`
     : '追兵';
   const choiceText = reason === 'wanted'
     ? `察覺${location}周邊有${hunterText}盯上你，鎖定${displayNpcName}先發制人（會進入戰鬥）`
-    : `察覺${location}氣氛不對勁，鎖定${displayNpcName}動向先發制人（會進入戰鬥）`;
+    : (reason === 'aggressive_followup'
+      ? `攔下剛才出現在${location}的${displayNpcName}，正面逼問來源（會進入戰鬥）`
+      : `察覺${location}氣氛不對勁，鎖定${displayNpcName}動向先發制人（會進入戰鬥）`);
   const descText = reason === 'wanted'
     ? `通緝熱度 Lv.${wantedLevel}｜敵對勢力主動接近：${displayNpcName}`
-    : `地區篇章關鍵戰：對手來自${location}在地勢力`;
+    : (reason === 'aggressive_followup'
+      ? '你選擇把剛才的衝突升級為正面交鋒，對方可能當場反擊'
+      : `地區篇章關鍵戰：對手來自${location}在地勢力`);
+  const enemy = target?.enemy && typeof target.enemy === 'object'
+    ? { ...target.enemy, name: displayNpcName, storyPersonaName: displayNpcName }
+    : target.enemy;
   return {
     action: 'location_story_battle',
     tag: '[⚔️會戰鬥]',
@@ -3551,8 +3689,8 @@ function createGuaranteedLocationStoryBattleChoice(player, storyText = '', optio
     choice: choiceText,
     desc: descText,
     npcId: target.npcId,
-    npcName: target.npcName,
-    enemy: target.enemy,
+    npcName: displayNpcName,
+    enemy,
     locationStoryBattle: true
   };
 }
@@ -3700,6 +3838,70 @@ function ensureAggressiveChoiceAvailability(player, choices = []) {
   return list.slice(0, CHOICE_DISPLAY_COUNT);
 }
 
+function ensurePendingConflictImmediateBattleChoice(player, choices = []) {
+  const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
+  if (!player || list.length === 0) return list;
+
+  const pending = getPendingConflictFollowup(player);
+  if (!pending?.active) return list;
+
+  const currentTurn = getPlayerStoryTurns(player);
+  if (currentTurn < Number(pending.triggerTurn || 0)) return list;
+  if (pending.injectedTurn > 0 && pending.injectedTurn === currentTurn) return list;
+
+  const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  const forcedChoice = createGuaranteedLocationStoryBattleChoice(player, storyText, {
+    allowLooseSelection: true,
+    preferVillain: true,
+    wantedLevel: getPlayerWantedPressure(player),
+    reason: 'aggressive_followup',
+    displayName: pending.displayName
+  });
+
+  if (!forcedChoice) {
+    pending.noNpcRetry = Math.max(0, Number(pending.noNpcRetry || 0)) + 1;
+    pending.triggerTurn = currentTurn + 1;
+    pending.expireTurn = Math.max(Number(pending.expireTurn || currentTurn + 1), currentTurn + 1);
+    if (pending.noNpcRetry >= 2) {
+      clearPendingConflictFollowup(player);
+    } else {
+      player.pendingConflictFollowup = pending;
+    }
+    return list;
+  }
+
+  const injected = {
+    ...forcedChoice,
+    forceImmediateBattle: true,
+    action: 'location_story_battle'
+  };
+
+  const existingImmediateIdx = list.findIndex((choice) => isImmediateBattleChoice(choice));
+  const protectedActions = new Set([
+    'portal_intent',
+    'wish_pool',
+    'market_renaiss',
+    'market_digital',
+    'scratch_lottery',
+    'custom_input',
+    'mentor_spar'
+  ]);
+  let replaceIdx = existingImmediateIdx;
+  if (replaceIdx < 0) {
+    replaceIdx = list.length - 1;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!protectedActions.has(String(list[i]?.action || '').trim())) {
+        replaceIdx = i;
+        break;
+      }
+    }
+  }
+  list[replaceIdx] = injected;
+
+  clearPendingConflictFollowup(player);
+  return list.slice(0, CHOICE_DISPLAY_COUNT);
+}
+
 function shouldCountCombatForLocationStory(event = {}, result = {}, enemy = null) {
   const action = String(event?.action || '').trim();
   if (action === 'mentor_spar') return false;
@@ -3735,6 +3937,7 @@ function applyChoicePolicy(player, choices = []) {
   // Prompt-only 選項策略：
   // 只做安全性修正（如威脅場景下的即時戰鬥降級），不再本地注入模板選項。
   // 所有可玩性/主線/系統可用性由 AI 提示詞直接產生。
+  list = ensurePendingConflictImmediateBattleChoice(player, list);
   list = applyStoryThreatGate(player, list);
   markSystemChoiceExposure(player, list);
   return list.slice(0, CHOICE_DISPLAY_COUNT);
@@ -4419,6 +4622,16 @@ function ensurePlayerGenerationSchema(player) {
   const normalizedMainlinePins = normalizeMainlineForeshadowPins(player.mainlineForeshadowPins, currentTurn);
   if (JSON.stringify(player.mainlineForeshadowPins || []) !== JSON.stringify(normalizedMainlinePins)) {
     player.mainlineForeshadowPins = normalizedMainlinePins;
+    mutated = true;
+  }
+  const normalizedPendingConflict = normalizePendingConflictFollowupState(player.pendingConflictFollowup, currentTurn);
+  if (normalizedPendingConflict) {
+    if (JSON.stringify(player.pendingConflictFollowup || {}) !== JSON.stringify(normalizedPendingConflict)) {
+      player.pendingConflictFollowup = normalizedPendingConflict;
+      mutated = true;
+    }
+  } else if (Object.prototype.hasOwnProperty.call(player, 'pendingConflictFollowup')) {
+    delete player.pendingConflictFollowup;
     mutated = true;
   }
   const normalizedRecentChoices = normalizeRecentChoiceHistory(player.recentChoiceHistory);
@@ -6038,8 +6251,20 @@ async function showClaimPetNameModal(interaction, element = '水') {
   await interaction.showModal(modal);
 }
 
+function isFleeLikeMove(move = null) {
+  if (!move || typeof move !== 'object') return false;
+  if (move?.effect && move.effect.flee) return true;
+  const id = String(move?.id || '').trim().toLowerCase();
+  const name = String(move?.name || '').trim().toLowerCase();
+  const desc = String(move?.desc || '').trim().toLowerCase();
+  if (id === 'flee' || id.includes('flee') || id.includes('escape')) return true;
+  if (name === '逃跑' || name.includes('逃跑') || name.includes('flee') || name.includes('escape')) return true;
+  if (desc.includes('逃脫') || desc.includes('逃跑') || desc.includes('flee') || desc.includes('escape')) return true;
+  return false;
+}
+
 function getPetAttackMoves(pet) {
-  return (pet?.moves || []).filter((m) => !(m?.effect && m.effect.flee));
+  return (pet?.moves || []).filter((m) => !isFleeLikeMove(m));
 }
 
 const SKILL_CHIP_PREFIX = '技能晶片：';
@@ -6683,7 +6908,7 @@ function canEnterLocation(player, targetLocation) {
 
 function pickBestMoveForAI(player, pet, enemy, combatant = null, availableEnergy = Number.POSITIVE_INFINITY) {
   const activeCombatant = combatant || getActiveCombatant(player, pet);
-  const candidateMoves = getCombatantMoves(activeCombatant, pet);
+  const candidateMoves = getCombatantMoves(activeCombatant, pet).filter((move) => !isFleeLikeMove(move));
   if (candidateMoves.length === 0) return null;
 
   const affordableMoves = candidateMoves.filter((move) => BATTLE.getMoveEnergyCost(move) <= availableEnergy);
@@ -9037,6 +9262,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       customId === 'show_codex_skill' ||
       customId === 'show_finance_ledger' ||
       customId === 'show_memory_audit' ||
+      customId === 'show_memory_recap' ||
       customId.startsWith('pmkt_');
     const isFriendOnlineBattleButton =
       customId === 'battle_mode_manual_online' ||
@@ -10199,6 +10425,27 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId === 'battle_toggle_layout') {
+    const player = CORE.loadPlayer(user.id);
+    const fallbackPet = PET.loadPet(user.id);
+    const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+    const pet = petResolved?.pet || fallbackPet;
+    if (!player?.battleState?.enemy || !pet) {
+      await interaction.reply({ content: '⚠️ 目前沒有可切換的戰鬥畫面。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    const mode = toggleBattleLayoutMode(player);
+    if (petResolved?.changed) CORE.savePlayer(player);
+    CORE.savePlayer(player);
+    await renderManualBattle(
+      interaction,
+      player,
+      pet,
+      mode === 'mobile' ? '📱 已切換為手機版戰鬥排版。' : '🖥️ 已切換為電腦版戰鬥排版。'
+    );
+    return;
+  }
+
   if (customId === 'battle_wait') {
     await handleBattleWait(interaction, user);
     return;
@@ -10284,6 +10531,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   if (customId === 'show_memory_audit') {
     await showMemoryAudit(interaction, user);
+    return;
+  }
+
+  if (customId === 'show_memory_recap') {
+    await showMemoryRecap(interaction, user);
     return;
   }
 
@@ -12106,6 +12358,37 @@ function getSettingsHubText(lang = 'zh-TW') {
   return map[code] || map['zh-TW'];
 }
 
+function getMemoryRecapText(lang = 'zh-TW') {
+  const code = normalizeLangCode(lang);
+  const map = {
+    'zh-TW': {
+      title: '🧠 記憶回顧',
+      loading: '⏳ AI 正在整理你的角色記憶...',
+      fallbackHint: '（AI 回顧暫時不可用，以下為系統濃縮）',
+      noStory: '目前還沒有足夠故事可回顧，先多推進幾回合再來看。',
+      backProfile: '💳 返回檔案',
+      backMenu: '返回主選單'
+    },
+    'zh-CN': {
+      title: '🧠 记忆回顾',
+      loading: '⏳ AI 正在整理你的角色记忆...',
+      fallbackHint: '（AI 回顾暂时不可用，以下为系统浓缩）',
+      noStory: '目前还没有足够故事可回顾，先多推进几回合再来查看。',
+      backProfile: '💳 返回档案',
+      backMenu: '返回主选单'
+    },
+    en: {
+      title: '🧠 Memory Recap',
+      loading: '⏳ AI is compiling your character memory recap...',
+      fallbackHint: '(AI recap unavailable for now; showing system digest)',
+      noStory: 'Not enough story progress yet. Play a few more turns and check again.',
+      backProfile: '💳 Back to Profile',
+      backMenu: 'Back to Menu'
+    }
+  };
+  return map[code] || map['zh-TW'];
+}
+
 async function showSettingsHub(interaction, user, notice = '') {
   const player = CORE.loadPlayer(user.id);
   const uiLang = getPlayerUILang(player);
@@ -12208,6 +12491,7 @@ async function showProfile(interaction, user) {
   }
   
   const profile = GACHA.getPlayerProfile(player);
+  const uiLang = getPlayerUILang(player);
   const gachaConfig = GACHA.GACHA_CONFIG;
   const petCapacity = getPetCapacityForUser(user.id);
   const walletBound = WALLET.isWalletBound(user.id);
@@ -12261,7 +12545,11 @@ async function showProfile(interaction, user) {
       .setCustomId('claim_new_pet_start')
       .setLabel(`🆕 領取新寵物（剩${petCapacity.availableSlots}）`)
       .setStyle(ButtonStyle.Success)
-      .setDisabled(petCapacity.availableSlots <= 0)
+      .setDisabled(petCapacity.availableSlots <= 0),
+    new ButtonBuilder()
+      .setCustomId('show_memory_recap')
+      .setLabel(uiLang === 'en' ? '🧠 Memory Recap' : (uiLang === 'zh-CN' ? '🧠 记忆回顾' : '🧠 記憶回顧'))
+      .setStyle(ButtonStyle.Secondary)
   ));
   
   await interaction.update({ embeds: [embed], components: rows });
@@ -12950,6 +13238,105 @@ async function showMemoryAudit(interaction, user) {
     new ButtonBuilder().setCustomId('main_menu').setLabel(uiLang === 'en' ? 'Back to Menu' : (uiLang === 'zh-CN' ? '返回主选单' : '返回主選單')).setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
+}
+
+async function showMemoryRecap(interaction, user) {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+
+  const uiLang = getPlayerUILang(player);
+  const tx = getMemoryRecapText(uiLang);
+
+  // 避免 3 秒互動超時
+  await interaction.deferUpdate().catch(() => {});
+
+  const currentStory = String(player?.currentStory || '').trim();
+  const historyStories = Array.isArray(player?.generationHistory)
+    ? player.generationHistory
+      .slice(-10)
+      .map((item) => String(item?.story || '').trim())
+      .filter(Boolean)
+      .slice(-5)
+    : [];
+
+  if (!currentStory && historyStories.length === 0) {
+    const emptyEmbed = new EmbedBuilder()
+      .setTitle(tx.title)
+      .setColor(0x3b82f6)
+      .setDescription(tx.noStory);
+    const emptyRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('open_profile').setLabel(tx.backProfile).setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu).setStyle(ButtonStyle.Secondary)
+    );
+    await interaction.editReply({ embeds: [emptyEmbed], components: [emptyRow] });
+    return;
+  }
+
+  let memoryContext = '';
+  try {
+    memoryContext = await CORE.getPlayerMemoryContextAsync(player.id, {
+      location: player.location,
+      queryText: [
+        `玩家:${player.name || ''}`,
+        `地點:${player.location || ''}`,
+        `前情:${currentStory || ''}`
+      ].join('\n'),
+      topK: 8
+    });
+  } catch (e) {
+    console.log('[MemoryRecap] context failed:', e?.message || e);
+    memoryContext = '';
+  }
+
+  const recentAuditRows = buildMemoryAuditRows(player, 10);
+  const recentActions = recentAuditRows
+    .slice(0, 8)
+    .map((row) => {
+      const content = String(row?.content || '').trim();
+      const outcome = String(row?.outcome || '').trim();
+      if (!content) return '';
+      return outcome ? `${content} -> ${outcome}` : content;
+    })
+    .filter(Boolean);
+
+  let recapText = '';
+  let usedFallback = false;
+  try {
+    recapText = await STORY.generatePlayerMemoryRecap(player, {
+      currentStory,
+      memoryContext,
+      recentStories: historyStories,
+      recentActions
+    });
+  } catch (e) {
+    console.log('[MemoryRecap] AI failed:', e?.message || e);
+    usedFallback = true;
+    recapText = '';
+  }
+
+  if (!recapText) {
+    usedFallback = true;
+    const fallbackParts = [];
+    if (currentStory) fallbackParts.push(`目前主軸：${currentStory.slice(0, 240)}${currentStory.length > 240 ? '...' : ''}`);
+    if (memoryContext) fallbackParts.push(memoryContext.slice(0, 900));
+    if (recentActions.length > 0) fallbackParts.push(`近期行動：${recentActions.slice(0, 5).join('；')}`);
+    recapText = fallbackParts.join('\n\n').trim() || tx.noStory;
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(tx.title)
+    .setColor(0x3b82f6)
+    .setDescription(`${usedFallback ? `${tx.fallbackHint}\n\n` : ''}${String(recapText).slice(0, 3900)}`);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('open_profile').setLabel(tx.backProfile).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu).setStyle(ButtonStyle.Secondary)
+  );
+
+  await interaction.editReply({ embeds: [embed], components: [row] });
 }
 
 function parseMarketTypeFromCustomId(customId = '', fallback = 'renaiss') {
@@ -15464,6 +15851,19 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     });
   }
 
+  const enteringBattleNow = shouldTriggerBattle(event, result);
+  if (enteringBattleNow) {
+    clearPendingConflictFollowup(player);
+  } else if (isAggressiveChoice(event)) {
+    const storySnapshotBeforeChoice = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+    const displayName = pickStoryConflictDisplayName(player, storySnapshotBeforeChoice, selectedChoice);
+    setPendingConflictFollowup(player, {
+      displayName,
+      sourceChoice: selectedChoice,
+      location: player.location
+    });
+  }
+
   recordPlayerChoiceHistory(player, event, selectedChoice);
 
   const outcomeParts = [];
@@ -15611,7 +16011,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   
   // 清除舊選項（必須重新生成）
   player.eventChoices = [];
-  const enteringBattle = shouldTriggerBattle(event, result);
+  const enteringBattle = enteringBattleNow;
   if (!enteringBattle) {
     const passiveHeal = applyPassivePetRecovery(pet, PET_PASSIVE_HEAL_PER_STORY_TURN);
     if (passiveHeal > 0) {
@@ -16061,6 +16461,37 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
 }
 
 // ============== 戰鬥 ==============
+function normalizeBattleLayoutMode(mode = '') {
+  const raw = String(mode || '').trim().toLowerCase();
+  return raw === 'mobile' ? 'mobile' : 'desktop';
+}
+
+function getBattleLayoutMode(player) {
+  return normalizeBattleLayoutMode(player?.battleUILayout || 'desktop');
+}
+
+function toggleBattleLayoutMode(player) {
+  const current = getBattleLayoutMode(player);
+  const next = current === 'mobile' ? 'desktop' : 'mobile';
+  if (player && typeof player === 'object') {
+    player.battleUILayout = next;
+  }
+  return next;
+}
+
+function getOnlineBattleLayoutMode(online = null) {
+  return normalizeBattleLayoutMode(online?.layoutMode || 'desktop');
+}
+
+function toggleOnlineBattleLayoutMode(online = null) {
+  const current = getOnlineBattleLayoutMode(online);
+  const next = current === 'mobile' ? 'desktop' : 'mobile';
+  if (online && typeof online === 'object') {
+    online.layoutMode = next;
+  }
+  return next;
+}
+
 function buildBattleMoveDetails(player, pet, combatant) {
   const battleState = player?.battleState || {};
   const currentEnergy = Number.isFinite(Number(battleState.energy)) ? Number(battleState.energy) : 2;
@@ -16126,6 +16557,8 @@ function buildBattleActionRows(player, pet, combatant, options = {}) {
   const fleeTry = battleState.fleeAttempts || 0;
   const swapBlocked = hasPetSwapBlockingStatus(combatant?.status || {});
   const canSwap = !disableAll && !combatant?.isHuman && !swapBlocked && getBattleSwitchCandidates(player, combatant?.id).length > 0;
+  const layoutMode = getBattleLayoutMode(player);
+  const toggleLabel = layoutMode === 'mobile' ? '🖥️ 電腦版' : '📱 手機版';
   const actionRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('battle_wait').setLabel('⚡ 蓄能待機').setStyle(ButtonStyle.Primary).setDisabled(disableAll),
     new ButtonBuilder().setCustomId('battle_switch_pet').setLabel('🔁 換寵物').setStyle(ButtonStyle.Secondary).setDisabled(!canSwap),
@@ -16133,7 +16566,11 @@ function buildBattleActionRows(player, pet, combatant, options = {}) {
       .setCustomId(`flee_${fleeTry}`)
       .setLabel(`🏃 逃跑 70%（失敗 ${fleeTry}/2）`)
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(disableAll)
+      .setDisabled(disableAll),
+    new ButtonBuilder()
+      .setCustomId('battle_toggle_layout')
+      .setLabel(toggleLabel)
+      .setStyle(ButtonStyle.Secondary)
   );
   return [moveRow, actionRow];
 }
@@ -16194,6 +16631,27 @@ function buildDualActionPanels(actionView = {}) {
     rows.push(`${ally[i] || ''}    ${enemy[i] || ''}`);
   }
   return `\`\`\`text\n${rows.join('\n')}\n\`\`\``;
+}
+
+function buildDualActionPanelsMobile(actionView = {}) {
+  const ally = actionView?.ally || {};
+  const enemy = actionView?.enemy || {};
+  const allyMove = ally?.pending ? '（準備中...）' : (ally?.move || '（尚未行動）');
+  const enemyMove = enemy?.pending ? '（準備中...）' : (enemy?.move || '（尚未行動）');
+  const allyDamage = Number.isFinite(Number(ally?.damage)) ? format1(Math.max(0, Number(ally.damage))) : '—';
+  const enemyDamage = Number.isFinite(Number(enemy?.damage)) ? format1(Math.max(0, Number(enemy.damage))) : '—';
+  const allyExtra = ally?.pending ? '—' : (ally?.extra || '無');
+  const enemyExtra = enemy?.pending ? '—' : (enemy?.extra || '無');
+  return (
+    `【我方行動】\n` +
+    `招式：${allyMove}\n` +
+    `對敵造成：${allyDamage}\n` +
+    `附加：${allyExtra}\n\n` +
+    `【敵方行動】\n` +
+    `招式：${enemyMove}\n` +
+    `對我造成：${enemyDamage}\n` +
+    `附加：${enemyExtra}`
+  );
 }
 
 function buildActionViewFromPhase(playerPhase = null, enemyPhase = null, options = {}) {
@@ -16297,6 +16755,30 @@ function buildManualBattleBoard(enemy, combatant, state) {
   );
 }
 
+function buildManualBattleBoardMobile(enemy, combatant, state) {
+  const enemyElement = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
+  const allyElement = combatant?.isHuman
+    ? '🧍 無屬性'
+    : formatBattleElementDisplay(combatant?.type || combatant?.element || '');
+  const relationText = getBattleElementRelation(
+    combatant?.isHuman ? '' : (combatant?.type || combatant?.element || ''),
+    resolveEnemyBattleElement(enemy)
+  ).text;
+  const turn = Number(state?.turn || 1);
+  const energy = Number(state?.energy || 0);
+  return (
+    `第 ${turn} 回合\n` +
+    `👹 敵方：${enemy?.name || '敵人'}\n` +
+    `屬性：${enemyElement}\n` +
+    `HP：${enemy?.hp || 0}/${enemy?.maxHp || 0} ｜ ATK：${enemy?.attack || 0}\n\n` +
+    `🐾 我方：${combatant?.name || '我方'}\n` +
+    `屬性：${allyElement}\n` +
+    `${relationText}\n` +
+    `HP：${combatant?.hp || 0}/${combatant?.maxHp || 0}\n` +
+    `⚡ 能量：${energy}（每回 +2，可結轉）`
+  );
+}
+
 async function sendBattleMessage(interaction, payload, mode = 'update') {
   if (mode === 'edit') {
     if (interaction?.message?.edit) {
@@ -16319,8 +16801,13 @@ function buildManualBattlePayload(player, pet, options = {}) {
   const [moveRow, actionRow] = buildBattleActionRows(player, pet, combatant, { disableAll: Boolean(options?.disableActions) });
   const dmgInfo = buildBattleMoveDetails(player, pet, combatant);
   const fighterLabel = combatant.isHuman ? `🧍 ${combatant.name}` : `🐾 ${combatant.name}`;
-  const board = buildManualBattleBoard(enemy, combatant, state);
-  const actionPanels = buildDualActionPanels(options?.actionView || {});
+  const layoutMode = getBattleLayoutMode(player);
+  const board = layoutMode === 'mobile'
+    ? buildManualBattleBoardMobile(enemy, combatant, state)
+    : buildManualBattleBoard(enemy, combatant, state);
+  const actionPanels = layoutMode === 'mobile'
+    ? buildDualActionPanelsMobile(options?.actionView || {})
+    : buildDualActionPanels(options?.actionView || {});
   const statusLines = []
     .concat(Array.isArray(options?.turnStartLines) ? options.turnStartLines : [])
     .concat(Array.isArray(options?.extraLines) ? options.extraLines : []);
@@ -16332,8 +16819,7 @@ function buildManualBattlePayload(player, pet, options = {}) {
   return {
     content:
       `⚔️ **戰鬥中：${fighterLabel} vs ${enemy.name}**\n` +
-      `${board}` +
-      `${actionPanels}` +
+      `${board}\n\n${actionPanels}` +
       `${statusText}` +
       `${noticeLine}` +
       `\n**招式：**\n${dmgInfo}`,
@@ -16346,7 +16832,10 @@ function buildBattleSwitchPayload(player, currentPet, notice = '') {
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, currentPet);
   const state = ensureBattleEnergyState(player);
-  const board = buildManualBattleBoard(enemy, combatant, state);
+  const layoutMode = getBattleLayoutMode(player);
+  const board = layoutMode === 'mobile'
+    ? buildManualBattleBoardMobile(enemy, combatant, state)
+    : buildManualBattleBoard(enemy, combatant, state);
   const candidates = getBattleSwitchCandidates(player, combatant?.id);
   const options = candidates.slice(0, 25).map((p) => ({
     label: `${p.name}`.slice(0, 100),
@@ -16575,7 +17064,7 @@ async function continueBattleWithHuman(interaction, user) {
   );
 }
 
-function buildOnlineFriendDuelButtons(hostId = '', hostMoves = [], hostEnergy = 0) {
+function buildOnlineFriendDuelButtons(hostId = '', hostMoves = [], hostEnergy = 0, layoutMode = 'desktop') {
   const id = String(hostId || '').trim();
   const safeMoves = Array.isArray(hostMoves) ? hostMoves.slice(0, 5) : [];
   const moveButtons = [];
@@ -16608,6 +17097,12 @@ function buildOnlineFriendDuelButtons(hostId = '', hostMoves = [], hostEnergy = 
     new ActionRowBuilder().addComponents(
       ...moveButtons.slice(3, 5),
       new ButtonBuilder().setCustomId(`fdonline_wait_${id}`).setLabel('⚡ 待機').setStyle(ButtonStyle.Primary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`fdonline_view_${id}`)
+        .setLabel(layoutMode === 'mobile' ? '🖥️ 電腦版' : '📱 手機版')
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -16636,7 +17131,7 @@ function getOnlineFriendDuelRivalMoves(enemy = null) {
       effect: (move?.effect && typeof move.effect === 'object') ? { ...move.effect } : {},
       desc: String(move?.desc || '').trim()
     }))
-    .filter((move) => move.name);
+    .filter((move) => move.name && !isFleeLikeMove(move));
   if (list.length > 0) return list;
   return [{
     id: 'friend_duel_strike',
@@ -16734,8 +17229,13 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
   const rivalChoice = online?.choices?.[rivalId] || null;
   const deadlineAt = Math.max(Date.now() + 1000, Number(online?.deadlineAt || Date.now() + FRIEND_DUEL_ONLINE_TURN_MS));
   const remainSec = Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000));
-  const board = buildManualBattleBoard(enemy, combatant, state);
-  const actionPanels = buildDualActionPanels(options?.actionView || buildOnlineFriendDuelActionView(null));
+  const layoutMode = getOnlineBattleLayoutMode(online);
+  const board = layoutMode === 'mobile'
+    ? buildManualBattleBoardMobile(enemy, combatant, state)
+    : buildManualBattleBoard(enemy, combatant, state);
+  const actionPanels = layoutMode === 'mobile'
+    ? buildDualActionPanelsMobile(options?.actionView || buildOnlineFriendDuelActionView(null))
+    : buildDualActionPanels(options?.actionView || buildOnlineFriendDuelActionView(null));
   const roundSummary = String(options?.roundSummary || '').trim();
   const notice = String(options?.notice || '').trim();
   const summaryBlock = roundSummary ? `\n📜 本回合結算：\n${roundSummary}\n` : '';
@@ -16761,7 +17261,11 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
       new ButtonBuilder().setCustomId(`fdonline_join_${hostId}`).setLabel('✅ 加入即時戰鬥').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel('⚔️ 改用手動（對手AI）').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 改用AI戰鬥').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel('↩️ 返回').setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel('↩️ 返回').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`fdonline_view_${hostId}`)
+        .setLabel(layoutMode === 'mobile' ? '🖥️ 電腦版' : '📱 手機版')
+        .setStyle(ButtonStyle.Secondary)
     );
     return {
       content: waitingContent,
@@ -16775,7 +17279,7 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
     `⏳ 本回合倒數：${remainSec} 秒（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）\n` +
     `⚡ 能量：${hostName} ${hostEnergy} ｜ ${rivalName} ${rivalEnergy}\n` +
     `${readyText}\n` +
-    `${board}` +
+    `${board}\n\n` +
     `${actionPanels}` +
     `${summaryBlock}` +
     `${noticeBlock ? `\n${noticeBlock}\n` : ''}` +
@@ -16785,7 +17289,7 @@ function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
   return {
     content,
     embeds: [],
-    components: buildOnlineFriendDuelButtons(hostId, hostMoves, hostEnergy)
+    components: buildOnlineFriendDuelButtons(hostId, hostMoves, hostEnergy, layoutMode)
   };
 }
 
@@ -16808,7 +17312,7 @@ async function editOnlineFriendDuelMessage(hostPlayer, payload) {
 }
 
 function pickBestMoveForOnlineEnemy(enemy, combatant, moves, availableEnergy = 0) {
-  const list = (Array.isArray(moves) ? moves : []).filter(Boolean);
+  const list = (Array.isArray(moves) ? moves : []).filter((move) => Boolean(move) && !isFleeLikeMove(move));
   const affordable = list.filter((move) => BATTLE.getMoveEnergyCost(move) <= Number(availableEnergy || 0));
   const pool = affordable.length > 0 ? affordable : [];
   if (pool.length <= 0) return WAIT_COMBAT_MOVE;
@@ -17097,6 +17601,9 @@ async function startManualBattleOnline(interaction, user) {
     rivalHost.battleState.mode = 'manual_online';
     ensureBattleEnergyState(rivalHost);
     rivalOnline.awaitingRival = false;
+    if (!String(rivalOnline.layoutMode || '').trim()) {
+      rivalOnline.layoutMode = getBattleLayoutMode(rivalHost);
+    }
     rivalOnline.deadlineAt = Date.now() + FRIEND_DUEL_ONLINE_TURN_MS;
     rivalOnline.turn = Math.max(1, Number(rivalHost?.battleState?.turn || rivalOnline.turn || 1));
     rivalOnline.choices = {};
@@ -17158,7 +17665,8 @@ async function startManualBattleOnline(interaction, user) {
     channelId: String(interaction.channelId || '').trim(),
     messageId: String(interaction.message?.id || '').trim(),
     resolving: false,
-    awaitingRival: true
+    awaitingRival: true,
+    layoutMode: getBattleLayoutMode(player)
   };
   player.battleState.friendDuel.online = online;
   CORE.savePlayer(player);
@@ -17191,6 +17699,24 @@ async function handleOnlineFriendDuelChoice(interaction, user, customId = '') {
   const online = getOnlineFriendDuelState(hostPlayer);
   if (!online) {
     await interaction.reply({ content: '⚠️ 線上友誼戰狀態不存在。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  if (action.kind === 'view') {
+    await interaction.deferUpdate().catch(() => {});
+    const nextMode = toggleOnlineBattleLayoutMode(online);
+    CORE.savePlayer(hostPlayer);
+    const fallbackPetView = PET.loadPet(String(hostPlayer?.id || '').trim());
+    const petResolvedView = resolvePlayerMainPet(hostPlayer, { preferBattle: true, fallbackPet: fallbackPetView });
+    const hostPetView = petResolvedView?.pet || fallbackPetView;
+    if (petResolvedView?.changed) CORE.savePlayer(hostPlayer);
+    if (hostPetView) {
+      await editOnlineFriendDuelMessage(hostPlayer, buildOnlineFriendDuelPayload(hostPlayer, hostPetView, {
+        notice: nextMode === 'mobile'
+          ? '📱 已切換為手機版戰鬥排版。'
+          : '🖥️ 已切換為電腦版戰鬥排版。'
+      }));
+    }
     return;
   }
 

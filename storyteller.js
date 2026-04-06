@@ -481,6 +481,88 @@ function parseJsonOrThrow(text = '', expect = 'object') {
   return parsed;
 }
 
+async function generatePlayerMemoryRecap(player = {}, payload = {}) {
+  const playerLang = String(player?.language || 'zh-TW').trim();
+  const langInstruction = {
+    'zh-TW': '請用繁體中文輸出',
+    'zh-CN': '請用簡體中文輸出',
+    'en': 'Please output in English'
+  }[playerLang] || '請用繁體中文輸出';
+
+  const name = String(player?.name || '冒險者').trim() || '冒險者';
+  const location = String(player?.location || '').trim();
+  const storyTurns = Math.max(0, Number(player?.storyTurns || 0));
+  const currentStory = summarizeContext(String(payload?.currentStory || player?.currentStory || ''), 780, 10);
+  const memoryContext = summarizeContext(String(payload?.memoryContext || ''), 1400, 20);
+  const recentStories = Array.isArray(payload?.recentStories)
+    ? payload.recentStories
+      .map((item, idx) => `${idx + 1}. ${summarizeContext(String(item || ''), 220, 3)}`)
+      .filter(Boolean)
+      .join('\n')
+    : '';
+  const recentActions = Array.isArray(payload?.recentActions)
+    ? payload.recentActions
+      .map((item, idx) => `${idx + 1}. ${summarizeContext(String(item || ''), 180, 2)}`)
+      .filter(Boolean)
+      .join('\n')
+    : '';
+
+  const prompt = [
+    '你是 RPG 世界的記憶檔案官。',
+    '任務：把玩家過往經歷濃縮成「可讀、像故事、可快速回想」的角色回顧。',
+    `語言要求：${langInstruction}`,
+    `玩家：${name}`,
+    `目前位置：${location || '未知'}`,
+    `已進行回合：${storyTurns}`,
+    '',
+    '輸出要求：',
+    '1. 以敘事摘要輸出（不是條列流水帳）。',
+    '2. 長度約 220~420 字（英文可 140~260 words）。',
+    '3. 必須包含：',
+    '   - 目前主線/衝突進度',
+    '   - 最近最重要的 2~4 個事件',
+    '   - 與 NPC 關係或關鍵線索狀態',
+    '   - 接下來最合理的一步（1 句）',
+    '4. 禁止模板語氣、禁止系統術語（例如 topK/embedding/namespace）。',
+    '5. 不要杜撰未提供的具體人名、證據、地點。',
+    '',
+    '【目前故事】',
+    currentStory || '（無）',
+    '',
+    '【記憶上下文】',
+    memoryContext || '（無）',
+    '',
+    '【最近故事片段】',
+    recentStories || '（無）',
+    '',
+    '【最近行動重點】',
+    recentActions || '（無）'
+  ].join('\n');
+
+  try {
+    const raw = await callAI(prompt, 0.35, {
+      label: 'generatePlayerMemoryRecap',
+      model: MINIMAX_MODEL,
+      maxTokens: 680,
+      timeoutMs: 30000,
+      retries: 1
+    });
+    const normalized = normalizeOutputByLanguage(raw, playerLang);
+    const cleaned = sanitizeAIContent(normalized);
+    if (cleaned) return cleaned;
+  } catch (e) {
+    console.log('[MemoryRecap] AI fallback:', e?.message || e);
+  }
+
+  // AI 失敗時的保底（非模板文案，只是避免空白）
+  const fallbackChunks = [];
+  if (currentStory) fallbackChunks.push(`你目前的冒險主軸仍圍繞在：${currentStory.slice(0, 160)}。`);
+  if (recentActions) fallbackChunks.push(`最近你連續採取了幾個關鍵行動，行動軌跡顯示你正在把線索往同一方向收束。`);
+  if (memoryContext) fallbackChunks.push(`從既有記憶來看，重要事件與人物互動都已留下足夠痕跡，可作為後續劇情延續依據。`);
+  fallbackChunks.push('下一步建議：先沿當前地點最接近的關鍵線索繼續推進，避免同場景重複繞圈。');
+  return fallbackChunks.join('\n');
+}
+
 async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', location = '', destinations = [] }) {
   const langInstruction = {
     'zh-TW': '請用繁體中文',
@@ -2456,6 +2538,7 @@ async function analyzeMainlineForeshadowCandidates(payload = {}) {
 module.exports = {
   generateStory,
   generateChoicesWithAI,
+  generatePlayerMemoryRecap,
   analyzeMainlineForeshadowCandidates,
   getAIPerfStats,
   RENAISS_NPCS,
