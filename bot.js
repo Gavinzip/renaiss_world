@@ -14803,7 +14803,19 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     limit: 500
   });
   const pager = paginateList(allListings, page, MARKET_LIST_PAGE_SIZE);
-  const listings = pager.items;
+  const listingsRaw = Array.isArray(pager.items) ? pager.items : [];
+  const listings = [];
+  const seenListingIds = new Set();
+  let droppedCorrupted = 0;
+  for (const listing of listingsRaw) {
+    const listingId = String(listing?.id || '').trim();
+    if (!listingId || seenListingIds.has(listingId)) {
+      droppedCorrupted += 1;
+      continue;
+    }
+    seenListingIds.add(listingId);
+    listings.push(listing);
+  }
   const stockInfo = getTeleportDeviceStockInfo(player);
   const listText = listings.length > 0
     ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
@@ -14815,6 +14827,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
       `${listText}\n\n` +
+      `${droppedCorrupted > 0 ? `⚠️ 已略過 ${droppedCorrupted} 筆異常賣單資料（請賣家重新掛單）。\n` : ''}` +
       `頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}\n` +
       `回血水晶：${SHOP_HEAL_CRYSTAL_COST} Rns（恢復氣血）\n` +
       `回能水晶：${SHOP_ENERGY_CRYSTAL_COST} Rns（恢復能量）\n` +
