@@ -5,6 +5,12 @@ node_modules/
 # 遊戲資料一律放外部 world_data，不進專案版控
 data
 data/
+# 允許新版系統模組中的 data 子目錄 JS 進版控（避免部署缺模組）
+!modules/systems/data/
+!modules/systems/data/*.js
+# 仍忽略運行期資料庫檔
+modules/systems/data/*.sqlite
+modules/systems/data/*.sqlite-*
 data_local_backup_*/
 *.log
 package-lock.json
