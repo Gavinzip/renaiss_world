@@ -1027,10 +1027,19 @@ function updateAppearance(pet) {
   pet.appearance = desc;
 }
 
+function normalizePetVitalsForStorage(pet) {
+  if (!pet || typeof pet !== 'object') return;
+  const maxHp = Math.max(1, Math.round(Number(pet.maxHp || pet.hp || 100)));
+  const hp = Math.max(0, Math.min(maxHp, Math.round(Number(pet.hp || maxHp))));
+  pet.maxHp = maxHp;
+  pet.hp = hp;
+}
+
 // ============== 存讀檔 ==============
 function savePet(pet) {
   const pets = loadAllPets();
   normalizePetMoves(pet);
+  normalizePetVitalsForStorage(pet);
   pets[pet.id] = pet;
   fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
 }

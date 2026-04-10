@@ -37,11 +37,12 @@ function createMarketSelectUtils(deps = {}) {
       const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
         ? `｜${outcome.deliveryNotes.join('；')}`
         : '';
+      const deferredHint = outcome.deliveryDeferred ? '｜櫃檯表示將於下一回合配送' : '';
       await showPlayerMarketMenu(
         interaction,
         user,
         outcome.marketType || marketType || 'renaiss',
-        `成交成功：買入 ${outcome.itemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}`
+        `成交成功：買入 ${outcome.itemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}${deferredHint}`
       );
       return true;
     }
@@ -72,11 +73,12 @@ function createMarketSelectUtils(deps = {}) {
       const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
         ? `｜${outcome.deliveryNotes.join('；')}`
         : '';
+      const deferredHint = outcome.deliveryDeferred ? '｜櫃檯表示將於下一回合配送' : '';
       await showWorldShopBuyPanel(
         interaction,
         user,
         outcome.marketType || marketType || 'renaiss',
-        `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}`
+        `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}${deferredHint}`
       );
       return true;
     }
@@ -188,4 +190,3 @@ function createMarketSelectUtils(deps = {}) {
 module.exports = {
   createMarketSelectUtils
 };
-

@@ -217,7 +217,7 @@ function createBattleStoryUtils(deps = {}) {
   }
 
   function formatPetHpWithRecovery(pet) {
-    const hp = `${Number(pet?.hp || 0)}/${Number(pet?.maxHp || 0)}`;
+    const hp = `${Math.round(Number(pet?.hp || 0))}/${Math.round(Number(pet?.maxHp || 0))}`;
     const remain = typeof PET.getPetRecoveryRemainingTurns === 'function'
       ? Number(PET.getPetRecoveryRemainingTurns(pet) || 0)
       : 0;

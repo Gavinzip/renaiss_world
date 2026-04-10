@@ -61,6 +61,9 @@ const MAX_FINANCE_LEDGER = Math.max(40, Number(process.env.MAX_FINANCE_LEDGER ||
 const MAX_FINANCE_NOTICES = Math.max(6, Number(process.env.MAX_FINANCE_NOTICES || 24));
 const MAX_MARKET_OPEN_LISTINGS_PER_PLAYER = Math.max(3, Number(process.env.MAX_MARKET_OPEN_LISTINGS_PER_PLAYER || 40));
 const MAX_MARKET_NOTE_LEN = 80;
+const FAIR_STATION_SELL_RATE = 0.8;
+const DIGITAL_STATION_DISPLAY_RATE = 0.9;
+const DIGITAL_STATION_ACTUAL_RATE = 0.6;
 
 function ensurePlayerEconomy(player) {
   if (!player || typeof player !== 'object') return;
@@ -563,10 +566,17 @@ function buyFromSellListing(buyer, listingId, options = {}) {
   const seller = loadPlayerById(listing.ownerId);
   if (!seller) return { success: false, reason: '賣家目前不存在，請稍後重試。' };
   ensurePlayerEconomy(seller);
+  const isDigitalTrap = String(listing.marketType || '').trim() === 'digital';
 
   buyer.stats.財富 = buyerGold - total;
-  seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + total;
-  const transferNotes = transferReservedItemsToBuyer(buyer, listing.reservedItems || []);
+  let transferNotes = [];
+  if (isDigitalTrap) {
+    // 神秘鑑價站陷阱：買方被承諾延後配送，但實際不配送；賣方不入帳。
+    transferNotes = ['櫃檯回覆：商品將於下一回合配送。'];
+  } else {
+    seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + total;
+    transferNotes = transferReservedItemsToBuyer(buyer, listing.reservedItems || []);
+  }
   listing.reservedItems = [];
   listing.status = 'filled';
   listing.updatedAt = Date.now();
@@ -574,28 +584,44 @@ function buyFromSellListing(buyer, listingId, options = {}) {
   listing.buyerId = buyerId;
   listing.buyerName = normalizeText(buyer.name || `玩家${buyerId.slice(-4)}`, 36);
 
-  appendFinanceLedger(buyer, {
-    amount: -total,
-    category: 'market_buy',
-    source: `購買 ${listing.itemName} x${listing.quantity}`,
-    marketType: listing.marketType,
-    counterpartyId: listing.ownerId,
-    counterpartyName: listing.ownerName,
-    refId: listing.id
-  });
-  appendFinanceLedger(seller, {
-    amount: total,
-    category: 'market_sell',
-    source: `售出 ${listing.itemName} x${listing.quantity}`,
-    marketType: listing.marketType,
-    counterpartyId: buyerId,
-    counterpartyName: normalizeText(buyer.name || '', 36),
-    refId: listing.id
-  });
-  pushFinanceNotice(
-    seller,
-    `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，入帳 +${total} Rns（買家：${normalizeText(buyer.name || '匿名玩家', 24)}）`
-  );
+  if (isDigitalTrap) {
+    appendFinanceLedger(buyer, {
+      amount: -total,
+      category: 'market_buy_digital_trap',
+      source: `神秘鑑價站購買 ${listing.itemName} x${listing.quantity}（延後配送）`,
+      marketType: listing.marketType,
+      counterpartyId: listing.ownerId,
+      counterpartyName: listing.ownerName,
+      refId: listing.id
+    });
+    pushFinanceNotice(
+      seller,
+      `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，但神秘鑑價站代收款項，未撥款入帳。`
+    );
+  } else {
+    appendFinanceLedger(buyer, {
+      amount: -total,
+      category: 'market_buy',
+      source: `購買 ${listing.itemName} x${listing.quantity}`,
+      marketType: listing.marketType,
+      counterpartyId: listing.ownerId,
+      counterpartyName: listing.ownerName,
+      refId: listing.id
+    });
+    appendFinanceLedger(seller, {
+      amount: total,
+      category: 'market_sell',
+      source: `售出 ${listing.itemName} x${listing.quantity}`,
+      marketType: listing.marketType,
+      counterpartyId: buyerId,
+      counterpartyName: normalizeText(buyer.name || '', 36),
+      refId: listing.id
+    });
+    pushFinanceNotice(
+      seller,
+      `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，入帳 +${total} Rns（買家：${normalizeText(buyer.name || '匿名玩家', 24)}）`
+    );
+  }
 
   savePlayerById(seller);
   saveMarketBoard(board);
@@ -608,7 +634,8 @@ function buyFromSellListing(buyer, listingId, options = {}) {
     quantity: Number(listing.quantity || 1),
     totalPrice: total,
     sellerName: listing.ownerName,
-    deliveryNotes: Array.isArray(transferNotes) ? transferNotes : []
+    deliveryNotes: Array.isArray(transferNotes) ? transferNotes : [],
+    deliveryDeferred: isDigitalTrap
   };
 }
 
@@ -635,7 +662,8 @@ function fulfillBuyListing(seller, listingId, options = {}) {
   if (!reserve.success) return reserve;
 
   transferReservedItemsToBuyer(buyer, reserve.reserved);
-  const payout = Math.max(0, Number(listing.reservedGold || listing.totalPrice || 0));
+  const isDigitalTrap = String(listing.marketType || '').trim() === 'digital';
+  const payout = isDigitalTrap ? 0 : Math.max(0, Number(listing.reservedGold || listing.totalPrice || 0));
   seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + payout;
   listing.reservedGold = 0;
   listing.reservedItems = reserve.reserved;
@@ -645,15 +673,19 @@ function fulfillBuyListing(seller, listingId, options = {}) {
   listing.sellerId = sellerId;
   listing.sellerName = normalizeText(seller.name || `玩家${sellerId.slice(-4)}`, 36);
 
-  appendFinanceLedger(seller, {
-    amount: payout,
-    category: 'market_sell_to_buy_order',
-    source: `完成買單：${listing.itemName} x${listing.quantity}`,
-    marketType: listing.marketType,
-    counterpartyId: listing.ownerId,
-    counterpartyName: listing.ownerName,
-    refId: listing.id
-  });
+  if (payout > 0) {
+    appendFinanceLedger(seller, {
+      amount: payout,
+      category: 'market_sell_to_buy_order',
+      source: `完成買單：${listing.itemName} x${listing.quantity}`,
+      marketType: listing.marketType,
+      counterpartyId: listing.ownerId,
+      counterpartyName: listing.ownerName,
+      refId: listing.id
+    });
+  } else if (isDigitalTrap) {
+    pushFinanceNotice(seller, `📬 你完成了神秘鑑價站買單「${listing.itemName}」，但對方平台未撥款。`);
+  }
   pushFinanceNotice(
     buyer,
     `📬 你的買單已完成：${listing.itemName} x${listing.quantity}（成交價 ${payout} Rns，賣家：${normalizeText(seller.name || '匿名玩家', 24)}）`
@@ -1442,13 +1474,28 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
 
   const lines = [];
   let total = 0;
+  let displayTotal = 0;
   let fairTotal = 0;
   for (const item of sellables) {
-    fairTotal += Math.max(1, Number(item.value || 1));
-    const quote = appraiseValue(item.value, marketType);
-    total += quote;
+    const baseValue = Math.max(1, Number(item.value || 1));
+    fairTotal += baseValue;
+    let displayQuote = 0;
+    let actualQuote = 0;
+    if (marketType === 'digital') {
+      displayQuote = Math.max(1, Math.floor(baseValue * DIGITAL_STATION_DISPLAY_RATE));
+      actualQuote = Math.max(1, Math.floor(baseValue * DIGITAL_STATION_ACTUAL_RATE));
+    } else {
+      displayQuote = Math.max(1, Math.floor(baseValue * FAIR_STATION_SELL_RATE));
+      actualQuote = displayQuote;
+    }
+    displayTotal += displayQuote;
+    total += actualQuote;
     if (lines.length < 6) {
-      lines.push(`• ${item.name}（${item.rarity}）→ ${quote} Rns 代幣`);
+      lines.push(
+        marketType === 'digital'
+          ? `• ${item.name}（${item.rarity}）→ ${displayQuote} Rns 代幣（櫃台顯示）`
+          : `• ${item.name}（${item.rarity}）→ ${actualQuote} Rns 代幣`
+      );
     }
   }
 
@@ -1460,6 +1507,7 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
   if (marketType === 'renaiss') player.marketState.renaissVisits = Number(player.marketState.renaissVisits || 0) + 1;
   player.stats.財富 = Number(player.stats.財富 || 0) + total;
 
+  const outwardTotal = marketType === 'digital' ? displayTotal : total;
   const avgRate = Math.max(0.01, total / Math.max(1, fairTotal));
   const historyRecall = formatHistoryRecall(player, marketType);
   let digitalRiskDelta = 0;
@@ -1484,7 +1532,8 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
     marketType,
     soldCount: sellables.length,
     fairTotal,
-    quotedTotal: total,
+    quotedTotal: outwardTotal,
+    actualTotal: total,
     avgRate,
     riskScoreAfter: Number(player.marketState.digitalRiskScore || 0),
     timestamp: Date.now()
@@ -1495,7 +1544,7 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
     playerName: player.name || '旅人',
     location: player.location || '',
     soldCount: sellables.length,
-    total,
+    total: outwardTotal,
     avgRate,
     historyRecall,
     digitalRiskScore: Number(player.marketState.digitalRiskScore || 0),
@@ -1517,6 +1566,7 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
 
   return {
     totalGold: total,
+    displayGold: outwardTotal,
     soldCount: sellables.length,
     npcName: appraiser.npcName,
     marketType,
@@ -1531,7 +1581,9 @@ async function sellPlayerAtMarket(player, marketType = 'renaiss', options = {}) 
       `🏪 ${appraiser.npcName}：${pitch}\n` +
       `💬 ${historyRecall}\n` +
       `${lines.join('\n')}\n` +
-      `\n本次結算：+${total} Rns 代幣（共 ${sellables.length} 件）\n${biasNote}`
+      (marketType === 'digital'
+        ? `\n櫃台顯示估值：${outwardTotal} Rns 代幣（牌價約九折）\n本次實際入帳：+${total} Rns 代幣（共 ${sellables.length} 件，實收約六折）\n${biasNote}`
+        : `\n本次結算：+${total} Rns 代幣（共 ${sellables.length} 件，公道站固定八折）\n${biasNote}`)
       + riskLine
   };
 }

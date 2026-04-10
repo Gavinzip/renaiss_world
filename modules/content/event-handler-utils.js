@@ -806,6 +806,41 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     });
   }
 
+  if (!shouldTriggerBattle(event, result) && typeof MAIN_STORY.suggestMissionAutoTravel === 'function') {
+    const autoTravel = MAIN_STORY.suggestMissionAutoTravel(player, {
+      location: String(player.location || '').trim(),
+      storyTurns: storyTurnsForMission,
+      turnsInLocation: turnsInLocationForMission
+    });
+    if (autoTravel?.targetLocation) {
+      const fromLocation = String(player.location || '').trim();
+      const targetLocation = String(autoTravel.targetLocation || '').trim();
+      if (targetLocation && targetLocation !== fromLocation) {
+        player.location = targetLocation;
+        syncLocationArcLocation(player);
+        player.navigationTarget = targetLocation;
+        const travelLine = String(autoTravel.appendText || '').trim()
+          || `🧭 你沿著在地線索由 ${fromLocation} 轉往 **${targetLocation}**。`;
+        result.message = `${String(result.message || '').trim()}\n\n${travelLine}`.trim();
+        queueMemory({
+          type: '移動',
+          content: `主線導引移動`,
+          outcome: `${fromLocation} -> ${targetLocation}`,
+          importance: 2,
+          tags: ['travel', 'main_story', 'mission_auto']
+        });
+      }
+      if (autoTravel?.memory) {
+        queueMemory({
+          type: '主線',
+          content: String(autoTravel.memory || '').trim(),
+          importance: 2,
+          tags: ['main_story', 'mission_auto']
+        });
+      }
+    }
+  }
+
   const enteringBattleNow = shouldTriggerBattle(event, result);
   if (enteringBattleNow) {
     clearPendingConflictFollowup(player);
@@ -942,9 +977,26 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     const missionNpc = String(regionMissionAtCompletion?.npcName || '關鍵NPC').trim();
     const missionLocation = String(regionMissionAtCompletion?.npcLocation || completedLocation).trim();
     const missionEvidence = String(regionMissionAtCompletion?.evidenceName || '關鍵證據').trim();
-    result.message = `${String(result.message || '').trim()}\n\n` +
-      `📍 ${completedChapterTitle}可自由探索，但你尚未取得本區唯一來源關鍵證據「${missionEvidence}」。\n` +
-      `🎯 請優先在 **${missionLocation}** 接觸 **${missionNpc}**，完成後再考慮跨區。`;
+    const shouldAutoMoveToMission = missionLocation && missionLocation !== completedLocation;
+    if (shouldAutoMoveToMission) {
+      player.location = missionLocation;
+      syncLocationArcLocation(player);
+      player.navigationTarget = missionLocation;
+      result.message = `${String(result.message || '').trim()}\n\n` +
+        `📍 ${completedChapterTitle}暫時收束，你沒有直接跨區，而是依線索先轉往 **${missionLocation}**。\n` +
+        `🎯 目前主線目標：接觸 **${missionNpc}**，補齊「${missionEvidence}」。`;
+      queueMemory({
+        type: '移動',
+        content: '地區收尾後回補關鍵任務',
+        outcome: `${completedLocation} -> ${missionLocation}`,
+        importance: 2,
+        tags: ['travel', 'main_story', 'mission_hold']
+      });
+    } else {
+      result.message = `${String(result.message || '').trim()}\n\n` +
+        `📍 ${completedChapterTitle}可自由探索，但你尚未取得本區唯一來源關鍵證據「${missionEvidence}」。\n` +
+        `🎯 請優先在 **${missionLocation}** 接觸 **${missionNpc}**，完成後再考慮跨區。`;
+    }
     player.portalMenuOpen = false;
     player.forcePortalChoice = false;
     queueMemory({

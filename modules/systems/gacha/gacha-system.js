@@ -2,7 +2,7 @@
  * 🎰 招式扭蛋系統 v2
  * - 移除保底
  * - 升級點數 = 開包次數（每包1點）
- * - 每點 = 0.2 HP，可分配給不同寵物
+ * - 每點 = 1 HP，可分配給不同寵物
  */
 
 const PET = require('../pet/pet-system');
@@ -49,7 +49,7 @@ const GACHA_CONFIG = {
   
   // 每包 = 1 升級點數
   pointsPerPack: 1,
-  hpPerPoint: 0.2   // 每點 = 0.2 HP
+  hpPerPoint: 1   // 每點 = 1 HP
 };
 
 function ensurePlayerCodexSchema(player) {
@@ -196,13 +196,14 @@ function getMoveValue(move) {
 // ============== 分配升級點數 ==============
 // playerId: 玩家ID
 // petId: 寵物ID（用於多寵物）
-// amount: 點數（預設1點 = 0.2 HP）
+// amount: 點數（預設1點 = 1 HP）
 function allocateUpgradePoint(playerId, petId, amount = 1) {
   const player = CORE.loadPlayer(playerId);
   if (!player) return { success: false, reason: '找不到玩家！' };
+  const spend = Math.max(1, Math.floor(Number(amount || 1)));
   
-  if (!player.upgradePoints || player.upgradePoints < amount) {
-    return { success: false, reason: `升級點數不足！需要 ${amount} 點，你只有 ${player.upgradePoints || 0} 點` };
+  if (!player.upgradePoints || player.upgradePoints < spend) {
+    return { success: false, reason: `升級點數不足！需要 ${spend} 點，你只有 ${player.upgradePoints || 0} 點` };
   }
   
   // 讀取寵物
@@ -212,12 +213,13 @@ function allocateUpgradePoint(playerId, petId, amount = 1) {
   }
   
   // 扣點
-  player.upgradePoints -= amount;
+  player.upgradePoints -= spend;
   CORE.savePlayer(player);
   
-  // 給 HP（每點 0.2 HP）
-  const hpGain = amount * GACHA_CONFIG.hpPerPoint;
-  pet.maxHp += hpGain;
+  // 給 HP（每點 1 HP）；寫回時一律整數化，避免小數血量殘留。
+  const hpGain = spend * GACHA_CONFIG.hpPerPoint;
+  const baseMaxHp = Math.max(1, Math.round(Number(pet.maxHp || pet.hp || 100)));
+  pet.maxHp = baseMaxHp + hpGain;
   pet.hp = pet.maxHp; // 滿血
   PET.savePet(pet);
   
@@ -225,7 +227,7 @@ function allocateUpgradePoint(playerId, petId, amount = 1) {
     success: true, 
     petName: pet.name,
     hpGain, 
-    pointsUsed: amount,
+    pointsUsed: spend,
     remaining: player.upgradePoints 
   };
 }

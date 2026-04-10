@@ -1,7 +1,7 @@
 function createAdventureStatusUtils(deps = {}) {
   const {
     normalizeLangCode = (v) => v || 'zh-TW',
-    formatPetHpWithRecovery = (pet) => `${Number(pet?.hp || 0)}/${Number(pet?.maxHp || 0)}`,
+    formatPetHpWithRecovery = (pet) => `${Math.round(Number(pet?.hp || 0))}/${Math.round(Number(pet?.maxHp || 0))}`,
     ISLAND_STORY = null,
     MAIN_STORY = null
   } = deps;

@@ -113,7 +113,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     showMemoryRecap,
     getQuickShopCooldownInfo,
     getTeleportDeviceStockInfo,
-    openShopSession,
+    openShopSession = () => {},
     showWorldShopScene,
     buildQuickShopNarrativeNotice,
     showPlayerMarketMenu,
@@ -1091,11 +1091,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
       ? `｜${outcome.deliveryNotes.join('；')}`
       : '';
+    const deferredHint = outcome.deliveryDeferred ? '｜櫃檯表示將於下一回合配送' : '';
     await showPlayerMarketMenu(
       interaction,
       user,
       outcome.marketType || 'renaiss',
-      `成交成功：買入 ${outcome.itemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}`
+      `成交成功：買入 ${outcome.itemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}${deferredHint}`
     );
     return;
   }
@@ -1130,24 +1131,47 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   if (customId.startsWith('shop_open_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (player) {
+      const needsReopen = !player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss');
+      if (needsReopen) {
+        openShopSession(player, marketType, '商店內操作續接');
+        CORE.savePlayer(player);
+      }
+    }
     await showWorldShopScene(interaction, user, marketType);
     return;
   }
 
   if (customId.startsWith('shop_post_sell_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (player && (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss'))) {
+      openShopSession(player, marketType, '掛賣續接');
+      CORE.savePlayer(player);
+    }
     await showWorldShopSellPicker(interaction, user, marketType);
     return;
   }
 
   if (customId.startsWith('shop_npc_haggle_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (player && (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss'))) {
+      openShopSession(player, marketType, '議價續接');
+      CORE.savePlayer(player);
+    }
     await showWorldShopHagglePicker(interaction, user, marketType);
     return;
   }
 
   if (customId.startsWith('shop_haggle_all_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (player && (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(marketType || 'renaiss'))) {
+      openShopSession(player, marketType, '批次議價續接');
+      CORE.savePlayer(player);
+    }
     await showWorldShopHaggleBulkPicker(interaction, user, marketType);
     return;
   }
@@ -1321,11 +1345,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
       ? `｜${outcome.deliveryNotes.join('；')}`
       : '';
+    const deferredHint = outcome.deliveryDeferred ? '｜櫃檯表示將於下一回合配送' : '';
     await showWorldShopBuyPanel(
       interaction,
       user,
       outcome.marketType || 'renaiss',
-      `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}`
+      `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}${deferredHint}`
     );
     return;
   }
@@ -1503,6 +1528,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
   if (customId.startsWith('shop_buy_')) {
     const parsed = parseMarketAndPageFromCustomId(customId, 'shop_buy_', 'renaiss');
+    const player = CORE.loadPlayer(user.id);
+    if (player && (!player.shopSession?.open || String(player.shopSession.marketType || '') !== String(parsed.marketType || 'renaiss'))) {
+      openShopSession(player, parsed.marketType, '商店購買續接');
+      CORE.savePlayer(player);
+    }
     await showWorldShopBuyPanel(interaction, user, parsed.marketType, '', parsed.page);
     return;
   }

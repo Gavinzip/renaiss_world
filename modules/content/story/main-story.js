@@ -49,7 +49,7 @@ const REGION_KEY_MISSIONS = Object.freeze({
   },
   west_desert: {
     npcName: '轉運站調度員',
-    npcLocation: '敦煌',
+    npcLocation: '喀什爾',
     evidenceName: '異常轉運時間鏈',
     actionKeywords: ['轉運', '時間鏈', '貨流', '洗來源', '調度', '碼頭紀錄'],
     enemyAliases: ['轉運站調度員'],
@@ -59,7 +59,7 @@ const REGION_KEY_MISSIONS = Object.freeze({
   },
   southern_delta: {
     npcName: '工坊試樣師',
-    npcLocation: '廣州',
+    npcLocation: '鏡湖渡口',
     evidenceName: '偽造樣本與製程片段',
     actionKeywords: ['偽造樣本', '製程片段', '試樣', '工坊', '仿品', '樣本'],
     enemyAliases: ['工坊試樣師'],
@@ -79,7 +79,7 @@ const REGION_KEY_MISSIONS = Object.freeze({
   },
   island_routes: {
     npcName: '四巨頭',
-    npcLocation: '星潮港',
+    npcLocation: '桃花島',
     evidenceName: '核心憑證（四巨頭鏈）',
     actionKeywords: [],
     enemyAliases: [...DIGITAL_KINGS]
@@ -92,12 +92,12 @@ const MISSION_LEAD_LINES = Object.freeze({
     '洛陽城的攤販對你使了個眼色：雙鑑衝突原始單不在檯面上，只能找灰帳記錄員。'
   ],
   west_desert: [
-    '敦煌轉運區有人壓低聲線告訴你：要看異常時間鏈，得直接問轉運站調度員。',
-    '沙港倉門邊傳來一句暗語：異常轉運時間鏈只在調度員手上，別找錯人。'
+    '喀什爾轉運區有人壓低聲線告訴你：要看異常時間鏈，得直接問轉運站調度員。',
+    '喀什爾巴扎後巷傳來一句暗語：異常轉運時間鏈只在調度員手上，別找錯人。'
   ],
   southern_delta: [
-    '廣州工坊街有人遞來一句話：偽造樣本與製程片段，只有工坊試樣師敢拿出來。',
-    '修復臺後方傳來提醒：別再兜圈，工坊試樣師手上才有你要的製程片段。'
+    '鏡湖渡口有人遞來一句話：偽造樣本與製程片段，只有工坊試樣師敢拿出來。',
+    '渡口修復臺後方傳來提醒：別再兜圈，工坊試樣師手上才有你要的製程片段。'
   ],
   northern_highland: [
     '雪白山莊的巡線員低聲說：夜冕主宰鏈路密鑰只在滲透聯絡員那裡。',
@@ -450,6 +450,51 @@ function getCurrentRegionMission(player = null, location = '') {
   };
 }
 
+function suggestMissionAutoTravel(player = null, context = {}) {
+  const state = ensureMainStoryState(player);
+  if (!state || state.completed) return null;
+  const currentLocation = String(context?.location || player?.location || '').trim();
+  if (!currentLocation) return null;
+  const mission = getCurrentRegionMission(player, currentLocation);
+  if (!mission || mission.keyFound) return null;
+
+  const targetLocation = String(mission.npcLocation || '').trim();
+  if (!targetLocation || targetLocation === currentLocation) return null;
+  const fromRegion = String(getRegionIdByLocation(currentLocation) || '').trim();
+  const toRegion = String(getRegionIdByLocation(targetLocation) || '').trim();
+  if (!fromRegion || !toRegion || fromRegion !== toRegion) return null;
+
+  const missionState = ensureMissionState(state);
+  const row = missionState?.regions?.[mission.regionId] || null;
+  const spec = REGION_KEY_MISSIONS[String(mission.regionId || '').trim()] || null;
+  if (!row || !spec) return null;
+
+  const storyTurns = Math.max(0, Number(context?.storyTurns ?? player?.storyTurns ?? state?.eventCount ?? 0));
+  const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
+  const minTurnsInLocation = Math.max(1, Number(spec?.minTurnsInLocation || 1));
+  const leadShownCount = Math.max(0, Number(row?.leadShownCount || 0));
+  const cooldownTurns = Math.max(2, Number(context?.cooldownTurns || 2));
+  const lastAutoTurn = Number(state?.lastMissionAutoTravelTurn || -999);
+  if (leadShownCount <= 0) return null;
+  if (turnsInLocation < minTurnsInLocation) return null;
+  if (storyTurns - lastAutoTurn < cooldownTurns) return null;
+
+  state.lastMissionAutoTravelTurn = storyTurns;
+  const npcName = String(mission.npcName || '關鍵NPC').trim() || '關鍵NPC';
+  const evidenceName = String(mission.evidenceName || '關鍵證據').trim() || '關鍵證據';
+  const appendText = (storyTurns % 2 === 0)
+    ? `🧭 你把 ${currentLocation} 的線索先收束，沿著在地口供與物流路徑，低調轉往 **${targetLocation}**。\n🎯 目前目標鎖定：接觸 **${npcName}**，補齊「${evidenceName}」。`
+    : `🧭 你沒有硬闖下一段戰線，而是依照前面蒐到的口供，先移動到 **${targetLocation}** 佈點。\n🎯 下一步：在當地接觸 **${npcName}**，把「${evidenceName}」拿到手。`;
+  return {
+    fromLocation: currentLocation,
+    targetLocation,
+    npcName,
+    evidenceName,
+    appendText,
+    memory: `你為了本區主線，從 ${currentLocation} 轉往 ${targetLocation} 追查 ${npcName}。`
+  };
+}
+
 function getTruthGatePrompt(player = null, location = '') {
   const state = ensureMainStoryState(player);
   if (!state) return '';
@@ -647,6 +692,7 @@ function ensureMainStoryState(player) {
       eventCount: 0,
       lastTravelHintEventCount: -999,
       lastAssassinPressureEventCount: -999,
+      lastMissionAutoTravelTurn: -999,
       defeatedKings: [],
       lastKingEncounterEventCount: -999,
       pendingKing: null,
@@ -668,6 +714,9 @@ function ensureMainStoryState(player) {
   }
   if (!Number.isFinite(Number(player.mainStory.lastAssassinPressureEventCount))) {
     player.mainStory.lastAssassinPressureEventCount = -999;
+  }
+  if (!Number.isFinite(Number(player.mainStory.lastMissionAutoTravelTurn))) {
+    player.mainStory.lastMissionAutoTravelTurn = -999;
   }
   normalizeKingProgressState(player.mainStory);
   ensureMissionState(player.mainStory);
@@ -1056,6 +1105,7 @@ module.exports = {
   getTruthDisclosureLevel,
   getTruthGatePrompt,
   getCurrentRegionMission,
+  suggestMissionAutoTravel,
   recordActionEvidence,
   maybeTriggerMissionNpcLead,
   getMainStoryChoice,

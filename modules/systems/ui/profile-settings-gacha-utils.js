@@ -118,7 +118,7 @@ function createProfileSettingsGachaUtils(deps = {}) {
 
     const petsList = profile.pets.map(p =>
       `**${p.name}** (${p.type})\n` +
-        `  HP: ${p.hp}/${p.maxHp} (+0)| ATK: ${p.attack}\n` +
+        `  HP: ${Math.round(Number(p.hp || 0))}/${Math.round(Number(p.maxHp || 0))} (+0)| ATK: ${p.attack}\n` +
         `  招式: ${p.moves.join(', ')}`
     ).join('\n\n') || '無寵物';
 
@@ -197,7 +197,7 @@ function createProfileSettingsGachaUtils(deps = {}) {
         { name: '📊 已開包數', value: `${profile.totalDraws} 包`, inline: true },
         { name: '💡 每點可換', value: `${config.hpPerPoint} HP`, inline: true }
       )
-      .addFields({ name: '💡 說明', value: '每開1包 = 1升級點數\n每點 = 0.2 HP（可分配給不同寵物）\n可分配給任何寵物，用完就沒了', inline: false });
+      .addFields({ name: '💡 說明', value: '每開1包 = 1升級點數\n每點 = 1 HP（可分配給不同寵物）\n可分配給任何寵物，用完就沒了', inline: false });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('gacha_single').setLabel(`單抽 ${config.singleCost}｜餘額 ${currentRns}`).setStyle(ButtonStyle.Primary),

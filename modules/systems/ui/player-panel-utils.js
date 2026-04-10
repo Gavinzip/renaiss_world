@@ -178,7 +178,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     `可攜帶上陣招式：**${PET_MOVE_LOADOUT_LIMIT}**（逃跑技能固定，不占名額）`,
     `已解鎖招式：${selectedPet.moves.length}`,
     `背包晶片：${allChipTotal} 枚｜可學：${learnableChipTotal} 枚 / ${learnableChips.length} 種`,
-    `升級點數：${Number(player?.upgradePoints || 0)} 點（每點 +${Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 0.2)} HP，可批量）`,
+    `升級點數：${Number(player?.upgradePoints || 0)} 點（每點 +${Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 1)} HP，可批量）`,
     `主上場寵物：${activePetResolved?.pet?.name || selectedPet.name}`
   ].filter(Boolean).join('\n');
 
@@ -268,7 +268,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   }
 
   const remainPoints = Math.max(0, Number(player?.upgradePoints || 0));
-  const hpPerPoint = Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 0.2);
+  const hpPerPoint = Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 1);
   const rowButtons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`moves_page_prev_${selectedPet.id}_${movePager.page}`)
@@ -1235,6 +1235,9 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     listings.push(listing);
   }
   const stockInfo = getTeleportDeviceStockInfo(player);
+  const marketRuleLine = safeMarket === 'digital'
+    ? '⚠️ 神秘鑑價站規則：賣出牌價可能顯示九折，但實際入帳可能僅六折；成交品也可能只收到延後配送承諾。'
+    : '✅ 公道鑑價站規則：賣出固定八折，牌價與入帳一致，成交品即時交付。';
   const listText = listings.length > 0
     ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
     : '（目前沒有可購買商品）';
@@ -1251,7 +1254,8 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
       `回能水晶：${SHOP_ENERGY_CRYSTAL_COST} Rns（恢復能量）\n` +
       `加成點數：花費 200 Rns 可獲得 +1 點。\n` +
       `傳送裝置：${TELEPORT_DEVICE_COST} Rns（同島瞬移，單顆效期 ${TELEPORT_DEVICE_DURATION_HOURS}h，每次消耗 1 顆）\n` +
-      `目前可用：${stockInfo.count} 顆${stockInfo.count > 0 ? `（最早到期：${formatTeleportDeviceRemaining(stockInfo.soonestRemainingMs)}）` : ''}`
+      `目前可用：${stockInfo.count} 顆${stockInfo.count > 0 ? `（最早到期：${formatTeleportDeviceRemaining(stockInfo.soonestRemainingMs)}）` : ''}\n` +
+      `${marketRuleLine}`
     );
 
   const rows = [];
@@ -1294,7 +1298,21 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
       .setDisabled(pager.page >= pager.totalPages - 1),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   ));
-  await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
+  try {
+    await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
+  } catch (err) {
+    console.error('[Shop] show buy panel update failed:', err?.message || err);
+    const fallbackRows = rows.filter((row, idx) => idx !== 0); // 下拉選單失敗時保留功能按鈕
+    const fallbackEmbed = new EmbedBuilder()
+      .setTitle(`🛒 商店可購買商品｜${getMarketTypeLabel(safeMarket)}`)
+      .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
+      .setDescription(
+        `⚠️ 賣單清單載入失敗，請稍後再試。\n\n` +
+        `${notice ? `提示：${notice}\n` : ''}` +
+        `你仍可使用下方按鈕購買水晶、點數與傳送裝置。`
+      );
+    await updateInteractionMessage(interaction, { embeds: [fallbackEmbed], components: fallbackRows }).catch(() => {});
+  }
 }
 
 async function showWorldShopScene(interaction, user, marketType = 'renaiss', notice = '') {
@@ -1309,6 +1327,9 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
   const bossTone = safeMarket === 'digital'
     ? '老闆眼神很熱情，但每句話都像在試探你的底線。'
     : '老闆把估值表攤在你面前，強調透明與長期信任。';
+  const pricingRule = safeMarket === 'digital'
+    ? '⚠️ 神秘站對外牌價常寫九折，但實際結算可能僅六折；配送承諾也未必兌現。'
+    : '✅ 公道站賣出固定八折，顯示與實收一致。';
   const listingCount = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', limit: 99 }).length;
   const myCount = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 99 }).length;
 
@@ -1320,6 +1341,7 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
       `你走進了${getMarketTypeLabel(safeMarket)}，櫃台後方的 **${bossName}** 正看著你。\n` +
       `${bossTone}\n\n` +
       `市面賣單：${listingCount} 筆｜你掛單：${myCount} 筆\n` +
+      `${pricingRule}\n` +
       `請選擇：要掛賣、直接跟老闆議價、買商品、刮刮樂，或離開商店。\n` +
       `掛賣會先出現下拉選單；技能需先從上陣招式卸下才可掛賣。`
     )
