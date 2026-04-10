@@ -547,16 +547,16 @@ function generateEventChoices(player, worldState) {
 // 根據地點獲取情境描述
 function getLocationContext(location) {
   const contexts = {
-    '襄陽城': { desc: '繁華熱鬧的兵家必爭之地', mood: '緊張', special: '郭大俠' },
-    '大都': { desc: '皇城腳下戒備森嚴', mood: '壓抑', special: '皇宮' },
+    '襄陽城': { desc: '繁華的交通與交易節點，局勢緊繃', mood: '緊張', special: '城防調度員' },
+    '大都': { desc: '核心政務區戒備森嚴', mood: '壓抑', special: '中樞塔' },
     '洛陽城': { desc: '牡丹花城繁華似錦', mood: '悠閒', special: '戰圈高手' },
-    '敦煌': { desc: '絲路重鎮風沙漫天', mood: '神秘', special: '商人' },
-    '廣州': { desc: '南海港口繁華開放', mood: '活力', special: '番商' },
-    '大理': { desc: '四季如春山清水秀', mood: '祥和', special: '少數民族' },
+    '敦煌': { desc: '沙海節點城，風沙裡藏著舊時物流痕跡', mood: '神秘', special: '轉運調度員' },
+    '廣州': { desc: '南部港埠繁忙，貨流節奏極快', mood: '活力', special: '港務檢測員' },
+    '大理': { desc: '山城與水網交會，生活節奏平穩', mood: '祥和', special: '在地工坊主' },
     '桃花島': { desc: '機關重重的隔離島嶼', mood: '奇幻', special: '島嶼工程師' },
     '潮汐試煉島': { desc: '高階試煉聖地壁上刻著技術檔案', mood: '莊嚴', special: '技術檔案' },
-    '雪白山莊': { desc: '北疆寒門冰封千里', mood: '凜冽', special: '寒冰' },
-    '草原部落': { desc: '天蒼蒼野茫茫風吹草低', mood: '開闊', special: '牧民' },
+    '雪白山莊': { desc: '北境冰封據點，補給線稀薄', mood: '凜冽', special: '低溫維修艙' },
+    '草原部落': { desc: '高原聚落視野開闊，巡邏線漫長', mood: '開闊', special: '巡邏騎隊' },
     '光明頂': { desc: '光焰議會的能量火炬長明不滅', mood: '熱血', special: '議會執行官' },
     '黑木崖': { desc: '暗潮議會在此運作高風險地下交易', mood: '詭譎', special: '匿名經紀人' }
   };
@@ -626,7 +626,7 @@ function getLocationBasedEvents(location, alignment) {
       id: `rare_herb_${location}`,
       name: '🌿 稀有草藥帶',
       choice: `沿著${herbHotspot}的香氣尋找稀有草藥`,
-      desc: `${location}近期盛傳有珍稀藥材現身，${herbHotspot}一帶出現了不尋常的靈氣波動。`,
+      desc: `${location}近期盛傳有珍稀藥材現身，${herbHotspot}一帶出現了不尋常的頻譜波動。`,
       action: 'forage'
     });
   }
@@ -731,7 +731,7 @@ function getInteractionEvents(alignment) {
       id: 'train',
       name: '🧘 找地方訓練',
       choice: '尋找一處清幽之地，調頻訓練提升能量',
-      desc: '你聽說' + (alignment === '正派' ? '某處風景絕佳' : '某處靈氣充沛') + '，正是訓練的好地方...',
+      desc: '你聽說' + (alignment === '正派' ? '某處訊號穩定' : '某處干擾偏低') + '，正是訓練的好地方...',
       action: 'meditate',
       mpGain: 15
     }
@@ -794,7 +794,7 @@ function getSpecialOptions(player) {
     {
       id: 'destiny',
       name: '🔮 感應天命',
-      choice: '閉眼感受天地靈氣的流動，讓直覺引導你',
+      choice: '閉眼感受周邊訊號的流動，讓直覺引導你',
       desc: '你突然感到一股奇妙的預感，似乎冥冥之中自有安排...',
       action: 'special'
     },

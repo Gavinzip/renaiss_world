@@ -10,3 +10,5 @@ data_local_backup_*/
 package-lock.json
 dev/
 DEV/
+tools/tests/results/
+REFACTOR_FEATURES_FROM_ac9ade.md
