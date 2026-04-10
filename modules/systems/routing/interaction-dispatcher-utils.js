@@ -62,6 +62,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     startFriendDuel,
     clearOnlineFriendDuelTimer,
     showIslandMap,
+    getRegionLocationsByLocation,
     normalizeMapViewMode,
     getPlayerUILang,
     getMapText,
@@ -85,6 +86,8 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     startManualBattle,
     resolvePlayerMainPet,
     estimateBattleOutcome,
+    formatBattleHpValue = (v) => String(Math.max(0, Number(v) || 0)),
+    format1 = (v) => String(v ?? 0),
     formatBattleElementDisplay,
     resolveEnemyBattleElement,
     getBattleElementRelation,
@@ -127,6 +130,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     showWorldShopBuyPanel,
     playScratchLottery,
     grantTeleportDevice,
+    formatTeleportDeviceRemaining = () => 'N/A',
     buyShopCrystal,
     leaveShopSession,
     showProfile,
@@ -140,6 +144,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     restoreButtonTemplateSnapshot,
     tryRecoverEventButtonsAfterFailure,
     tryRecoverMainMenuAfterFailure,
+    normalizeEventChoices,
     applyChoicePolicy
   } = deps;
 

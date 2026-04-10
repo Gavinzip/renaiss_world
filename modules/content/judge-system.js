@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { sanitizeWorldText } = require('../../style-sanitizer');
+const { sanitizeWorldText } = require('../core/style-sanitizer');
 
 // ============== 元素相剋 ==============
 const ELEMENT_ADVANTAGE = {

@@ -11,7 +11,7 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-const CORE = require('../game-core');
+const CORE = require('../modules/core/game-core');
 
 async function main() {
   try {

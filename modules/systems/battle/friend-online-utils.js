@@ -446,6 +446,13 @@ function createFriendOnlineUtils(deps = {}) {
         return;
       }
 
+      if (hostPlayer?.battleState && enemy) {
+        // Keep board source of truth in sync, otherwise UI may render previous-frame HP.
+        hostPlayer.battleState.enemy = enemy;
+      }
+      if (hostPlayer?.battleState && combatant?.id) {
+        hostPlayer.battleState.activePetId = String(combatant.id || '').trim() || hostPlayer.battleState.activePetId;
+      }
       hostPlayer.battleState.mode = 'manual_online';
       const next = advanceBattleTurnEnergy(hostPlayer, hostPicked.cost);
       online.rivalEnergy = Math.max(0, rivalEnergyBefore - rivalPicked.cost) + 2;

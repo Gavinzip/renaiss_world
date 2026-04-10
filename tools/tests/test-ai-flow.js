@@ -17,9 +17,9 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-const STORY = require('./storyteller.js');
-const EVENTS = require('./event-system.js');
-const CORE = require('./game-core.js');
+const STORY = require('../../modules/content/storyteller.js');
+const EVENTS = require('../../modules/content/event-system.js');
+const CORE = require('../../modules/core/game-core.js');
 
 // 測試用玩家資料
 const TEST_USER_ID = 'test_user_' + Date.now();
@@ -36,7 +36,7 @@ async function runTest() {
   console.log('✅ 測試玩家創建成功');
 
   // 創建測試寵物
-  const PET = require('./pet-system.js');
+  const PET = require('../../modules/systems/pet/pet-system.js');
   const egg = PET.createPetEgg(TEST_USER_ID, '正派');
   egg.hatched = true;
   egg.name = '測試寵物';

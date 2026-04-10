@@ -5,11 +5,12 @@
  * - 出售結算
  */
 
-const { getLocationDifficulty } = require('./world-map');
-const PET = require('./pet-system');
+const { getLocationDifficulty } = require('../../content/world-map');
+const PET = require('../pet/pet-system');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
 
 const PROTECTED_ITEMS = new Set(['乾糧一包', '水囊']);
 
@@ -50,8 +51,8 @@ const MAX_APPRAISAL_HISTORY = 28;
 const MINIMAX_MODEL = 'MiniMax-M2.5';
 const AI_TIMEOUT_MS = 12000;
 const LOOT_AI_TIMEOUT_MS = 4500;
-const SCRATCH_STATE_FILE = path.join(__dirname, 'data', 'scratch_lottery.json');
-const PLAYER_MARKET_FILE = path.join(__dirname, 'data', 'player_market_board.json');
+const SCRATCH_STATE_FILE = path.join(LEGACY_DATA_DIR, 'scratch_lottery.json');
+const PLAYER_MARKET_FILE = path.join(LEGACY_DATA_DIR, 'player_market_board.json');
 const SCRATCH_COST = 100;
 const SCRATCH_WIN_RATE = 0.3;
 const SCRATCH_WIN_REWARD = 500;

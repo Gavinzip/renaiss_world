@@ -5,12 +5,15 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
+    "start:server": "APP_ENV=${APP_ENV:-server} WORLD_DATA_ROOT=${WORLD_DATA_ROOT:-/world/RENAISSANCEWORLD} node bot.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "reindex:memory": "node tools/reindex-memory-index.js",
     "backup:world": "node tools/run-world-backup.js",
+    "audit:root-js": "node tools/audit-root-js-layout.js",
     "test:battle-balance": "node tools/tests/battle-balance-full.js",
     "test:start-mainmenu": "node tools/tests/start-mainmenu-smoke.js",
-    "test:button-routes": "node tools/tests/button-route-smoke.js"
+    "test:button-routes": "node tools/tests/button-route-smoke.js",
+    "test:contracts": "node tools/tests/runtime-contracts.js"
   },
   "keywords": [],
   "author": "",

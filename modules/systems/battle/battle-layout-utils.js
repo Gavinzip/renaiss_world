@@ -132,8 +132,88 @@ function createBattleLayoutUtils(deps = {}) {
 
   function clipBattleCellText(text = '', maxLen = 18) {
     const raw = String(text || '').trim() || '—';
-    if (raw.length <= maxLen) return raw;
-    return `${raw.slice(0, Math.max(1, maxLen - 1))}…`;
+    const safeMax = Math.max(4, Number(maxLen) || 18);
+    const WIDE_CHAR_RE = /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u;
+    const EMOJI_RE = /[\u{2600}-\u{27bf}\u{1f300}-\u{1faff}]/u;
+    const charWidth = (ch = '') => {
+      if (!ch) return 0;
+      if (/[\u0000-\u001f\u007f-\u009f]/u.test(ch)) return 0;
+      if (WIDE_CHAR_RE.test(ch) || EMOJI_RE.test(ch)) return 2;
+      return 1;
+    };
+    const textWidth = (source = '') => {
+      let total = 0;
+      for (const ch of String(source || '')) total += charWidth(ch);
+      return total;
+    };
+    if (textWidth(raw) <= safeMax) return raw;
+    const ellipsis = '…';
+    const keepWidth = Math.max(1, safeMax - textWidth(ellipsis));
+    let out = '';
+    let used = 0;
+    for (const ch of raw) {
+      const w = charWidth(ch);
+      if (used + w > keepWidth) break;
+      out += ch;
+      used += w;
+    }
+    return `${out}${ellipsis}`;
+  }
+
+  function padBattleCellText(text = '', width = 18) {
+    const safeWidth = Math.max(4, Number(width) || 18);
+    const clipped = clipBattleCellText(text, safeWidth);
+    const WIDE_CHAR_RE = /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u;
+    const EMOJI_RE = /[\u{2600}-\u{27bf}\u{1f300}-\u{1faff}]/u;
+    const charWidth = (ch = '') => {
+      if (!ch) return 0;
+      if (/[\u0000-\u001f\u007f-\u009f]/u.test(ch)) return 0;
+      if (WIDE_CHAR_RE.test(ch) || EMOJI_RE.test(ch)) return 2;
+      return 1;
+    };
+    let used = 0;
+    for (const ch of clipped) used += charWidth(ch);
+    return `${clipped}${' '.repeat(Math.max(0, safeWidth - used))}`;
+  }
+
+  function wrapBattleCellText(text = '', maxWidth = 18, maxLines = 2) {
+    const source = String(text || '').trim();
+    if (!source) return [''];
+    const safeWidth = Math.max(4, Number(maxWidth) || 18);
+    const safeLines = Math.max(1, Number(maxLines) || 1);
+    const WIDE_CHAR_RE = /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u;
+    const EMOJI_RE = /[\u{2600}-\u{27bf}\u{1f300}-\u{1faff}]/u;
+    const charWidth = (ch = '') => {
+      if (!ch) return 0;
+      if (/[\u0000-\u001f\u007f-\u009f]/u.test(ch)) return 0;
+      if (WIDE_CHAR_RE.test(ch) || EMOJI_RE.test(ch)) return 2;
+      return 1;
+    };
+    const out = [];
+    let line = '';
+    let lineWidth = 0;
+    for (const ch of source) {
+      if (ch === '\n') {
+        out.push(line);
+        line = '';
+        lineWidth = 0;
+        continue;
+      }
+      const w = charWidth(ch);
+      if (lineWidth + w > safeWidth && line) {
+        out.push(line);
+        line = ch;
+        lineWidth = w;
+      } else {
+        line += ch;
+        lineWidth += w;
+      }
+    }
+    if (line || out.length === 0) out.push(line);
+    if (out.length <= safeLines) return out;
+    const kept = out.slice(0, safeLines);
+    kept[safeLines - 1] = clipBattleCellText(`${kept[safeLines - 1]}…`, safeWidth);
+    return kept;
   }
 
   function extractActionExtra(lines = [], fallback = '無') {
@@ -150,10 +230,10 @@ function createBattleLayoutUtils(deps = {}) {
     const inner = safeWidth;
     const top = `┌─【${title}】${'─'.repeat(Math.max(0, inner - title.length - 4))}┐`;
     const bottom = `└${'─'.repeat(inner + 2)}┘`;
-    const toLine = (value = '') => `│ ${clipBattleCellText(value, inner)}${' '.repeat(Math.max(0, inner - clipBattleCellText(value, inner).length))} │`;
+    const toLine = (value = '') => `│ ${padBattleCellText(value, inner)} │`;
 
     if (data?.pending) {
-      return [top, toLine('（準備中...）'), toLine(''), toLine(''), bottom];
+      return [top, toLine('（準備中...）'), toLine(''), toLine(''), toLine(''), bottom];
     }
 
     const moveLine = data?.move ? `招式：${data.move}` : '（尚未行動）';
@@ -161,9 +241,22 @@ function createBattleLayoutUtils(deps = {}) {
     const damageLine = Number.isFinite(Number(data?.damage))
       ? `${damageLabel}：${format1(Math.max(0, Number(data.damage)))}`
       : '';
-    const extraLine = `附加：${data?.extra || '無'}`;
+    const extraLabel = '附加：';
+    const extraIndent = '      ';
+    const extraRaw = String(data?.extra || '無').trim() || '無';
+    const extraMaxWidth = Math.max(4, inner - 6);
+    const extraWrapped = wrapBattleCellText(extraRaw, extraMaxWidth, 2);
+    const extraLine1 = `${extraLabel}${extraWrapped[0] || '無'}`;
+    const extraLine2 = extraWrapped[1] ? `${extraIndent}${extraWrapped[1]}` : '';
 
-    return [top, toLine(moveLine), toLine(damageLine), toLine(extraLine), bottom];
+    return [
+      top,
+      toLine(moveLine),
+      toLine(damageLine),
+      toLine(extraLine1),
+      toLine(extraLine2),
+      bottom
+    ];
   }
 
   function buildDualActionPanels(actionView = {}) {
@@ -325,15 +418,16 @@ function createBattleLayoutUtils(deps = {}) {
     const turn = Number(state?.turn || 1);
     const energy = Number(state?.energy || 0);
     const roundText = `第 ${turn} 回合`;
-    const roundLine = `${' '.repeat(Math.max(0, 41 - roundText.length))}${roundText}`;
+    const enemyIndent = ' '.repeat(33);
+    const roundLine = `${' '.repeat(Math.max(0, 58 - roundText.length))}${roundText}`;
     return (
       '```text\n' +
       `${roundLine}\n` +
-      `                 ┌─【敵方】──────────────┐\n` +
-      `                 │ ${enemyName} HP ${enemyHp}\n` +
-      `                 │ 屬性 ${enemyElement}\n` +
-      `                 │ ATK ${enemy?.attack || 0}\n` +
-      `                 └───────────────────────┘\n\n` +
+      `${enemyIndent}┌─【敵方】──────────────┐\n` +
+      `${enemyIndent}│ ${enemyName} HP ${enemyHp}\n` +
+      `${enemyIndent}│ 屬性 ${enemyElement}\n` +
+      `${enemyIndent}│ ATK ${enemy?.attack || 0}\n` +
+      `${enemyIndent}└───────────────────────┘\n\n` +
       `┌─【我方】──────────────┐\n` +
       `│ ${allyName} HP ${allyHp}\n` +
       `│ 屬性 ${allyElement}\n` +

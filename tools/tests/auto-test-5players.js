@@ -22,12 +22,12 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-const CORE = require('./game-core');
-const PET = require('./pet-system');
-const EVENTS = require('./event-system');
-const STORY = require('./storyteller');
-const BATTLE = require('./battle-system');
-const ECON = require('./economy-system');
+const CORE = require('../../modules/core/game-core');
+const PET = require('../../modules/systems/pet/pet-system');
+const EVENTS = require('../../modules/content/event-system');
+const STORY = require('../../modules/content/storyteller');
+const BATTLE = require('../../modules/systems/battle/battle-system');
+const ECON = require('../../modules/systems/market/economy-system');
 
 const TEST_CONFIG = {
   playerCount: 5,

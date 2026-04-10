@@ -139,6 +139,10 @@ function createNoopDeps() {
     formatBattleElementDisplay: () => '未知屬性',
     resolveEnemyBattleElement: () => '未知屬性',
     getBattleElementRelation: () => null,
+    getPlayerDisplayNameById: () => 'OtherUser',
+    normalizeMapViewMode: () => 'text',
+    normalizeEventChoices: (_player, choices) => choices,
+    getRegionLocationsByLocation: () => [],
     getQuickShopCooldownInfo: () => ({ ready: true, remaining: 0 }),
     buildQuickShopNarrativeNotice: () => 'notice',
     buyShopCrystal: () => ({ success: false, reason: 'smoke-skip' }),
@@ -148,7 +152,7 @@ function createNoopDeps() {
     trackActiveGameMessage: () => {},
     acceptFriendRequest: () => ({ ok: true }),
     cancelOutgoingFriendRequest: () => ({ ok: true }),
-    consumeTeleportDevice: () => true,
+    consumeTeleportDevice: () => ({ remainingCount: 0 }),
     getTeleportDeviceStockInfo: () => ({ count: 1, expiresAt: Date.now() + 3600_000 }),
     ensurePlayerIslandState: () => {},
     syncLocationArcLocation: () => {},
@@ -158,11 +162,93 @@ function createNoopDeps() {
     applyChoicePolicy: (_p, c) => c
   };
 
-  const noop = () => undefined;
+  // interaction dispatcher core handlers (explicitly mocked)
+  Object.assign(base, {
+    handleWalletInteractions: async () => false,
+    handleClaimPetInteractions: async () => false,
+    handleFriendInteractions: async () => false,
+    handleBattleSwitchSelect: async () => {},
+    handleMapRegionMoveSelect: async () => false,
+    handleMovesSelectMenu: async () => false,
+    handleMarketSelectMenu: async () => false,
+    handleMarketPostModal: async () => {},
+    handleWorldShopSellModal: async () => {},
+    createCharacterWithName: async () => {},
+    handleEvent: async () => {},
+    handleChooseGender: async () => {},
+    handleChoosePetElement: async () => {},
+    handleLegacyAlignmentChoice: async () => {},
+    sendOnboardingLanguageSelection: async () => {},
+    handleHatchEgg: async () => {},
+    handleDrawMove: async () => {},
+    showFriendsMenu: async () => {},
+    sendMainMenuToThread: async () => {},
+    showMainMenu: async () => {},
+    showSettingsHub: async () => {},
+    showSettings: async () => {},
+    showRenaissWorldGuide: async () => {},
+    resumeExistingOnboardingOrGame: async () => false,
+    showCharacter: async () => {},
+    showFriendAddModal: async () => {},
+    showFriendCharacter: async () => {},
+    startFriendDuel: async () => {},
+    clearOnlineFriendDuelTimer: () => {},
+    showIslandMap: async () => {},
+    showPortalSelection: async () => {},
+    showTeleportDeviceSelection: async () => {},
+    startManualBattleOnline: async () => {},
+    startManualBattle: async () => {},
+    startAutoBattle: async () => {},
+    continueBattleWithHuman: async () => {},
+    handleFight: async () => {},
+    handleUseMove: async () => {},
+    handleOnlineFriendDuelChoice: async () => {},
+    toggleBattleLayoutMode: () => 'desktop',
+    renderManualBattle: async () => {},
+    handleBattleWait: async () => {},
+    handleBattleSwitchOpen: async () => {},
+    handleBattleSwitchCancel: async () => {},
+    handleFlee: async () => {},
+    showMovesList: async () => {},
+    showInventory: async () => {},
+    showPlayerCodex: async () => {},
+    showNpcCodex: async () => {},
+    showSkillCodex: async () => {},
+    showFinanceLedger: async () => {},
+    showMemoryAudit: async () => {},
+    showMemoryRecap: async () => {},
+    showWorldShopScene: async () => {},
+    showPlayerMarketMenu: async () => {},
+    showPlayerMarketListings: async () => {},
+    showMyMarketListings: async () => {},
+    showWorldShopSellPicker: async () => {},
+    showWorldShopHagglePicker: async () => {},
+    showWorldShopHaggleBulkPicker: async () => {},
+    consumeHaggleBulkItemsFromPlayer: () => [],
+    consumeHaggleItemFromPlayer: () => null,
+    extractPitchFromHaggleMessage: () => '',
+    showWorldShopBuyPanel: async () => {},
+    playScratchLottery: () => ({ ok: true, won: false }),
+    grantTeleportDevice: () => ({}),
+    leaveShopSession: () => {},
+    showProfile: async () => {},
+    showGacha: async () => {},
+    handleGachaResult: async () => {},
+    handleAllocateHP: async () => {},
+    handleContinueWithWalletButton: async () => {},
+    handleEnterPetNameButton: async () => {},
+    handleSkipNameButton: async () => {},
+    handleNameSubmit: async () => {}
+  });
+
+  const missingFactory = (prop) => (..._args) => {
+    throw new Error(`Missing dependency called: ${String(prop)}`);
+  };
   return new Proxy(base, {
     get(target, prop) {
       if (prop in target) return target[prop];
-      return noop;
+      if (typeof prop === 'symbol') return undefined;
+      return missingFactory(prop);
     }
   });
 }

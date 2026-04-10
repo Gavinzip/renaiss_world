@@ -3,7 +3,7 @@
  * 管理每個地點（島）劇情階段、完成狀態與地點解鎖
  */
 
-const { getLocationStoryMetadata, getLocationPortalHub, MAP_LOCATIONS } = require('../../../world-map');
+const { getLocationStoryMetadata, getLocationPortalHub, MAP_LOCATIONS } = require('../world-map');
 
 const DEFAULT_STAGE_COUNT = Math.max(8, Number(process.env.ISLAND_STORY_STAGE_COUNT || 8));
 const KING_GATE_REGION_ID = 'island_routes';

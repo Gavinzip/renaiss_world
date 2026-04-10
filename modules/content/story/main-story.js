@@ -3,10 +3,10 @@
  * 不提供固定主線按鈕，隨玩家遊玩行為自然推進。
  */
 
-const { sanitizeWorldObject } = require('../../../style-sanitizer');
-const BATTLE = require('../../../battle-system');
+const { sanitizeWorldObject } = require('../../core/style-sanitizer');
+const BATTLE = require('../../systems/battle/battle-system');
 const ISLAND_STORY = require('./island-story');
-const { getLocationPortalHub, getLocationStoryMetadata } = require('../../../world-map');
+const { getLocationPortalHub, getLocationStoryMetadata } = require('../world-map');
 
 const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',

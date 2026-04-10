@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { LEGACY_DATA_DIR } = require('../core/storage-paths');
 
 // ============== 地點與區域 ==============
 const LOCATIONS = {
@@ -283,7 +284,7 @@ const TIME_SYSTEM = {
   // 1現實天(24小時) = 1遊戲年(24年?) 
   // 但我們簡化：1現實天 = 1遊戲天
   TICKS_PER_DAY: 1,
-  LAST_TICK_FILE: path.join(__dirname, 'data', 'last_tick.json')
+  LAST_TICK_FILE: path.join(LEGACY_DATA_DIR, 'last_tick.json')
 };
 
 // 檢查是否需要更新天數（每天只能更新一次）
@@ -328,7 +329,7 @@ function loadLastTick() {
 // 獲取當前遊戲天數
 function getCurrentGameDay() {
   const lastTick = loadLastTick();
-  const worldFile = path.join(__dirname, 'data', 'world.json');
+  const worldFile = path.join(LEGACY_DATA_DIR, 'world.json');
   
   if (fs.existsSync(worldFile)) {
     try {

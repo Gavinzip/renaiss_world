@@ -57,8 +57,23 @@ function initMapOnboardingRuntimeUtils(deps = {}) {
   } = deps;
 
   const MAP_NAVIGATION_UTILS = createMapNavigationUtils({
+    getMapText,
+    getPlayerUILang,
     getPortalDestinations,
     getLocationProfile,
+    getRegionLocationsByLocation,
+    isMainPortalHubLocation,
+    getTeleportDeviceStockInfo,
+    formatTeleportDeviceRemaining,
+    canFreeRoamCurrentRegion,
+    ensurePlayerIslandState,
+    syncLocationArcLocation: deps.syncLocationArcLocation,
+    canEnterLocation: deps.canEnterLocation,
+    pickWeightedKey: deps.pickWeightedKey,
+    computeStoryThreatScore: deps.computeStoryThreatScore,
+    format1: deps.format1,
+    shouldTriggerBattle: deps.shouldTriggerBattle,
+    ISLAND_STORY,
     getRegionPortalHubs,
     getLocationPortalHub,
     LOCATION_ARC_COMPLETE_TURNS: deps.LOCATION_ARC_COMPLETE_TURNS,

@@ -3,7 +3,7 @@
  * 每個玩家都有任務指引
  */
 
-const { sanitizeWorldText } = require('../../style-sanitizer');
+const { sanitizeWorldText } = require('../core/style-sanitizer');
 
 const QUESTS = {
   // ===== 新手任務 =====

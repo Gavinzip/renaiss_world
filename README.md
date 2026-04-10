@@ -12,8 +12,8 @@ Discord 文字冒險 / 戰鬥 Bot。
 
 ## 戰鬥與招式（實作中）
 - 目前戰鬥主流程使用：
-  - `pet-system.js`（寵物、招式池、孵化、復活）
-  - `battle-system.js`（回合計算、傷害、逃跑）
+  - `modules/systems/pet/pet-system.js`（寵物、招式池、孵化、復活）
+  - `modules/systems/battle/battle-system.js`（回合計算、傷害、逃跑）
 - 招式資料採 Tier 1~3（不是 5 品質武學境界制）。
 - 目前實作資料量：
   - 正派招式 23
@@ -22,14 +22,18 @@ Discord 文字冒險 / 戰鬥 Bot。
 
 ## 重要模組
 - `bot.js`：Discord 互動、按鈕流程、主選單、故事與戰鬥串接。
-- `storyteller.js`：AI 生成故事與選項。
-- `main-story.js`：被動主線推進與終局分歧。
-- `event-system.js`：事件與世界事件廣播。
-- `world-map.js`：地圖與地區資料。
-- `wish-pool-ai.js`：許願池判定與結果套用。
-- `wallet-system.js`：錢包綁定與資產同步。
-- `gacha-system.js`：開包與招式抽取。
-- `game-core.js`：世界狀態、玩家存檔、記憶與全域邏輯。
+- `modules/content/storyteller.js`：AI 生成故事與選項。
+- `modules/content/story/main-story.js`：被動主線推進與終局分歧。
+- `modules/content/event-system.js`：事件與世界事件廣播。
+- `modules/content/world-map.js`：地圖與地區資料。
+- `modules/content/wish-pool-ai.js`：許願池判定與結果套用。
+- `modules/systems/player/wallet-system.js`：錢包綁定與資產同步。
+- `modules/systems/gacha/gacha-system.js`：開包與招式抽取。
+- `modules/core/game-core.js`：世界狀態、玩家存檔、記憶與全域邏輯。
+
+## 根目錄 JS 分類
+- 文件：`docs/ROOT_JS_CLASSIFICATION.md`
+- 檢查：`npm run audit:root-js`
 
 ## 開發測試腳本位置
 - `tools/tests/ai-play-review.js`
@@ -55,6 +59,14 @@ npm install
 3. 啟動
 ```bash
 node bot.js
+```
+4. 伺服器啟動（未指定 `APP_ENV` 時預設 `server`）
+```bash
+npm run start:server
+```
+5. 本機啟動
+```bash
+npm run start
 ```
 
 ## 已移除舊草案

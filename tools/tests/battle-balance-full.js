@@ -4,8 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const PET = require('../../pet-system');
-const BATTLE = require('../../battle-system');
+const PET = require('../../modules/systems/pet/pet-system');
+const BATTLE = require('../../modules/systems/battle/battle-system');
 
 const ELEMENTS = ['水', '火', '草'];
 const ADV_PAIRS = [

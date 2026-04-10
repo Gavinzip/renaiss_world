@@ -33,6 +33,9 @@ function createEventHandlerUtils(deps = {}) {
     trackActiveGameMessage,
     setMainlineBridgeLock,
     buildPortalUsageGuide,
+    openShopSession = () => {},
+    getMarketTypeLabel = () => '商店',
+    showWorldShopScene = async () => {},
     canEnterLocation,
     syncLocationArcLocation,
     buildMentorSparResult,
@@ -88,6 +91,10 @@ function createEventHandlerUtils(deps = {}) {
     buildMainStatusBar,
     buildMainlineProgressLine,
     buildChoiceOptionsText,
+    format1 = (v) => String(v ?? 0),
+    formatBattleHpValue = (v) => String(Math.max(0, Number(v) || 0)),
+    getFactionPresenceHintForPlayer = () => 'none',
+    getPetElementDisplayName = (v = '') => String(v || '未知屬性'),
     normalizeEventChoices,
     getAlignmentColor,
     updateGenerationState,
@@ -159,7 +166,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   const customActionTextFromModal = String(options?.customActionText || '').trim();
 
   if (!event) {
-    await respondError('❌ 事件不存在！');
+    const staleHint =
+      !Array.isArray(choices) || choices.length <= 0
+        ? '⚠️ 這批選項已失效（上一輪可能失敗或已更新）。請按「🔄 重新生成」或「🏠 主選單」。'
+        : '❌ 事件不存在！';
+    await respondError(staleHint);
     return;
   }
 
@@ -953,6 +964,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   
   // 清除舊選項（必須重新生成）
   player.eventChoices = [];
+  await disableMessageComponents(interaction.channel, interaction.message?.id).catch(() => {});
   const enteringBattle = enteringBattleNow;
   if (!enteringBattle) {
     const passiveHeal = applyPassivePetRecovery(pet, PET_PASSIVE_HEAL_PER_STORY_TURN);
@@ -1132,11 +1144,13 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       choicesSnapshot: player.eventChoices
     });
     CORE.savePlayer(player);
-    const failMsg = `❌ 記憶系統錯誤：${memErr.message}\n請檢查 OpenAI Embedding 設定（此模式不會自動降級）。若剛更新 .env，請重啟機器人後再試。`;
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: failMsg, ephemeral: true }).catch(() => {});
-    } else {
-      await interaction.reply({ content: failMsg, ephemeral: true }).catch(() => {});
+    const failMsg = await editOrSendFallback(interaction.channel, interaction.message, {
+      content: `❌ 記憶系統錯誤：${memErr.message}\n請檢查 OpenAI Embedding 設定（此模式不會自動降級）。若剛更新 .env，請重啟機器人後再試。`,
+      embeds: [],
+      components: buildRetryGenerationComponents()
+    }, 'event.memory_error');
+    if (failMsg?.id) {
+      trackActiveGameMessage(player, interaction.channel?.id, failMsg.id);
     }
     return;
   }

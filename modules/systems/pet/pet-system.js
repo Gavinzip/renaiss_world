@@ -5,8 +5,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
 
-const PET_FILE = path.join(__dirname, 'data', 'pets.json');
+const PET_FILE = path.join(LEGACY_DATA_DIR, 'pets.json');
 const PET_RECOVER_TURNS = 2; // 戰敗後 2 回合復活
 const PET_MOVE_LOADOUT_LIMIT = 5;
 const PET_ELEMENTS = Object.freeze(['水', '火', '草']);
@@ -1070,6 +1071,26 @@ function getPetById(petId) {
   return pets[petId] || null;
 }
 
+function getAllPetsByOwner(playerId) {
+  const ownerId = String(playerId || '').trim();
+  if (!ownerId) return [];
+  const pets = loadAllPets();
+  const owned = Object.values(pets).filter((pet) => String(pet?.ownerId || '').trim() === ownerId);
+  let changed = false;
+  for (const pet of owned) {
+    if (normalizePetMoves(pet)) changed = true;
+    const synced = syncPetRecovery(pet);
+    if (synced.changed) {
+      changed = true;
+      Object.assign(pet, synced.pet);
+    }
+  }
+  if (changed) {
+    fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
+  }
+  return owned;
+}
+
 function loadAllPets() {
   if (!fs.existsSync(PET_FILE)) return {};
   try {
@@ -1110,6 +1131,7 @@ module.exports = {
   getPetRecoveryRemainingMs,
   savePet,
   loadPet,
+  getAllPetsByOwner,
   deletePetByOwner,
   loadAllPets,
   getPetById

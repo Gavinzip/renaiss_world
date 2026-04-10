@@ -12,8 +12,8 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-const { setupWorldStorage } = require('../storage-paths');
-const { runWorldBackup } = require('../world-backup');
+const { setupWorldStorage } = require('../modules/core/storage-paths');
+const { runWorldBackup } = require('../modules/systems/data/world-backup');
 
 setupWorldStorage();
 
@@ -25,4 +25,3 @@ runWorldBackup('manual').then((res) => {
   console.error(`[Backup] manual failed: ${res.error || res.reason || 'unknown'}`);
   process.exit(1);
 });
-

@@ -36,7 +36,7 @@ const CONFIG = {
 };
 const WORLD_BACKUP_NOTIFY_CHANNEL_ID = 1473923458751660063;
 
-const { setupWorldStorage } = require('./storage-paths');
+const { setupWorldStorage } = require('./modules/core/storage-paths');
 const STORAGE = setupWorldStorage();
 const DATA_DIR = STORAGE.dataDir;
 const PLAYER_THREADS_FILE = path.join(DATA_DIR, 'player_threads.json');
@@ -145,20 +145,20 @@ const CLIENT = new Client({
 });
 
 // ============== 模組 ==============
-const CORE = require('./game-core');
-const PET = require('./pet-system');
-const BATTLE = require('./battle-system');
-const EVENTS = require('./event-system');
-const FOOD = require('./food-system');
-const STORY = require('./storyteller');
-const GACHA = require('./gacha-system');
-const WALLET = require('./wallet-system');
-const WISH = require('./wish-pool-ai');
-const MAIN_STORY = require('./main-story');
-const ECON = require('./economy-system');
-const MEMORY_INDEX = require('./memory-index');
-const ISLAND_STORY = require('./island-story');
-const { startWorldBackupScheduler, runWorldBackup, getBackupDebugStatus } = require('./world-backup');
+const CORE = require('./modules/core/game-core');
+const PET = require('./modules/systems/pet/pet-system');
+const BATTLE = require('./modules/systems/battle/battle-system');
+const EVENTS = require('./modules/content/event-system');
+const FOOD = require('./modules/systems/player/food-system');
+const STORY = require('./modules/content/storyteller');
+const GACHA = require('./modules/systems/gacha/gacha-system');
+const WALLET = require('./modules/systems/player/wallet-system');
+const WISH = require('./modules/content/wish-pool-ai');
+const MAIN_STORY = require('./modules/content/story/main-story');
+const ECON = require('./modules/systems/market/economy-system');
+const MEMORY_INDEX = require('./modules/systems/data/memory-index');
+const ISLAND_STORY = require('./modules/content/story/island-story');
+const { startWorldBackupScheduler, runWorldBackup, getBackupDebugStatus } = require('./modules/systems/data/world-backup');
 const {
   ISLAND_MAP_TEXT,
   buildIslandMapAnsi,
@@ -171,7 +171,7 @@ const {
   getRegionPortalHubs,
   getRegionLocationsByLocation,
   buildRegionMapSnapshot
-} = require('./world-map');
+} = require('./modules/content/world-map');
 const { createInteractionMessageUtils } = require('./modules/systems/runtime/utils/interaction-message-utils');
 const { initStoryRuntimeUtils } = require('./modules/systems/runtime/init-story-runtime-utils');
 const { createThreadStorageUtils } = require('./modules/systems/runtime/utils/thread-storage-utils');
@@ -1163,6 +1163,7 @@ const RUNTIME_BASE_DEPS = {
   ensurePlayerGenerationSchema: (...args) => ensurePlayerGenerationSchemaCore(...args),
   recordNearbyNpcEncounters,
   syncLocationArcLocation,
+  rememberPlayer: (...args) => rememberPlayer(...args),
   restoreStoryFromGenerationState,
   restoreChoicesFromGenerationState,
   consumeWorldIntroOnce,
@@ -1201,6 +1202,12 @@ const RUNTIME_BASE_DEPS = {
   triggerMainlineForeshadowAIInBackground: (...args) => triggerMainlineForeshadowAIInBackgroundCore(...args),
   releaseStoryLock: (...args) => releaseStoryLock(...args),
   ensurePlayerIslandState,
+  getRegionLocationsByLocation,
+  getMapText: (...args) => getMapText(...args),
+  normalizeMapViewMode: (...args) => normalizeMapViewMode(...args),
+  showIslandMap,
+  showPortalSelection,
+  showTeleportDeviceSelection,
   recordNpcEncounter,
   setMainlineBridgeLock: (...args) => setMainlineBridgeLock(...args),
   buildPortalUsageGuide,
@@ -1219,6 +1226,7 @@ const RUNTIME_BASE_DEPS = {
   shouldTriggerBattle,
   isAggressiveChoice,
   pickStoryConflictDisplayName,
+  clearPendingConflictFollowup,
   setPendingConflictFollowup,
   recordPlayerChoiceHistory,
   isDigitalMaskPhaseForPlayer,
@@ -1270,13 +1278,16 @@ const RUNTIME_BASE_DEPS = {
   t,
   format1,
   getMoveSpeedValue,
+  normalizePetMoveLoadout,
   grantStarterFivePullIfNeeded: (...args) => grantStarterFivePullIfNeededCore(...args),
   rollStarterMoveForElement,
   getSettingsHubText,
   round1,
   getPlayerOwnedPets,
+  getPetAttackMoves,
   getLearnableSkillChipEntries,
   getForgettablePetMoves,
+  describeMoveEffects,
   getMarketTypeLabel,
   buildMarketListingLine,
   parseMarketTypeFromCustomId,
@@ -1300,6 +1311,7 @@ const RUNTIME_BASE_DEPS = {
   buildQuickShopNarrativeNotice,
   getTeleportDeviceStockInfo,
   formatTeleportDeviceRemaining,
+  consumeTeleportDevice,
   playScratchLottery: (...args) => ECON.playScratchLottery(...args),
   grantTeleportDevice,
   buildFinanceLedgerText,
@@ -1464,6 +1476,19 @@ const INTERACTION_DISPATCHER_DEPS = initInteractionDispatcherDeps({
   consumeMapReturnSnapshot,
   snapshotHasUsableComponents,
   restoreButtonTemplateSnapshot,
+  startManualBattle,
+  startManualBattleOnline,
+  startAutoBattle,
+  continueBattleWithHuman,
+  handleFight,
+  handleUseMove,
+  handleOnlineFriendDuelChoice,
+  toggleBattleLayoutMode,
+  renderManualBattle,
+  handleBattleWait,
+  handleBattleSwitchOpen,
+  handleBattleSwitchCancel,
+  handleFlee,
   tryRecoverMainMenuAfterFailure: (...args) => tryRecoverMainMenuAfterFailureCore(...args),
 });
 

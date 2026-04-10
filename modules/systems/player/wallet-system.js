@@ -5,12 +5,13 @@
  * - 從 BSCScan 讀取開包數量、總花費
  */
 
-const CORE = require('./game-core');
+const CORE = require('../../core/game-core');
 const fs = require('fs');
 const path = require('path');
+const { PROJECT_ROOT, LEGACY_DATA_DIR } = require('../../core/storage-paths');
 
 // 讀取 .env（讓單獨執行 wallet-system 測試時也能拿到 API Key）
-const envPath = path.join(__dirname, '.env');
+const envPath = path.join(PROJECT_ROOT, '.env');
 if (fs.existsSync(envPath)) {
   const envContent = fs.readFileSync(envPath, 'utf-8');
   envContent.split('\n').forEach(line => {
@@ -44,7 +45,7 @@ const BSC_CONFIG = {
 };
 
 // ============== 用戶錢包設定檔路徑 ==============
-const WALLET_DATA_DIR = path.join(__dirname, 'data');
+const WALLET_DATA_DIR = LEGACY_DATA_DIR;
 const WALLET_DATA_FILE = path.join(WALLET_DATA_DIR, 'user_wallets.json');
 
 // ============== 讀取/寫入錢包設定 ==============

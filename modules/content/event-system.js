@@ -6,7 +6,8 @@
 const fs = require('fs');
 const path = require('path');
 const { getLocationProfile, getNearbyPoints } = require('./world-map');
-const { sanitizeWorldText, sanitizeWorldObject } = require('./style-sanitizer');
+const { sanitizeWorldText, sanitizeWorldObject } = require('../core/style-sanitizer');
+const { LEGACY_DATA_DIR } = require('../core/storage-paths');
 
 // ============== 50+ 事件庫（長敘事版）==============
 const BASE_EVENTS = [
@@ -853,7 +854,7 @@ function executeEvent(event, player) {
   const safeEvent = sanitizeWorldObject(event || {});
   event = safeEvent;
   const luck = player.stats?.運氣 || 50;
-  const food = require('./food-system');
+  const food = require('../systems/player/food-system');
   
   switch (event.action) {
     case 'fight':
@@ -1037,7 +1038,7 @@ function executeEvent(event, player) {
 }
 
 // ============== 世界公告系統 ==============
-const WORLD_EVENTS_FILE = path.join(__dirname, 'data', 'world_events.json');
+const WORLD_EVENTS_FILE = path.join(LEGACY_DATA_DIR, 'world_events.json');
 const WORLD_EVENTS_MAX = 5;
 
 function getWorldEvents() {

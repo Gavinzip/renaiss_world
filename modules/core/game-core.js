@@ -8,20 +8,21 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
-const MEMORY_INDEX = require('./memory-index');
+const MEMORY_INDEX = require('../systems/data/memory-index');
 const FACTION_DIRECTOR = require('./faction-war-director');
 const { sanitizeWorldText } = require('./style-sanitizer');
-const PET = require('./pet-system');
+const PET = require('../systems/pet/pet-system');
+const { LEGACY_DATA_DIR } = require('./storage-paths');
 const {
   MAP_LOCATIONS,
   LOCATION_PROFILES,
   REGION_CATALOG,
   getBeginnerSpawnLocations,
   getLocationDifficulty
-} = require('./world-map');
+} = require('../content/world-map');
 
 // ============== 設定 ==============
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = LEGACY_DATA_DIR;
 const PLAYERS_DIR = path.join(DATA_DIR, 'players');
 const AGENTS_FILE = path.join(DATA_DIR, 'agents.json');
 const WORLD_FILE = path.join(DATA_DIR, 'world.json');
@@ -3494,7 +3495,7 @@ function resetPlayerGame(playerId) {
   }
   
   // 刪除寵物資料
-  const petSystem = require('./pet-system');
+  const petSystem = require('../systems/pet/pet-system');
   if (typeof petSystem.deletePetByOwner === 'function') {
     petSystem.deletePetByOwner(playerId);
   }
@@ -3527,13 +3528,24 @@ function canPetFight(pet) {
 
 // ============== WM 傳說觸發 ==============
 function triggerWMEncounter() {
-  const pet = require('./pet-system');
+  const pet = require('../systems/pet/pet-system');
   return pet.isWMAppearing();
 }
 
 function getWMAppearance() {
-  const pet = require('./pet-system');
+  const pet = require('../systems/pet/pet-system');
   return pet.getWMInfo();
+}
+
+function appendStoryContinuation(previousStory = '', continuation = '', maxChars = 2600) {
+  const prev = String(previousStory || '').trim();
+  const next = String(continuation || '').trim();
+  if (!prev) return next;
+  if (!next) return prev;
+  const merged = `${prev}\n\n${next}`.trim();
+  const safeMax = Math.max(400, Number(maxChars) || 2600);
+  if (merged.length <= safeMax) return merged;
+  return merged.slice(merged.length - safeMax);
 }
 
 // ============== 導出 ==============
@@ -3630,7 +3642,8 @@ module.exports = {
   rebuildAllPlayersMemoryIndex,
   getPlayerMemoryIndexStats,
   getPlayerMemoryContext,
-  getPlayerMemoryContextAsync
+  getPlayerMemoryContextAsync,
+  appendStoryContinuation
 };
 
 function getAgentFullInfo(agentId) {

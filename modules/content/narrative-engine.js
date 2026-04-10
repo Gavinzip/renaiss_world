@@ -4,9 +4,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { sanitizeWorldText } = require('./style-sanitizer');
+const { sanitizeWorldText } = require('../core/style-sanitizer');
+const { LEGACY_DATA_DIR } = require('../core/storage-paths');
 
-const WORLD_FILE = path.join(__dirname, 'data', 'world.json');
+const WORLD_FILE = path.join(LEGACY_DATA_DIR, 'world.json');
 
 // ============== 世界狀態 ==============
 let world = { day: 1, season: "春天", weather: "晴" };

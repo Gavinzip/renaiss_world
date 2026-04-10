@@ -5,8 +5,8 @@
  * - 每點 = 0.2 HP，可分配給不同寵物
  */
 
-const PET = require('./pet-system');
-const CORE = require('./game-core');
+const PET = require('../pet/pet-system');
+const CORE = require('../../core/game-core');
 const PET_MOVE_LOADOUT_LIMIT = 5;
 
 function ensureAutoEquipOnLearn(pet, learnedMoveId) {

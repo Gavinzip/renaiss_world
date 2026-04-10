@@ -11,12 +11,13 @@ const {
   getLocationProfile,
   getNearbyPoints
 } = require('./world-map');
-const ISLAND_STORY = require('./island-story');
-const MAIN_STORY = require('./main-story');
-const WORLD_LORE = require('./world-lore');
-const CORE = require('./game-core');
+const ISLAND_STORY = require('./story/island-story');
+const MAIN_STORY = require('./story/main-story');
+const WORLD_LORE = require('../core/world-lore');
+const CORE = require('../core/game-core');
+const { PROJECT_ROOT } = require('../core/storage-paths');
 
-const envPath = path.join(__dirname, '.env');
+const envPath = path.join(PROJECT_ROOT, '.env');
 if (fs.existsSync(envPath)) {
   const envContent = fs.readFileSync(envPath, 'utf-8');
   envContent.split('\n').forEach(line => {

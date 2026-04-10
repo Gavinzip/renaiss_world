@@ -15,10 +15,10 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-const CORE = require('./game-core');
-const PET = require('./pet-system');
-const EVENTS = require('./event-system');
-const STORY = require('./storyteller');
+const CORE = require('../../modules/core/game-core');
+const PET = require('../../modules/systems/pet/pet-system');
+const EVENTS = require('../../modules/content/event-system');
+const STORY = require('../../modules/content/storyteller');
 
 const REVIEW_RESULTS = {
   storyQuality: { issues: [] },

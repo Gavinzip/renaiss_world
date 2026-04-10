@@ -5,8 +5,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const CORE = require('./game-core');
-const PET = require('./pet-system');
+const CORE = require('../../core/game-core');
+const PET = require('../pet/pet-system');
 
 // ============== 逃跑系統 ==============
 const FLEE_CONFIG = {
