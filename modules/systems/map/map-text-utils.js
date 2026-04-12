@@ -4,11 +4,24 @@ function createMapTextUtils(deps = {}) {
     TELEPORT_DEVICE_COST = 200,
     TELEPORT_DEVICE_DURATION_HOURS = 6,
     LOCATION_ENTRY_MIN_WINRATE = 50,
-    format1 = (v) => String(v ?? 0)
+    format1 = (v) => String(v ?? 0),
+    // Global language resource accessor (section-based).
+    getLanguageSection = null
   } = deps;
 
 function getMapText(lang = 'zh-TW') {
   const code = normalizeLangCode(lang);
+  if (typeof getLanguageSection === 'function') {
+    const fromGlobal = getLanguageSection('mapText', code, {
+      TELEPORT_DEVICE_COST,
+      TELEPORT_DEVICE_DURATION_HOURS,
+      LOCATION_ENTRY_MIN_WINRATE,
+      format1
+    });
+    if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+      return fromGlobal;
+    }
+  }
   const map = {
     'zh-TW': {
       regionMovePortalHub: '主傳送門地點',

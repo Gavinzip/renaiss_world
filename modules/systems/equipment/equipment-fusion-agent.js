@@ -1,8 +1,12 @@
 const https = require('https');
 
 const MINIMAX_MODEL = String(process.env.EQUIPMENT_FUSION_MODEL || 'MiniMax-M2.5');
-const FUSION_TIMEOUT_MS = Math.max(4000, Number(process.env.EQUIPMENT_FUSION_TIMEOUT_MS || 9000));
-const FUSION_MAX_RETRIES = Math.max(1, Number(process.env.EQUIPMENT_FUSION_MAX_RETRIES || 3));
+const FUSION_TIMEOUT_RAW = Number(process.env.EQUIPMENT_FUSION_TIMEOUT_MS || 0);
+const FUSION_TIMEOUT_MS = Number.isFinite(FUSION_TIMEOUT_RAW) ? Math.max(0, Math.floor(FUSION_TIMEOUT_RAW)) : 0;
+const FUSION_MAX_RETRIES = Math.max(1, Number(process.env.EQUIPMENT_FUSION_MAX_RETRIES || 2));
+const FUSION_STRICT_AI = String(process.env.EQUIPMENT_FUSION_STRICT_AI || '0').trim() === '1';
+const FUSION_AI_MAX_TOKENS_RAW = Number(process.env.EQUIPMENT_FUSION_MAX_TOKENS || 0);
+const FUSION_AI_MAX_TOKENS = Number.isFinite(FUSION_AI_MAX_TOKENS_RAW) ? Math.max(0, Math.floor(FUSION_AI_MAX_TOKENS_RAW)) : 0;
 
 const EQUIPMENT_SLOTS = ['helmet', 'armor', 'shoes'];
 const EQUIPMENT_SLOT_LABELS = Object.freeze({
@@ -87,15 +91,7 @@ const EQUIPMENT_STAT_RANGES = Object.freeze({
 });
 
 // 這段就是獨立的融合 Agent 提示詞，後續你可直接改這裡微調風格與決策。
-const EQUIPMENT_FUSION_SYSTEM_PROMPT = `你是 Renaiss 世界的「寶物融合裝備鍛造AI」。
-你會根據 3 個素材的名稱與估值，生成 1 件裝備。
-
-裝備規則：
-1) slot 只能是 helmet / armor / shoes
-2) rarity 只能是 N / R / SR / SSR / UR
-3) helmet 代表攻擊型；armor 代表生命型；shoes 代表速度型
-4) 請依世界觀產生有收藏科技感的名稱，不要與素材名稱完全重複
-5) 回傳 JSON，禁止輸出任何額外說明文字`;
+const EQUIPMENT_FUSION_SYSTEM_PROMPT = '你是 Renaiss 裝備融合 AI。任務：根據三件素材輸出一個裝備 JSON。';
 
 function clamp(value, min, max, fallback = min) {
   const num = Number(value);
@@ -119,6 +115,66 @@ function parseJsonFromText(raw = '') {
     .replace(/```(?:json)?/gi, '')
     .replace(/```/g, '')
     .trim();
+
+  const tryParse = (candidate = '') => {
+    const source = String(candidate || '').trim();
+    if (!source) return null;
+    try {
+      const obj = JSON.parse(source);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = tryParse(cleaned);
+  if (direct) return direct;
+
+  const blocks = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+    if (ch === '}') {
+      if (depth > 0) depth -= 1;
+      if (depth === 0 && start >= 0) {
+        blocks.push(cleaned.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const parsed = tryParse(blocks[i]);
+    if (parsed) return parsed;
+  }
+
   const first = cleaned.indexOf('{');
   const last = cleaned.lastIndexOf('}');
   if (first === -1 || last === -1 || last <= first) return null;
@@ -131,36 +187,56 @@ function parseJsonFromText(raw = '') {
 
 function requestMiniMax(body, apiKey, timeoutMs = FUSION_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    const req = https.request(
-      'https://api.minimax.io/v1/text/chatcompletion_v2',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`
-        },
-        timeout: timeoutMs
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          try {
-            const parsed = JSON.parse(data);
-            const text = parsed?.choices?.[0]?.message?.content || '';
-            if (!text) {
-              reject(new Error(`empty minimax content: ${res.statusCode}`));
-              return;
-            }
-            resolve(String(text));
-          } catch (err) {
-            reject(err);
-          }
-        });
+    const requestOptions = {
+      hostname: 'api.minimax.io',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(body)
       }
-    );
+    };
+    if (Number(timeoutMs) > 0) requestOptions.timeout = Number(timeoutMs);
+
+    const req = https.request(requestOptions, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`minimax http ${res.statusCode}: ${String(data || '').slice(0, 220)}`));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed?.error) {
+            reject(new Error(parsed.error.message || 'minimax api error'));
+            return;
+          }
+          const statusCode = Number(parsed?.base_resp?.status_code);
+          if (Number.isFinite(statusCode) && statusCode !== 0) {
+            reject(new Error(String(parsed?.base_resp?.status_msg || `status_code=${statusCode}`)));
+            return;
+          }
+
+          const message = parsed?.choices?.[0]?.message || {};
+          const content = typeof message?.content === 'string' ? message.content : '';
+          const reasoning = typeof message?.reasoning_content === 'string' ? message.reasoning_content : '';
+          const text = String(content || '').trim() || String(reasoning || '').trim();
+          if (!text) {
+            reject(new Error('empty minimax content'));
+            return;
+          }
+          resolve(String(text));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
     req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('fusion minimax timeout')));
+    if (Number(timeoutMs) > 0) {
+      req.on('timeout', () => req.destroy(new Error('fusion minimax timeout')));
+    }
     req.write(body);
     req.end();
   });
@@ -231,44 +307,197 @@ function buildEquipmentStats(slot = 'helmet', primaryStat = 0) {
 function buildFusionPrompt(items = [], options = {}) {
   const location = normalizeText(options.location || '未知地點', 60);
   const playerName = normalizeText(options.playerName || '旅人', 60);
-  const worldHint = normalizeText(options.worldHint || '科技收藏＋夥伴冒險＋群島探索', 200);
   const lang = String(options.lang || 'zh-TW');
   const languageRule = lang === 'en'
     ? 'Output all text fields in English.'
     : lang === 'zh-CN'
       ? '请使用简体中文输出文本字段。'
       : '請使用繁體中文輸出文字欄位。';
-  const materialsText = items
-    .map((row, idx) => `- #${idx + 1} 名稱:${normalizeText(row?.name || '未知素材', 80)}｜估值:${Math.max(1, Math.floor(Number(row?.value || 1)))}｜來源:${normalizeText(row?.source || 'inventory', 24)}`)
-    .join('\n');
+  const materialsText = items.map((row, idx) =>
+    `${idx + 1}. ${normalizeText(row?.name || '未知素材', 80)}|${Math.max(1, Math.floor(Number(row?.value || 1)))}|${normalizeText(row?.source || 'inventory', 24)}`
+  ).join('\n');
 
-  return `${EQUIPMENT_FUSION_SYSTEM_PROMPT}
-
-背景：
-- 玩家：${playerName}
-- 地點：${location}
-- 世界觀基調：${worldHint}
-
-輸入素材（固定三件）：
-${materialsText}
-
-請輸出 JSON 物件，欄位：
-{
-  "equipmentName": "裝備名稱",
-  "slot": "helmet|armor|shoes",
-  "rarity": "N|R|SR|SSR|UR",
-  "value": 123,
-  "primaryStat": 15,
-  "lore": "一句裝備敘述"
+  return [
+    EQUIPMENT_FUSION_SYSTEM_PROMPT,
+    `玩家=${playerName} 地點=${location}`,
+    `素材:\n${materialsText}`,
+    '只輸出 JSON（一行或多行都可），禁止任何解釋、前後綴、markdown。',
+    'JSON schema: {"equipmentName":"名稱","slot":"helmet|armor|shoes","rarity":"N|R|SR|SSR|UR","value":123,"primaryStat":10,"lore":"敘述"}',
+    '規則: slot=helmet=>attack; slot=armor=>hp; slot=shoes=>speed; rarity/value 需與素材估值相稱；名稱需有科技藏品感且不與素材名完全相同。',
+    languageRule
+  ].join('\n');
 }
 
-補充限制：
-1) slot=helmet 時 primaryStat 表示 attack
-2) slot=armor 時 primaryStat 表示 hp
-3) slot=shoes 時 primaryStat 表示 speed
-4) rarity 與 value 要與三件素材整體價值合理對應
-5) 只輸出 JSON，不要 markdown。
-6) ${languageRule}`;
+function stripNameCore(text = '') {
+  return String(text || '').replace(/[^0-9A-Za-z\u4e00-\u9fa5]/g, '').trim();
+}
+
+function pickFallbackSlot(materials = [], options = {}) {
+  const seed = calcHash(
+    `${materials.map((m) => m?.name || '').join('|')}|${String(options?.location || '')}|${String(options?.playerName || '')}`
+  );
+  return EQUIPMENT_SLOTS[Math.abs(seed) % EQUIPMENT_SLOTS.length] || 'helmet';
+}
+
+function pickFallbackRarity(materials = []) {
+  const total = materials.reduce((sum, row) => sum + Math.max(1, Number(row?.value || 1)), 0);
+  const seed = calcHash(`${total}|${materials.map((m) => m?.name || '').join('|')}`);
+  const roll = Math.abs(seed) % 1000; // 0..999
+
+  const table = total < 240
+    ? [['N', 740], ['R', 940], ['SR', 992], ['SSR', 999], ['UR', 1000]]
+    : total < 520
+      ? [['N', 500], ['R', 820], ['SR', 960], ['SSR', 997], ['UR', 1000]]
+      : total < 980
+        ? [['N', 320], ['R', 680], ['SR', 900], ['SSR', 985], ['UR', 1000]]
+        : [['N', 200], ['R', 520], ['SR', 820], ['SSR', 960], ['UR', 1000]];
+
+  for (const [rarity, threshold] of table) {
+    if (roll < threshold) return rarity;
+  }
+  return 'N';
+}
+
+function buildFallbackName(materials = [], slot = 'helmet', rarity = 'N') {
+  const cores = (Array.isArray(materials) ? materials : [])
+    .map((row) => stripNameCore(row?.name || ''))
+    .filter(Boolean);
+  const a = cores[0] ? cores[0].slice(0, 2) : '星紋';
+  const b = cores[1] ? cores[1].slice(-1) : '核';
+  const slotSuffix = slot === 'helmet' ? '冠' : (slot === 'armor' ? '甲' : '靴');
+  return sanitizeEquipmentName(`${rarity}${a}${b}${slotSuffix}`, slot, rarity);
+}
+
+function buildFallbackLore(slot = 'helmet', materials = []) {
+  const source = materials.map((row) => normalizeText(row?.name || '', 12)).filter(Boolean).join('、') || '三件藏品';
+  const map = {
+    helmet: `由${source}重構出的攻擊型護具，會在出手瞬間放大衝擊節奏。`,
+    armor: `由${source}重構出的防護型裝備，能穩定承受高壓傷害。`,
+    shoes: `由${source}重構出的機動型裝備，能縮短行動間隔並提升先手。`
+  };
+  return sanitizeLore(map[slot] || `由${source}重構出的未知裝備。`, slot);
+}
+
+function computeValueFromMaterials(materials = [], rarity = 'N', seed = 0) {
+  const total = (Array.isArray(materials) ? materials : [])
+    .reduce((sum, row) => sum + Math.max(1, Math.floor(Number(row?.value || 1))), 0);
+  const range = EQUIPMENT_VALUE_RANGES[rarity] || EQUIPMENT_VALUE_RANGES.N;
+  const jitter = (Math.abs(Number(seed) || 0) % 61) - 30;
+  const rarityScale = { N: 1.05, R: 1.18, SR: 1.28, SSR: 1.38, UR: 1.5 }[rarity] || 1.12;
+  return clampInt(Math.round(total * rarityScale) + jitter, range.min, range.max, range.min);
+}
+
+function extractFusionHintsFromText(raw = '') {
+  const text = String(raw || '');
+  if (!text) return {};
+  const rarityToken = '(SSR|SR|UR|R|N)';
+  const name =
+    text.match(/"equipmentName"\s*:\s*"([^"\n]{1,60})"/i)?.[1]
+    || text.match(/equipmentName[^:\n]{0,12}[:：]\s*"([^"\n]{1,60})"/i)?.[1]
+    || '';
+  const slot =
+    text.match(/"slot"\s*:\s*"(helmet|armor|shoes)"/i)?.[1]
+    || text.match(/\bslot\b[^a-z]{0,16}(helmet|armor|shoes)\b/i)?.[1]
+    || '';
+  const rarity =
+    text.match(new RegExp(`"rarity"\\s*:\\s*"${rarityToken}"`, 'i'))?.[1]
+    || text.match(new RegExp(`\\brarity\\b[^A-Z]{0,16}${rarityToken}\\b`, 'i'))?.[1]
+    || text.match(new RegExp(`\\bpick\\b[^A-Z]{0,12}"?${rarityToken}"?`, 'i'))?.[1]
+    || '';
+  const value = Number(text.match(/"value"\s*:\s*(\d{2,6})/i)?.[1] || 0);
+  const primaryStat = Number(text.match(/"primaryStat"\s*:\s*(\d{1,5})/i)?.[1] || 0);
+  const lore =
+    text.match(/"lore"\s*:\s*"([^"\n]{3,160})"/i)?.[1]
+    || '';
+
+  return {
+    equipmentName: String(name || '').trim(),
+    slot: String(slot || '').trim(),
+    rarity: String(rarity || '').trim().toUpperCase(),
+    value: Number.isFinite(value) ? value : 0,
+    primaryStat: Number.isFinite(primaryStat) ? primaryStat : 0,
+    lore: String(lore || '').trim()
+  };
+}
+
+function hasUsableFusionHints(hints = {}) {
+  if (!hints || typeof hints !== 'object') return false;
+  if (String(hints.equipmentName || '').trim()) return true;
+  if (normalizeSlot(hints.slot || '')) return true;
+  if (normalizeRarity(hints.rarity || '')) return true;
+  if (Number(hints.value || 0) > 0) return true;
+  if (Number(hints.primaryStat || 0) > 0) return true;
+  return false;
+}
+
+function buildGuidedEquipment(materials = [], options = {}, hints = {}, parsed = {}) {
+  const seed = calcHash(`${JSON.stringify(hints || {})}|${JSON.stringify(parsed || {})}|${Date.now()}`);
+  const hintedSlot = normalizeSlot(parsed?.slot || hints?.slot || '');
+  const hintedRarity = normalizeRarity(parsed?.rarity || hints?.rarity || '');
+  const slot = hintedSlot || pickFallbackSlot(materials, options);
+  const rarity = hintedRarity || pickFallbackRarity(materials);
+
+  const parsedValue = Number(parsed?.value || 0);
+  const hintValue = Number(hints?.value || 0);
+  const valueRange = EQUIPMENT_VALUE_RANGES[rarity] || EQUIPMENT_VALUE_RANGES.N;
+  const value = (Number.isFinite(parsedValue) && parsedValue > 0)
+    ? clampInt(Math.floor(parsedValue), valueRange.min, valueRange.max, valueRange.min)
+    : ((Number.isFinite(hintValue) && hintValue > 0)
+      ? clampInt(Math.floor(hintValue), valueRange.min, valueRange.max, valueRange.min)
+      : computeValueFromMaterials(materials, rarity, seed));
+
+  const parsedPrimary = Number(parsed?.primaryStat || 0);
+  const hintPrimary = Number(hints?.primaryStat || 0);
+  const primaryStat = derivePrimaryStat(
+    slot,
+    rarity,
+    (Number.isFinite(parsedPrimary) && parsedPrimary > 0) ? parsedPrimary : hintPrimary,
+    seed + value
+  );
+
+  const rawName = String(parsed?.equipmentName || parsed?.name || hints?.equipmentName || '').trim();
+  const rawLore = String(parsed?.lore || parsed?.desc || hints?.lore || '').trim();
+  return {
+    id: `eq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    name: rawName ? sanitizeEquipmentName(rawName, slot, rarity) : buildFallbackName(materials, slot, rarity),
+    slot,
+    rarity,
+    value,
+    stats: buildEquipmentStats(slot, primaryStat),
+    lore: rawLore ? sanitizeLore(rawLore, slot) : buildFallbackLore(slot, materials),
+    sourceMaterials: materials.map((row) => ({
+      name: normalizeText(row?.name || '未知素材', 80),
+      value: Math.max(1, Math.floor(Number(row?.value || 1))),
+      source: normalizeText(row?.source || 'inventory', 24)
+    })),
+    createdAt: Date.now(),
+    generatedBy: 'ai_guided'
+  };
+}
+
+function buildFallbackFusionEquipment(materials = [], options = {}) {
+  const slot = pickFallbackSlot(materials, options);
+  const rarity = pickFallbackRarity(materials);
+  const seed = calcHash(`${slot}|${rarity}|${materials.map((m) => m?.name || '').join('|')}`);
+  const value = computeValueFromMaterials(materials, rarity, seed);
+  const primaryStat = derivePrimaryStat(slot, rarity, 0, seed + value);
+
+  return {
+    id: `eq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    name: buildFallbackName(materials, slot, rarity),
+    slot,
+    rarity,
+    value,
+    stats: buildEquipmentStats(slot, primaryStat),
+    lore: buildFallbackLore(slot, materials),
+    sourceMaterials: materials.map((row) => ({
+      name: normalizeText(row?.name || '未知素材', 80),
+      value: Math.max(1, Math.floor(Number(row?.value || 1))),
+      source: normalizeText(row?.source || 'inventory', 24)
+    })),
+    createdAt: Date.now(),
+    generatedBy: 'fallback'
+  };
 }
 
 async function fuseTreasuresToEquipment(items = [], options = {}) {
@@ -282,77 +511,48 @@ async function fuseTreasuresToEquipment(items = [], options = {}) {
   if (materials.length !== 3) {
     throw new Error('equipment fusion requires exactly 3 materials');
   }
-  const apiKey = normalizeText(process.env.MINIMAX_API_KEY || '', 240);
-  if (!apiKey) {
-    throw new Error('MINIMAX_API_KEY missing');
-  }
-
   const prompt = buildFusionPrompt(materials, options);
-  const body = JSON.stringify({
+  const requestPayload = {
     model: MINIMAX_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    temperature: 0.95,
-    top_p: 0.9,
-    max_tokens: 260
-  });
+    temperature: 0.2,
+    top_p: 0.8
+  };
+  if (FUSION_AI_MAX_TOKENS > 0) requestPayload.max_tokens = FUSION_AI_MAX_TOKENS;
+  const body = JSON.stringify(requestPayload);
 
+  const apiKey = normalizeText(process.env.MINIMAX_API_KEY || '', 240);
   let lastError = null;
-  for (let attempt = 1; attempt <= FUSION_MAX_RETRIES; attempt += 1) {
-    try {
-      const raw = await requestMiniMax(body, apiKey, FUSION_TIMEOUT_MS);
-      const parsed = parseJsonFromText(raw);
-      if (!parsed || typeof parsed !== 'object') {
-        throw new Error('fusion agent returned non-JSON payload');
+  if (!apiKey) {
+    lastError = new Error('MINIMAX_API_KEY missing');
+  } else {
+    for (let attempt = 1; attempt <= FUSION_MAX_RETRIES; attempt += 1) {
+      try {
+        const raw = await requestMiniMax(body, apiKey, FUSION_TIMEOUT_MS);
+        const parsed = parseJsonFromText(raw) || {};
+        const hints = extractFusionHintsFromText(raw);
+        const hasParsed = parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0;
+        if (!hasParsed && !hasUsableFusionHints(hints)) {
+          throw new Error('fusion agent returned non-JSON payload');
+        }
+        const equipment = buildGuidedEquipment(materials, options, hints, parsed);
+        equipment.generatedBy = 'ai';
+        return { equipment, usedAI: true, raw, attempts: attempt };
+      } catch (err) {
+        lastError = err;
       }
-
-      const slot = normalizeSlot(parsed.slot);
-      const rarity = normalizeRarity(parsed.rarity);
-      if (!slot) throw new Error('fusion agent returned invalid slot');
-      if (!rarity) throw new Error('fusion agent returned invalid rarity');
-      const valueRange = EQUIPMENT_VALUE_RANGES[rarity] || EQUIPMENT_VALUE_RANGES.N;
-
-      const rawValue = Number(parsed.value);
-      if (!Number.isFinite(rawValue) || rawValue <= 0) {
-        throw new Error('fusion agent returned invalid value');
-      }
-      const value = clampInt(
-        Math.floor(rawValue),
-        valueRange.min,
-        valueRange.max,
-        valueRange.min
-      );
-
-      const rawPrimary = Number(parsed.primaryStat);
-      if (!Number.isFinite(rawPrimary) || rawPrimary <= 0) {
-        throw new Error('fusion agent returned invalid primaryStat');
-      }
-      const primaryStat = derivePrimaryStat(
-        slot,
-        rarity,
-        rawPrimary,
-        calcHash(`${parsed.equipmentName || ''}|${value}|${slot}|${rarity}`)
-      );
-      const stats = buildEquipmentStats(slot, primaryStat);
-      const equipment = {
-        id: `eq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-        name: sanitizeEquipmentName(parsed.equipmentName || parsed.name || '', slot, rarity),
-        slot,
-        rarity,
-        value,
-        stats,
-        lore: sanitizeLore(parsed.lore || parsed.desc || '', slot),
-        sourceMaterials: materials.map((row) => ({
-          name: normalizeText(row?.name || '未知素材', 80),
-          value: Math.max(1, Math.floor(Number(row?.value || 1))),
-          source: normalizeText(row?.source || 'inventory', 24)
-        })),
-        createdAt: Date.now(),
-        generatedBy: 'ai'
-      };
-      return { equipment, usedAI: true, raw, attempts: attempt };
-    } catch (err) {
-      lastError = err;
     }
+  }
+
+  if (!FUSION_STRICT_AI) {
+    const equipment = buildFallbackFusionEquipment(materials, options);
+    return {
+      equipment,
+      usedAI: false,
+      raw: '',
+      attempts: FUSION_MAX_RETRIES,
+      fallbackReason: String(lastError?.message || lastError || 'unknown error')
+    };
   }
 
   throw new Error(`fusion generation failed after ${FUSION_MAX_RETRIES} attempts: ${String(lastError?.message || lastError || 'unknown error')}`);

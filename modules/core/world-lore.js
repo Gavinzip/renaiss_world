@@ -6,8 +6,8 @@ const WORLD_LORE = {
   factions: {
     renaiss: {
       name: 'Renaiss',
-      identity: '星域維運方',
-      values: ['秩序', '信任', '穩定'],
+      identity: '收藏品文明中樞',
+      values: ['秩序', '信任', '可驗證性'],
       leaders: ['Winchman', 'Tom', 'Harry', 'Kathy', 'Ryan'],
       appraisalNetwork: '主鑑價網絡（全球）',
       appraisalScope: '提供跨區鑑定、回收、寄售與再流通，任何鑑定品皆可進站處理'
@@ -44,8 +44,8 @@ const WORLD_LORE = {
   threat: {
     maskedAssassin: '覆面獵手會突襲玩家、奪取貨證並測試強度'
   },
-  theme: '在 Renaiss，你不只是與敵人戰鬥，而是在與「真偽與來源的不確定性」對抗。',
-  doctrine: '玩家可走正派或機變派；機變派屬於灰階正義路線。前期以調查、真偽比對與風險辨識推進。'
+  theme: '在 Renaiss，你不只是與敵人戰鬥，而是在捍衛「收藏品真偽、公信與來源秩序」。',
+  doctrine: '玩家可走正派或機變派；機變派屬於灰階正義路線。前期以調查、真偽比對與風險辨識推進。每個城市都把收藏品流通視為文明基礎。'
 };
 
 function getLorePromptSnippet(options = {}) {

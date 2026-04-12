@@ -1,11 +1,13 @@
 function createSettingsMemoryTextUtils(deps = {}) {
   const {
-    normalizeLangCode = (v) => v || 'zh-TW'
+    normalizeLangCode = (v) => v || 'zh-TW',
+    // Global language resource accessor (section-based).
+    getLanguageSection = null
   } = deps;
 
   function getSettingsHubText(lang = 'zh-TW') {
     const code = normalizeLangCode(lang);
-    const map = {
+    const fallbackMap = {
       'zh-TW': {
         title: '⚙️ 設定中心',
         desc: '設定語言、錢包同步與記憶檢查。',
@@ -28,12 +30,18 @@ function createSettingsMemoryTextUtils(deps = {}) {
         btnBack: '🔙 Back to Menu'
       }
     };
-    return map[code] || map['zh-TW'];
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('settingsHubText', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return fallbackMap[code] || fallbackMap['zh-TW'];
   }
 
   function getMemoryRecapText(lang = 'zh-TW') {
     const code = normalizeLangCode(lang);
-    const map = {
+    const fallbackMap = {
       'zh-TW': {
         title: '🧠 記憶回顧',
         loading: '⏳ AI 正在整理你的角色記憶...',
@@ -59,7 +67,13 @@ function createSettingsMemoryTextUtils(deps = {}) {
         backMenu: 'Back to Menu'
       }
     };
-    return map[code] || map['zh-TW'];
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('memoryRecapText', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return fallbackMap[code] || fallbackMap['zh-TW'];
   }
 
   return {
@@ -71,4 +85,3 @@ function createSettingsMemoryTextUtils(deps = {}) {
 module.exports = {
   createSettingsMemoryTextUtils
 };
-

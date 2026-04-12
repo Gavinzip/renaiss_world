@@ -16,11 +16,31 @@ const MAIN_STORY = require('./story/main-story');
 const WORLD_LORE = require('../core/world-lore');
 const CORE = require('../core/game-core');
 const { PROJECT_ROOT } = require('../core/storage-paths');
+const { createGlobalLanguageResources } = require('../systems/runtime/utils/global-language-resources');
 const {
   getLocationPlaystyleProfile,
   getLocationPlaystylePromptBlock,
   countChoiceKeywordHits
 } = require('./location-playstyle');
+const {
+  getCollectibleCulturePrompt
+} = require('./collectible-culture');
+
+const LANGUAGE_RESOURCES = createGlobalLanguageResources({
+  normalizeLangCode: (lang = 'zh-TW') => {
+    const raw = String(lang || '').trim();
+    if (raw === 'zh-CN' || raw === 'en') return raw;
+    return 'zh-TW';
+  }
+});
+
+function getAiLanguageDirective(lang = 'zh-TW', tone = 'output') {
+  const table = LANGUAGE_RESOURCES.getSection('aiLanguageDirectives', lang) || {};
+  if (tone === 'plain') return table.plain || '請用繁體中文';
+  if (tone === 'narrate') return table.narrate || '請用繁體中文講述';
+  if (tone === 'outputFullstop') return table.outputFullstop || '請用繁體中文輸出。';
+  return table.output || '請用繁體中文輸出';
+}
 
 const envPath = path.join(PROJECT_ROOT, '.env');
 if (fs.existsSync(envPath)) {
@@ -492,11 +512,7 @@ function parseJsonOrThrow(text = '', expect = 'object') {
 
 async function generatePlayerMemoryRecap(player = {}, payload = {}) {
   const playerLang = String(player?.language || 'zh-TW').trim();
-  const langInstruction = {
-    'zh-TW': '請用繁體中文輸出',
-    'zh-CN': '請用簡體中文輸出',
-    'en': 'Please output in English'
-  }[playerLang] || '請用繁體中文輸出';
+  const langInstruction = getAiLanguageDirective(playerLang, 'output');
 
   const name = String(player?.name || '冒險者').trim() || '冒險者';
   const location = String(player?.location || '').trim();
@@ -573,11 +589,7 @@ async function generatePlayerMemoryRecap(player = {}, payload = {}) {
 }
 
 async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', location = '', destinations = [] }) {
-  const langInstruction = {
-    'zh-TW': '請用繁體中文',
-    'zh-CN': '請用簡體中文',
-    'en': 'Please output in English'
-  }[playerLang] || '請用繁體中文';
+  const langInstruction = getAiLanguageDirective(playerLang, 'plain');
   const portalPreview = Array.isArray(destinations) && destinations.length > 0
     ? destinations.slice(0, 3).join('、')
     : '未知地點';
@@ -644,11 +656,7 @@ ${actionSpec}
 }
 
 async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', newbieMask = false) {
-  const langInstruction = {
-    'zh-TW': '請用繁體中文',
-    'zh-CN': '請用簡體中文',
-    'en': 'Please output in English'
-  }[playerLang] || '請用繁體中文';
+  const langInstruction = getAiLanguageDirective(playerLang, 'plain');
   const digitalTag = newbieMask ? '[🧩友善報價]' : '[🕳️精明殺價]';
   const digitalTask = newbieMask
     ? '第二個選項要對應 market_digital（外在要友善、強調新手照顧與檢測協助，不可直接露出惡意）'
@@ -2005,7 +2013,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
       ? '前期敘事禁止直接使用「Digital」名稱；若提到對手，必須呈現為表面友善、看似幫助玩家。'
       : '前期敘事禁止直接使用「Digital」名稱，請用「暗潮勢力／另一股勢力／不明供應鏈」表述。');
   
-  const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
+  const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座科技藏品城市';
   const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
   const nearbyPoints = typeof getNearbyPoints === 'function' ? getNearbyPoints(location, 4) : [];
@@ -2058,11 +2066,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   
   // 根據玩家語言設定決定輸出語言
   const playerLang = player.language || 'zh-TW';
-  const langInstruction = {
-    'zh-TW': '請用繁體中文講述',
-    'zh-CN': '請用簡體中文講述',
-    'en': '請用英文講述'
-  }[playerLang] || '請用繁體中文講述';
+  const langInstruction = getAiLanguageDirective(playerLang, 'narrate');
+  const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
   
   // 上一段故事摘要（提升連貫性）
   const previousStorySummary = summarizeContext(player.currentStory || '', 520, 8);
@@ -2118,6 +2123,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 【當前場景】
 位置：${location} - ${locDesc}
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
+收藏文明口味：
+${collectibleCulturePrompt}
 地區篇章進度：第 ${Math.max(1, arcMeta.turnsInLocation)} / ${arcMeta.targetTurns} 段（階段：${arcMeta.phase}）
 已完成跨區篇章：${arcMeta.completedLocations}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
@@ -2279,7 +2286,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const safeStage = Math.max(1, Number(islandStage || 1));
   const stageIndex = Math.max(0, Math.min(Math.max(0, roadmap.length - 1), safeStage - 1));
   const stageGoal = String((Array.isArray(roadmap) && roadmap[stageIndex]) || '').trim();
-  const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座奇幻城市';
+  const locDesc = RENAISS_LOCATIONS[location] || 'Renaiss星球的一座科技藏品城市';
   const locProfile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
   const locContext = typeof getLocationStoryContext === 'function' ? getLocationStoryContext(location) : '';
   const nearbyPoints = typeof getNearbyPoints === 'function' ? getNearbyPoints(location, 4) : [];
@@ -2314,11 +2321,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   }
   
   const playerLang = player?.language || 'zh-TW';
-  const langInstruction = {
-    'zh-TW': '請用繁體中文輸出',
-    'zh-CN': '請用簡體中文輸出',
-    'en': 'Please output in English'
-  }[playerLang] || '請用繁體中文輸出';
+  const langInstruction = getAiLanguageDirective(playerLang, 'output');
+  const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
   const truthGatePrompt = typeof MAIN_STORY.getTruthGatePrompt === 'function'
     ? MAIN_STORY.getTruthGatePrompt(player, location)
     : '';
@@ -2389,15 +2393,14 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     : '';
   const storyAnchors = extractStoryAnchors(fullStoryText, npcs, location, sourceChoiceText);
   const anchorText = storyAnchors.length > 0 ? storyAnchors.join('、') : '（無）';
-  const choiceStorySignals = buildStorySystemSignals(fullStoryText);
-  const needsStorageHeistRule = Boolean(
-    choiceStorySignals?.storageCarrier ||
-    choiceStorySignals?.storageVault ||
-    /(貨樣|货样|戰利品|战利品|封存[艙舱倉藏函]|storage pod|sealed cache pod)/iu.test(fullStoryText)
+  const storageCarrierByOthers = (
+    /(?:對方|他|她|商人|攤販|中間人|守衛|黑影商人|匿名滲透者|someone|enemy|merchant)[^。；\n]{0,24}(?:抱著|抱着|背著|背着|提著|提着|攜帶|携带|拿著|拿着|手(?:上|中|裡|里))[^。；\n]{0,16}封存[艙舱倉藏函]/u.test(fullStoryText) ||
+    /封存[艙舱倉藏函][^。；\n]{0,16}(?:被|由)?(?:對方|他|她|商人|攤販|中間人|守衛|黑影商人|匿名滲透者|someone|enemy|merchant)[^。；\n]{0,16}(?:抱著|抱着|背著|背着|提著|提着|攜帶|携带|拿著|拿着|手(?:上|中|裡|里))/u.test(fullStoryText)
   );
+  const needsStorageHeistRule = Boolean(storageCarrierByOthers);
   const storageHeistPromptRule = needsStorageHeistRule
     ? [
-      '20. 本段已出現封存艙/貨樣線索：至少 1 個選項要提供「搶奪封存艙→現場開艙檢視→把寶物佔為己有」高風險路線（可進入戰鬥），且文句需貼合當下人物與場景，不可模板化',
+      '20. 僅當故事已明確寫出「他人正攜帶封存艙/貨樣」時：至少 1 個選項要提供高風險搶艙路線（可進入戰鬥）；行動語彙需隨場景變體（攔截/設局/調包/夜襲/脅迫擇一），避免固定三段同句',
       '21. 封存艙一律視為便攜小型艙體（約小背包大小），不得描寫成人體尺寸或大型艙體',
       '21a. 至少 1 個選項要明確帶出可獲得實體物件或可交易物（例如奪取、開艙、驗貨、帶走）'
     ].join('\n')
@@ -2424,6 +2427,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 【當前情境】
 位置：${location} - ${locDesc}
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
+收藏文明口味：
+${collectibleCulturePrompt}
 地區玩法口味：${locationPlaystylePrompt}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
 戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格
@@ -2468,7 +2473,7 @@ ${anchorText}
 【任務】
 根據上面的故事，生成5個獨特且合理的冒險選項。${langInstruction}。要求：
 1. 每個選項要有創意！拒絕無聊！
-2. 要符合故事的劇情發展
+2. 5 個選項都要符合故事劇情發展，且與本段故事有因果關聯，不可出現平行無關支線
 3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
    {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]","move_to":"目的城市或空字串"}
 3a. 不得少於 5 筆、不得輸出 null/空物件；就算資訊不足也要輸出完整 5 筆且保持合理
@@ -2598,11 +2603,7 @@ async function analyzeMainlineForeshadowCandidates(payload = {}) {
   const location = String(payload.location || '').trim();
   const previousAction = String(payload.previousAction || '').trim();
   const playerLang = String(payload.playerLang || 'zh-TW').trim();
-  const langInstruction = {
-    'zh-TW': '請用繁體中文',
-    'zh-CN': '請用簡體中文',
-    'en': 'Please output in English'
-  }[playerLang] || '請用繁體中文';
+  const langInstruction = getAiLanguageDirective(playerLang, 'plain');
 
   const prompt = [
     '你是劇情鋪陳分析器，只做「是否屬於主線伏筆」判斷。',

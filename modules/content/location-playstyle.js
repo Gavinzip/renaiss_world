@@ -23,7 +23,7 @@ const LOCATION_PLAYSTYLE_PROFILES = Object.freeze({
     id: 'guangzhou_market',
     name: '市場博弈場',
     focus: '快節奏交易、高報酬高話術風險',
-    keywords: ['開價', '議價', '成交', '貨源', '港務', '檢單', '套利'],
+    keywords: ['開價', '議價', '成交', '貨源', '港務', '檢單', '轉手'],
     minKeywordHits: 2,
     dropChanceMultiplier: 1.12,
     valueMultiplier: 1.15,

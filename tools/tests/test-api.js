@@ -2,15 +2,24 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
+function loadEnvFromCandidates() {
+  const candidates = [
+    path.join(__dirname, '.env'),
+    path.join(__dirname, '..', '..', '.env')
+  ];
+  for (const envPath of candidates) {
+    if (!fs.existsSync(envPath)) continue;
+    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
+      const raw = String(line || '').trim();
+      if (!raw || raw.startsWith('#')) return;
+      const [key, ...valueParts] = raw.split('=');
+      if (key && valueParts.length > 0) {
+        process.env[key.trim()] = valueParts.join('=').trim();
+      }
+    });
+  }
 }
+loadEnvFromCandidates();
 
 const API_KEY = process.env.MINIMAX_API_KEY || '';
 

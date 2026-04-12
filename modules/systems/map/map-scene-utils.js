@@ -119,7 +119,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     : compactMap;
   const mapImageStatus = tx.mapLegendImage;
   const mapRenderResult = regionSnapshot
-    ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus)
+    ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus, uiLang)
     : { buffer: null, error: '缺少區域地圖資料' };
   const renderedMapImage = mapRenderResult?.buffer || null;
   const hasRenderedMapImage = Boolean(renderedMapImage);

@@ -191,7 +191,7 @@ async function startManualBattle(interaction, user) {
     };
     createdBattle = true;
   } else {
-    if (player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
+    if (!player?.battleState?.friendDuel && player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
       player.battleState.fighter = 'player';
     }
     player.battleState.mode = 'manual';
@@ -251,7 +251,7 @@ async function startAutoBattle(interaction, user) {
     };
     createdBattle = true;
   } else {
-    if (player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
+    if (!player?.battleState?.friendDuel && player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
       player.battleState.fighter = 'player';
     }
     player.battleState.mode = 'ai';
@@ -535,7 +535,7 @@ async function handleFight(interaction, user) {
       petStates: {}
     };
     createdBattle = true;
-  } else if (player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
+  } else if (!player?.battleState?.friendDuel && player.battleState.fighter !== 'player' && !CORE.canPetFight(pet)) {
     player.battleState.fighter = 'player';
     player.battleState.mode = 'manual';
     player.battleState.fleeAttempts = 0;

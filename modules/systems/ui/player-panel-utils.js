@@ -77,19 +77,79 @@ function createPlayerPanelUtils(deps = {}) {
     recordNearbyNpcEncounters,
     getAllPetSkillMoves,
     extractSkillChipMoveName,
+    getLanguageSection = null,
     showMainMenu
   } = deps;
 
-const SKILL_CHIP_PREFIX = '技能晶片：';
-const FUSION_BLOCKED_ITEMS = new Set(['乾糧一包', '水囊']);
-
-function getFusionSlotLabel(slot = '') {
-  const map = {
-    helmet: '頭盔（攻擊）',
-    armor: '盔甲（生命）',
-    shoes: '鞋子（速度）'
+function getPlayerPanelText(lang = 'zh-TW') {
+  if (typeof getLanguageSection === 'function') {
+    const fromGlobal = getLanguageSection('playerPanelText', lang);
+    if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+      return fromGlobal;
+    }
+  }
+  return {
+    skillChipPrefix: '技能晶片：',
+    fusionBlockedItems: ['乾糧一包', '水囊'],
+    fusionSlots: {
+      helmet: '頭盔（攻擊）',
+      armor: '盔甲（生命）',
+      shoes: '鞋子（速度）',
+      unknown: '未知槽位'
+    },
+    finance: {
+      notFound: '❌ 找不到角色！',
+      title: '💸 資金流水',
+      desc: '以下為你最近的收入與支出紀錄。',
+      currentRns: '💰 目前 Rns',
+      unreadNotices: '📬 未讀金流通知',
+      recentLedger: '📒 最近 20 筆流水',
+      noUnread: '（目前無未讀）',
+      backInventory: '🎒 返回背包',
+      backMenu: '返回主選單'
+    },
+    memoryAudit: {
+      noRecords: '暫無記錄',
+      title: '🧠 記憶檢查',
+      desc: '查看每回合寫入記憶的內容，以及為何被判定需要保留。',
+      streamTitle: '最近24筆流水',
+      categorySummary: '📊 類別分佈',
+      backMenu: '返回主選單'
+    },
+    codex: {
+      overviewTitle: '📚 圖鑑總覽',
+      overviewDesc: '可分開查看 NPC 圖鑑與技能圖鑑。未收集項目只顯示數量，不顯示名稱。',
+      npcProgress: '🤝 NPC 圖鑑進度',
+      skillProgress: '🧬 技能圖鑑進度',
+      unknownCount: '🕶️ 未收集（隱藏名稱）',
+      npcButton: '🤝 NPC圖鑑',
+      skillButton: '🧬 技能圖鑑',
+      npcTitle: '🤝 NPC 圖鑑',
+      npcCollected: '已收集 NPC',
+      npcUnknown: '未收集 NPC',
+      npcEmpty: '（尚未遇到 NPC）',
+      skillTitle: '🧬 技能圖鑑',
+      skillCollected: '已收集技能',
+      skillUnknown: '未收集技能',
+      skillEmpty: '（尚未抽到技能）',
+      backCodex: '📚 回圖鑑',
+      canFight: '可交鋒',
+      canDraw: '可抽取'
+    }
   };
-  return map[String(slot || '').trim()] || '未知槽位';
+}
+
+const SKILL_CHIP_PREFIX = String(getPlayerPanelText('zh-TW').skillChipPrefix || '技能晶片：');
+const FUSION_BLOCKED_ITEMS = new Set(
+  Array.isArray(getPlayerPanelText('zh-TW').fusionBlockedItems)
+    ? getPlayerPanelText('zh-TW').fusionBlockedItems
+    : ['乾糧一包', '水囊']
+);
+
+function getFusionSlotLabel(slot = '', uiLang = 'zh-TW') {
+  const slots = getPlayerPanelText(uiLang)?.fusionSlots || {};
+  const key = String(slot || '').trim();
+  return slots[key] || slots.unknown || '未知槽位';
 }
 
 function getFusionRarityLabel(rarity = '') {
@@ -519,28 +579,31 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '') {
 
 async function showFinanceLedger(interaction, user) {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const panelText = getPlayerPanelText(uiLang);
+  const tx = panelText.finance || {};
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await interaction.update({ content: tx.notFound || '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
   const ledgerText = buildFinanceLedgerText(player, 20);
   const notices = Array.isArray(player.financeNotices) ? player.financeNotices.slice(0, 5) : [];
-  const noticeText = notices.length > 0 ? notices.map((n, i) => `${i + 1}. ${n}`).join('\n') : '（目前無未讀）';
+  const noticeText = notices.length > 0 ? notices.map((n, i) => `${i + 1}. ${n}`).join('\n') : (tx.noUnread || '（目前無未讀）');
 
   const embed = new EmbedBuilder()
-    .setTitle('💸 資金流水')
+    .setTitle(tx.title || '💸 資金流水')
     .setColor(0x1f9d55)
-    .setDescription('以下為你最近的收入與支出紀錄。')
+    .setDescription(tx.desc || '以下為你最近的收入與支出紀錄。')
     .addFields(
-      { name: '💰 目前 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: false },
-      { name: '📬 未讀金流通知', value: noticeText.slice(0, 1024), inline: false },
-      { name: '📒 最近 20 筆流水', value: ledgerText.slice(0, 1024), inline: false }
+      { name: tx.currentRns || '💰 目前 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: false },
+      { name: tx.unreadNotices || '📬 未讀金流通知', value: noticeText.slice(0, 1024), inline: false },
+      { name: tx.recentLedger || '📒 最近 20 筆流水', value: ledgerText.slice(0, 1024), inline: false }
     );
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('main_menu').setLabel('返回主選單').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('show_inventory').setLabel(tx.backInventory || '🎒 返回背包').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu || '返回主選單').setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
 }
@@ -552,6 +615,8 @@ async function showMemoryAudit(interaction, user) {
     return;
   }
   const uiLang = getPlayerUILang(player);
+  const panelText = getPlayerPanelText(uiLang);
+  const tx = panelText.memoryAudit || {};
   const rows = buildMemoryAuditRows(player, 24);
   const auditText = buildMemoryAuditText(rows, uiLang);
   const categoryCount = {};
@@ -563,18 +628,14 @@ async function showMemoryAudit(interaction, user) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6)
     .map(([name, count]) => `${name}x${count}`)
-    .join('、') || (uiLang === 'en' ? 'No records' : (uiLang === 'zh-CN' ? '暂无记录' : '暫無記錄'));
+    .join('、') || (tx.noRecords || '暫無記錄');
 
-  const title = uiLang === 'en' ? '🧠 Memory Audit' : (uiLang === 'zh-CN' ? '🧠 记忆检查' : '🧠 記憶檢查');
-  const desc = uiLang === 'en'
-    ? 'Detailed log of what was written into memory each turn and why.'
-    : (uiLang === 'zh-CN'
-      ? '查看每回合写入记忆的内容，以及为何被判定需要保留。'
-      : '查看每回合寫入記憶的內容，以及為何被判定需要保留。');
-  const streamTitle = uiLang === 'en' ? 'Recent 24 Records' : (uiLang === 'zh-CN' ? '最近24笔流水' : '最近24筆流水');
+  const title = tx.title || '🧠 記憶檢查';
+  const desc = tx.desc || '查看每回合寫入記憶的內容，以及為何被判定需要保留。';
+  const streamTitle = tx.streamTitle || '最近24筆流水';
   const descBody =
     `${desc}\n\n` +
-    `${uiLang === 'en' ? '📊 Category Summary' : (uiLang === 'zh-CN' ? '📊 類別分佈' : '📊 類別分佈')}：${categorySummary}\n\n` +
+    `${tx.categorySummary || '📊 類別分佈'}：${categorySummary}\n\n` +
     `📒 ${streamTitle}\n${auditText}`;
 
   const embed = new EmbedBuilder()
@@ -583,7 +644,7 @@ async function showMemoryAudit(interaction, user) {
     .setDescription(descBody.slice(0, 3950));
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('main_menu').setLabel(uiLang === 'en' ? 'Back to Menu' : (uiLang === 'zh-CN' ? '返回主选单' : '返回主選單')).setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu || '返回主選單').setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
 }
@@ -1597,7 +1658,7 @@ function getFusionCandidates(player = null) {
     out.push({
       token: `tg_${id}`,
       source: 'tradeGoods',
-      sourceLabel: '素材',
+      sourceLabel: '藏品',
       name,
       value,
       rarity,
@@ -1611,6 +1672,88 @@ function getFusionCandidates(player = null) {
     return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
   });
   return out;
+}
+
+function pruneEmptyTradeGoodsEntries(player = null) {
+  if (!player || !Array.isArray(player.tradeGoods)) return false;
+  const before = player.tradeGoods.length;
+  player.tradeGoods = player.tradeGoods.filter((row) => {
+    if (!row || typeof row !== 'object') return false;
+    return Object.keys(row).length > 0;
+  });
+  return player.tradeGoods.length !== before;
+}
+
+function getInventoryFusionDraftTokens(player = null) {
+  if (!player || typeof player !== 'object') return [];
+  const draft = player.pendingFusionDraft && typeof player.pendingFusionDraft === 'object'
+    ? player.pendingFusionDraft
+    : null;
+  if (!draft || !Array.isArray(draft.tokens)) return [];
+  return Array.from(new Set(draft.tokens.map((v) => String(v || '').trim()).filter(Boolean))).slice(0, 3);
+}
+
+function setInventoryFusionDraftTokens(player = null, tokens = []) {
+  if (!player || typeof player !== 'object') return false;
+  const nextTokens = Array.from(new Set((Array.isArray(tokens) ? tokens : []).map((v) => String(v || '').trim()).filter(Boolean))).slice(0, 3);
+  if (nextTokens.length <= 0) {
+    if (player.pendingFusionDraft) {
+      delete player.pendingFusionDraft;
+      return true;
+    }
+    return false;
+  }
+  const prev = getInventoryFusionDraftTokens(player);
+  const same = prev.length === nextTokens.length && prev.every((v, idx) => v === nextTokens[idx]);
+  if (same && player.pendingFusionDraft && typeof player.pendingFusionDraft === 'object') return false;
+  player.pendingFusionDraft = {
+    tokens: nextTokens,
+    updatedAt: Date.now()
+  };
+  return true;
+}
+
+function clearInventoryFusionDraft(player = null) {
+  if (!player || typeof player !== 'object') return false;
+  if (!player.pendingFusionDraft) return false;
+  delete player.pendingFusionDraft;
+  return true;
+}
+
+function getValidatedFusionDraftTokens(player = null, candidates = []) {
+  const draftTokens = getInventoryFusionDraftTokens(player);
+  if (draftTokens.length <= 0) return [];
+  const tokenSet = new Set((Array.isArray(candidates) ? candidates : []).map((row) => String(row?.token || '').trim()).filter(Boolean));
+  return draftTokens.filter((token) => tokenSet.has(token)).slice(0, 3);
+}
+
+function buildFusionProgressBar(step = 1, total = 4) {
+  const safeTotal = Math.max(1, Number(total || 4));
+  const safeStep = Math.max(0, Math.min(safeTotal, Number(step || 0)));
+  let out = '';
+  for (let i = 1; i <= safeTotal; i += 1) {
+    out += i <= safeStep ? '🟩' : '⬜';
+  }
+  return out;
+}
+
+function buildFusionProgressEmbed(names = [], step = 1, total = 4, title = '⚙️ 融合進行中', detail = '') {
+  const selected = Array.isArray(names) && names.length > 0 ? names.join(' + ') : '（未選定）';
+  const safeTotal = Math.max(1, Number(total || 4));
+  const safeStep = Math.max(0, Math.min(safeTotal, Number(step || 0)));
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setColor(0x7c3aed)
+    .setDescription(
+      `進度：${buildFusionProgressBar(safeStep, safeTotal)}（${safeStep}/${safeTotal}）\n` +
+      `素材：${selected}\n` +
+      `${detail || '鍛造核心正在運算中...'}`
+    );
+}
+
+function waitMs(ms = 300) {
+  const safe = Math.max(0, Number(ms || 0));
+  return new Promise((resolve) => setTimeout(resolve, safe));
 }
 
 function consumeFusionMaterials(player, picks = []) {
@@ -1627,7 +1770,7 @@ function consumeFusionMaterials(player, picks = []) {
       const id = String(good?.id || '').trim();
       if (!id || !tradeIds.has(id)) return true;
       removed.push({
-        name: String(good?.name || '未命名素材'),
+        name: String(good?.name || '未命名藏品'),
         value: Math.max(20, Math.floor(Number(good?.value || 20))),
         source: 'tradeGoods'
       });
@@ -1665,9 +1808,12 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
   const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
 
+  const pruned = pruneEmptyTradeGoodsEntries(player);
   const changed = FUSION.ensurePlayerEquipmentState(player);
   const candidates = getFusionCandidates(player);
-  if (changed) CORE.savePlayer(player);
+  const validDraftTokens = getValidatedFusionDraftTokens(player, candidates);
+  const draftChanged = setInventoryFusionDraftTokens(player, validDraftTokens);
+  if (pruned || changed || draftChanged) CORE.savePlayer(player);
 
   if (candidates.length < 3) {
     const embed = new EmbedBuilder()
@@ -1675,7 +1821,7 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
       .setColor(0x7c3aed)
       .setDescription(
         `${notice ? `✅ ${notice}\n\n` : ''}` +
-        `可融合素材不足，目前可用 **${candidates.length}** 件（需要至少 3 件）。\n` +
+        `可融合藏品不足，目前可用 **${candidates.length}** 件（需要至少 3 件）。\n` +
         `規則：不可放入技能晶片。`
       );
     const row = new ActionRowBuilder().addComponents(
@@ -1688,12 +1834,19 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
 
   const pager = paginateList(candidates, page, 20);
   const safePage = Math.max(0, Number(pager?.page || 0));
+  const draftTokenSet = new Set(validDraftTokens);
+  const byToken = new Map(candidates.map((row) => [String(row?.token || '').trim(), row]));
+  const draftRows = validDraftTokens.map((token) => byToken.get(token)).filter(Boolean);
+  const draftSummary = draftRows.length > 0
+    ? draftRows.map((row) => `• ${String(row?.name || '未命名藏品')}`).join('\n')
+    : '（尚未選擇）';
   const options = (Array.isArray(pager?.items) ? pager.items : []).slice(0, 25).map((row, idx) => {
     const rarityMark = row?.rarity ? `｜${String(row.rarity)}` : '';
     return {
-      label: `${idx + 1}. ${String(row.name || '未命名素材')}`.slice(0, 100),
+      label: `${idx + 1}. ${String(row.name || '未命名藏品')}`.slice(0, 100),
       description: `${row.sourceLabel}${rarityMark}｜估值 ${Math.max(1, Number(row.value || 1))} Rns`.slice(0, 100),
-      value: String(row.token || '').slice(0, 100)
+      value: String(row.token || '').slice(0, 100),
+      default: draftTokenSet.has(String(row.token || '').trim())
     };
   });
 
@@ -1702,16 +1855,17 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
     .setColor(0x7c3aed)
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
-      `請一次選擇 **3 件素材** 進行融合。\n` +
+      `請一次選擇 **3 件藏品** 進行融合。\n` +
       `融合結果會生成裝備（頭盔/盔甲/鞋子），並由 AI 決定名稱、稀有度與價值。\n` +
-      `目前候選：${candidates.length} 件（技能晶片已自動排除）`
+      `目前候選：${candidates.length} 件（技能晶片已自動排除）\n\n` +
+      `已選擇：**${draftRows.length}/3**\n${draftSummary}`
     );
 
   const rowSelect = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`inv_fusion_pick_${safePage}`)
-      .setPlaceholder('選擇 3 件素材融合')
-      .setMinValues(3)
+      .setPlaceholder('選擇 3 件藏品融合')
+      .setMinValues(1)
       .setMaxValues(3)
       .addOptions(options)
   );
@@ -1727,11 +1881,23 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= Math.max(1, Number(pager?.totalPages || 1)) - 1)
   );
+  const rowAction = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`inv_fusion_confirm_${safePage}`)
+      .setLabel('🧪 開始融合')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(draftRows.length !== 3),
+    new ButtonBuilder()
+      .setCustomId(`inv_fusion_clear_${safePage}`)
+      .setLabel('🧹 清除選材')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(draftRows.length <= 0)
+  );
   const rowBack = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
-  await updateInteractionMessage(interaction, { embeds: [embed], components: [rowSelect, rowPage, rowBack] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [rowSelect, rowPage, rowAction, rowBack] });
 }
 
 async function handleInventoryFusionSelect(interaction, user, customId = '') {
@@ -1742,21 +1908,74 @@ async function handleInventoryFusionSelect(interaction, user, customId = '') {
   }
   const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
+  const pruned = pruneEmptyTradeGoodsEntries(player);
   const changed = FUSION.ensurePlayerEquipmentState(player);
-  if (changed) CORE.savePlayer(player);
+  if (pruned || changed) CORE.savePlayer(player);
 
+  const currentPage = Math.max(0, Number(String(customId || '').split('_').pop() || 0));
   const selectedTokens = Array.isArray(interaction.values) ? interaction.values.map((v) => String(v || '').trim()).filter(Boolean) : [];
   const uniqueTokens = Array.from(new Set(selectedTokens));
-  if (uniqueTokens.length !== 3) {
-    await interaction.reply({ content: '⚠️ 請一次選擇 3 件素材。', ephemeral: true }).catch(() => {});
+  if (uniqueTokens.length < 1 || uniqueTokens.length > 3) {
+    await interaction.reply({ content: '⚠️ 請選擇 1~3 件藏品，並湊滿 3 件後按「開始融合」。', ephemeral: true }).catch(() => {});
     return;
   }
 
   const candidates = getFusionCandidates(player);
   const byToken = new Map(candidates.map((row) => [String(row.token || ''), row]));
   const picks = uniqueTokens.map((token) => byToken.get(token)).filter(Boolean);
+  if (picks.length !== uniqueTokens.length) {
+    await interaction.reply({ content: '⚠️ 有藏品已不存在，請重新選擇。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (picks.some((row) => isSkillChipItemName(row?.name || ''))) {
+    await interaction.reply({ content: '⚠️ 技能晶片不可融合。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  setInventoryFusionDraftTokens(player, uniqueTokens);
+  CORE.savePlayer(player);
+  const pickedNames = picks.map((row) => String(row?.name || '未命名藏品')).join(' + ');
+  const notice = uniqueTokens.length === 3
+    ? `已選定 3 件藏品：${pickedNames}\n請按「🧪 開始融合」。`
+    : `目前已選 ${uniqueTokens.length}/3：${pickedNames}`;
+  await showInventoryFusionLab(interaction, user, currentPage, notice);
+}
+
+async function handleInventoryFusionClear(interaction, user, customId = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const currentPage = Math.max(0, Number(String(customId || '').split('_').pop() || 0));
+  const pruned = pruneEmptyTradeGoodsEntries(player);
+  const changed = clearInventoryFusionDraft(player);
+  if (pruned || changed) CORE.savePlayer(player);
+  await showInventoryFusionLab(interaction, user, currentPage, changed ? '已清除選材。' : '目前沒有已選藏品。');
+}
+
+async function handleInventoryFusionConfirm(interaction, user, customId = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const uiLang = getPlayerUILang(player);
+  ECON.ensurePlayerEconomy(player);
+  const pruned = pruneEmptyTradeGoodsEntries(player);
+  const changed = FUSION.ensurePlayerEquipmentState(player);
+  if (pruned || changed) CORE.savePlayer(player);
+  const currentPage = Math.max(0, Number(String(customId || '').split('_').pop() || 0));
+  const candidates = getFusionCandidates(player);
+  const byToken = new Map(candidates.map((row) => [String(row?.token || '').trim(), row]));
+  const draftTokens = getValidatedFusionDraftTokens(player, candidates);
+  if (draftTokens.length !== 3) {
+    await showInventoryFusionLab(interaction, user, currentPage, '請先選滿 3 件藏品，再按「開始融合」。');
+    return;
+  }
+  const picks = draftTokens.map((token) => byToken.get(token)).filter(Boolean);
   if (picks.length !== 3) {
-    await interaction.reply({ content: '⚠️ 有素材已不存在，請重新選擇。', ephemeral: true }).catch(() => {});
+    await showInventoryFusionLab(interaction, user, currentPage, '有藏品已變動，請重新選擇。');
     return;
   }
   if (picks.some((row) => isSkillChipItemName(row?.name || ''))) {
@@ -1765,10 +1984,26 @@ async function handleInventoryFusionSelect(interaction, user, customId = '') {
   }
 
   await interaction.deferUpdate().catch(() => {});
+  const selectedNames = picks.map((row) => String(row?.name || '未命名藏品'));
+  await updateInteractionMessage(interaction, {
+    embeds: [buildFusionProgressEmbed(selectedNames, 1, 4, '⚙️ 融合進行中', '正在校準封存艙與紋理資訊...')],
+    components: []
+  });
+  await waitMs(380);
+  await updateInteractionMessage(interaction, {
+    embeds: [buildFusionProgressEmbed(selectedNames, 2, 4, '🧬 融合進行中', '正在重構材質結構與屬性映射...')],
+    components: []
+  });
+  await waitMs(380);
+  await updateInteractionMessage(interaction, {
+    embeds: [buildFusionProgressEmbed(selectedNames, 3, 4, '🔥 融合進行中', '正在生成裝備名稱、稀有度與詞條...')],
+    components: []
+  });
+
   let fused = null;
   try {
     const fusionInput = picks.map((row) => ({
-      name: String(row?.name || '未知素材'),
+      name: String(row?.name || '未知藏品'),
       value: Math.max(1, Math.floor(Number(row?.value || 1))),
       source: String(row?.source || 'inventory')
     }));
@@ -1779,23 +2014,24 @@ async function handleInventoryFusionSelect(interaction, user, customId = '') {
     });
   } catch (err) {
     const reason = String(err?.message || err || 'fusion failed').slice(0, 180);
-    await showInventoryFusionLab(interaction, user, 0, `融合失敗：${reason}`);
+    await showInventoryFusionLab(interaction, user, currentPage, `融合失敗：${reason}`);
     return;
   }
 
   const consumed = consumeFusionMaterials(player, picks);
   if (consumed.length !== 3) {
-    await showInventoryFusionLab(interaction, user, 0, '融合失敗：素材狀態已變動，請重試。');
+    await showInventoryFusionLab(interaction, user, currentPage, '融合失敗：藏品狀態已變動，請重試。');
     return;
   }
 
   const equipment = fused?.equipment;
   if (!equipment || typeof equipment !== 'object') {
-    await showInventoryFusionLab(interaction, user, 0, '融合失敗：鍛造核心沒有返回有效裝備。');
+    await showInventoryFusionLab(interaction, user, currentPage, '融合失敗：鍛造核心沒有返回有效裝備。');
     return;
   }
 
   const equipResult = FUSION.addEquipmentToPlayer(player, equipment);
+  clearInventoryFusionDraft(player);
   CORE.savePlayer(player);
 
   const stats = equipment.stats && typeof equipment.stats === 'object' ? equipment.stats : {};
@@ -1804,20 +2040,21 @@ async function handleInventoryFusionSelect(interaction, user, customId = '') {
     : equipment.slot === 'armor'
       ? `HP +${Math.max(0, Number(stats.hp || 0))}`
       : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
-  const sourceText = consumed.map((row) => String(row?.name || '未知素材')).join(' + ');
+  const sourceText = consumed.map((row) => String(row?.name || '未知藏品')).join(' + ');
   const equipNotice = equipResult?.equipped
     ? `已自動裝備到 ${getFusionSlotLabel(equipment.slot)}`
     : `已放入裝備背包（${getFusionSlotLabel(equipment.slot)}）`;
   const replaceNotice = equipResult?.replaced
     ? `｜替換：${String(equipResult.replaced?.name || '舊裝備')}`
     : '';
-  const aiTag = 'AI鍛造';
+  const aiTag = fused?.usedAI ? 'AI鍛造' : '保底鍛造';
+  const fallbackHint = fused?.usedAI ? '' : '\n（AI 回應逾時，已自動啟用保底鍛造）';
 
   await showInventory(
     interaction,
     user,
     0,
-    `${aiTag}完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n素材：${sourceText}\n${equipNotice}${replaceNotice}`
+    `${aiTag}完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n藏品：${sourceText}\n${equipNotice}${replaceNotice}${fallbackHint}`
   );
 }
 
@@ -1829,8 +2066,9 @@ async function showInventory(interaction, user, page = 0, notice = '') {
   }
   const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
+  const pruned = pruneEmptyTradeGoodsEntries(player);
   const stateChanged = FUSION.ensurePlayerEquipmentState(player);
-  if (stateChanged) CORE.savePlayer(player);
+  if (pruned || stateChanged) CORE.savePlayer(player);
 
   const items = Array.isArray(player.inventory) ? player.inventory : [];
   const herbs = Array.isArray(player.herbs) ? player.herbs : [];
@@ -1839,7 +2077,7 @@ async function showInventory(interaction, user, page = 0, notice = '') {
   const itemLines = items.map((item, i) => `${i + 1}. ${String(item || '')}`);
   const herbLines = herbs.map((h, i) => `${i + 1}. ${String(h || '')}`);
   const goodLines = tradeGoods.map((g, i) =>
-    `${i + 1}. ${String(g?.name || '未命名素材')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns）`
+    `${i + 1}. ${String(g?.name || '未命名藏品')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns）`
   );
 
   const itemPages = buildPagedFieldChunks(itemLines, 1000, '（空）');
@@ -1859,13 +2097,13 @@ async function showInventory(interaction, user, page = 0, notice = '') {
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
       `你身上攜帶的物品\n` +
-      `寶物融合：可用素材 ${fusionCandidates.length} 件（需 3 件）`
+      `寶物融合：可用藏品 ${fusionCandidates.length} 件（需 3 件）`
     )
     .addFields(
       { name: '📦 物品', value: itemsList, inline: true },
       { name: '🌿 草藥', value: herbsList, inline: true }
     )
-    .addFields({ name: `🧰 可售素材（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
+    .addFields({ name: `🧰 可售藏品（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
     .addFields({ name: `🛡️ 裝備（背包 ${equipmentInfo.bagCount} 件）`, value: equipmentInfo.slotText, inline: false })
     .addFields({ name: '📈 裝備總加成', value: equipmentInfo.totalText, inline: false })
     .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
@@ -1897,69 +2135,10 @@ async function showInventory(interaction, user, page = 0, notice = '') {
 }
 
 function getCodexLabels(uiLang = 'zh-TW') {
-  const map = {
-    'zh-TW': {
-      overviewTitle: '📚 圖鑑總覽',
-      overviewDesc: '可分開查看 NPC 圖鑑與技能圖鑑。未收集項目只顯示數量，不顯示名稱。',
-      npcProgress: '🤝 NPC 圖鑑進度',
-      skillProgress: '🧬 技能圖鑑進度',
-      unknownCount: '🕶️ 未收集（隱藏名稱）',
-      npcButton: '🤝 NPC圖鑑',
-      skillButton: '🧬 技能圖鑑',
-      npcTitle: '🤝 NPC 圖鑑',
-      npcCollected: '已收集 NPC',
-      npcUnknown: '未收集 NPC',
-      npcEmpty: '（尚未遇到 NPC）',
-      skillTitle: '🧬 技能圖鑑',
-      skillCollected: '已收集技能',
-      skillUnknown: '未收集技能',
-      skillEmpty: '（尚未抽到技能）',
-      backCodex: '📚 回圖鑑',
-      canFight: '可交鋒',
-      canDraw: '可抽取'
-    },
-    'zh-CN': {
-      overviewTitle: '📚 图鉴总览',
-      overviewDesc: '可分开查看 NPC 图鉴与技能图鉴。未收集项目只显示数量，不显示名称。',
-      npcProgress: '🤝 NPC 图鉴进度',
-      skillProgress: '🧬 技能图鉴进度',
-      unknownCount: '🕶️ 未收集（隐藏名称）',
-      npcButton: '🤝 NPC图鉴',
-      skillButton: '🧬 技能图鉴',
-      npcTitle: '🤝 NPC 图鉴',
-      npcCollected: '已收集 NPC',
-      npcUnknown: '未收集 NPC',
-      npcEmpty: '（尚未遇到 NPC）',
-      skillTitle: '🧬 技能图鉴',
-      skillCollected: '已收集技能',
-      skillUnknown: '未收集技能',
-      skillEmpty: '（尚未抽到技能）',
-      backCodex: '📚 回图鉴',
-      canFight: '可交锋',
-      canDraw: '可抽取'
-    },
-    en: {
-      overviewTitle: '📚 Codex Overview',
-      overviewDesc: 'NPC Codex and Skill Codex are separated. Uncollected entries show counts only.',
-      npcProgress: '🤝 NPC Progress',
-      skillProgress: '🧬 Skill Progress',
-      unknownCount: '🕶️ Uncollected (hidden names)',
-      npcButton: '🤝 NPC Codex',
-      skillButton: '🧬 Skill Codex',
-      npcTitle: '🤝 NPC Codex',
-      npcCollected: 'Collected NPCs',
-      npcUnknown: 'Uncollected NPCs',
-      npcEmpty: '(none yet)',
-      skillTitle: '🧬 Skill Codex',
-      skillCollected: 'Collected Skills',
-      skillUnknown: 'Uncollected Skills',
-      skillEmpty: '(none yet)',
-      backCodex: '📚 Back Codex',
-      canFight: 'Fightable',
-      canDraw: 'Drawable'
-    }
-  };
-  return map[uiLang] || map['zh-TW'];
+  const panelText = getPlayerPanelText(uiLang);
+  const codex = panelText?.codex || {};
+  if (codex && Object.keys(codex).length > 0) return codex;
+  return getPlayerPanelText('zh-TW').codex || {};
 }
 
 function collectPlayerCodexData(player) {
@@ -2259,6 +2438,8 @@ async function showSkillCodex(interaction, user) {
     showInventory,
     showInventoryFusionLab,
     handleInventoryFusionSelect,
+    handleInventoryFusionConfirm,
+    handleInventoryFusionClear,
     showPetEquipmentView,
     collectPlayerCodexData,
     showPlayerCodex,

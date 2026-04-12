@@ -6,7 +6,10 @@ const { spawnSync } = require('child_process');
 function createMapRenderUtils(deps = {}) {
   const {
     rootDir = process.cwd(),
-    MAP_ENABLE_WIDE_ANSI = true
+    MAP_ENABLE_WIDE_ANSI = true,
+    // Global language resource accessors.
+    getLanguageSection = null,
+    getLanguageRegionName = null
   } = deps;
 
   function normalizeMapViewMode(mode, fallback = (MAP_ENABLE_WIDE_ANSI ? 'ascii' : 'text')) {
@@ -21,6 +24,65 @@ function createMapRenderUtils(deps = {}) {
 
   function getRegionMapRendererScriptPath() {
     return path.join(rootDir, 'tools', 'render_region_map.py');
+  }
+
+  function normalizeMapLang(lang = 'zh-TW') {
+    const raw = String(lang || '').trim();
+    if (raw === 'zh-CN') return 'zh-CN';
+    if (raw === 'en') return 'en';
+    return 'zh-TW';
+  }
+
+  function getMapImageLegendLabels(lang = 'zh-TW') {
+    const code = normalizeMapLang(lang);
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('mapRenderLegendLabels', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    const map = {
+      'zh-TW': {
+        you: '目前位置',
+        portal: '主傳送門',
+        city: '城市',
+        forest: '森林'
+      },
+      'zh-CN': {
+        you: '目前位置',
+        portal: '主传送门',
+        city: '城市',
+        forest: '森林'
+      },
+      en: {
+        you: 'You',
+        portal: 'Portal Hub',
+        city: 'City',
+        forest: 'Forest'
+      }
+    };
+    return map[code] || map['zh-TW'];
+  }
+
+  function getLocalizedRegionName(regionName = '', lang = 'zh-TW') {
+    const source = String(regionName || '').trim();
+    if (!source) return source;
+    if (typeof getLanguageRegionName === 'function') {
+      const fromGlobal = getLanguageRegionName(source, normalizeMapLang(lang));
+      if (fromGlobal && String(fromGlobal).trim()) return String(fromGlobal);
+    }
+    const code = normalizeMapLang(lang);
+    const table = {
+      '北境高原': { 'zh-TW': '北境高原', 'zh-CN': '北境高原', en: 'Northern Highlands' },
+      '中原核心': { 'zh-TW': '中原核心', 'zh-CN': '中原核心', en: 'Central Core' },
+      '西域沙海': { 'zh-TW': '西域沙海', 'zh-CN': '西域沙海', en: 'Western Sandsea' },
+      '南疆水網': { 'zh-TW': '南疆水網', 'zh-CN': '南疆水网', en: 'Southern Waterways' },
+      '群島航線': { 'zh-TW': '群島航線', 'zh-CN': '群岛航线', en: 'Archipelago Routes' },
+      '隱秘深域': { 'zh-TW': '隱秘深域', 'zh-CN': '隐秘深域', en: 'Hidden Deep Zone' }
+    };
+    const row = table[source];
+    if (!row) return source;
+    return row[code] || row['zh-TW'] || source;
   }
 
   function summarizeMapRenderFailure(runner = '', run = null) {
@@ -46,7 +108,7 @@ function createMapRenderUtils(deps = {}) {
     return `${tag} 渲染失敗`;
   }
 
-  function renderRegionMapImageBuffer(snapshot, statusText = '') {
+  function renderRegionMapImageBuffer(snapshot, statusText = '', lang = 'zh-TW') {
     if (!snapshot || !Array.isArray(snapshot.mapRows) || snapshot.mapRows.length === 0) {
       return { buffer: null, error: '地圖資料為空' };
     }
@@ -59,6 +121,7 @@ function createMapRenderUtils(deps = {}) {
     const inPath = path.join(tempDir, 'map-input.json');
     const outPath = path.join(tempDir, 'map-output.png');
     const fontPath = path.join(rootDir, 'NotoSansMonoCJKtc-Regular.otf');
+    const localizedRegionName = getLocalizedRegionName(snapshot.regionName || '', lang);
     const payload = {
       map_rows: snapshot.mapRows,
       labels: Array.isArray(snapshot.locations)
@@ -75,8 +138,10 @@ function createMapRenderUtils(deps = {}) {
           npc_count: 0
         }))
         : [],
-      zone_name: `${snapshot.regionName} ${snapshot.difficultyRange ? `(${snapshot.difficultyRange})` : ''}`.trim(),
-      status: statusText
+      zone_name: `${localizedRegionName} ${snapshot.difficultyRange ? `(${snapshot.difficultyRange})` : ''}`.trim(),
+      status: statusText,
+      lang: normalizeMapLang(lang),
+      legend: getMapImageLegendLabels(lang)
     };
 
     try {

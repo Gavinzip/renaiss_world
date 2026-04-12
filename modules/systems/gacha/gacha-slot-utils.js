@@ -1,4 +1,20 @@
-function createGachaSlotUtils() {
+function createGachaSlotUtils(deps = {}) {
+  const {
+    getLanguageSection = null
+  } = deps;
+
+  function getGachaSlotText(lang = 'zh-TW') {
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('gachaSlotText', lang);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return {
+      revealPending: '🎁 技能揭曉中...'
+    };
+  }
+
   function pickRandom(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
   }
@@ -24,7 +40,8 @@ function createGachaSlotUtils() {
     return `${index + 1}. 🎰 [ ${reels[0]} | ${reels[1]} | ${reels[2]} ]${jackpotText}\n${draw.tierEmoji} **${draw.move.name}** (${draw.tierName}) - ${draw.move.desc}`;
   }
 
-  function buildGachaReelLines(slotRows = [], revealCount = 0, showSkill = false) {
+  function buildGachaReelLines(slotRows = [], revealCount = 0, showSkill = false, lang = 'zh-TW') {
+    const tx = getGachaSlotText(lang);
     return slotRows.map((row, index) => {
       const reels = Array.isArray(row?.reels) ? row.reels : ['❔', '❔', '❔'];
       const a = revealCount >= 1 ? reels[0] : '❔';
@@ -33,7 +50,7 @@ function createGachaSlotUtils() {
       const jackpotText = row?.draw?.tier === 3 && revealCount >= 3 ? ' → **JACKPOT!**' : '';
       const skillText = showSkill
         ? `${row.draw.tierEmoji} **${row.draw.move.name}** (${row.draw.tierName}) - ${row.draw.move.desc}`
-        : '🎁 技能揭曉中...';
+        : (tx.revealPending || '🎁 技能揭曉中...');
       return `${index + 1}. 🎰 [ ${a} | ${b} | ${c} ]${jackpotText}\n${skillText}`;
     }).join('\n\n');
   }
@@ -49,4 +66,3 @@ function createGachaSlotUtils() {
 module.exports = {
   createGachaSlotUtils
 };
-

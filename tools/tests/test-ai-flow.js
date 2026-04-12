@@ -6,20 +6,29 @@
 const path = require('path');
 const fs = require('fs');
 
-// 載入 .env
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
+function loadEnvFromCandidates() {
+  const candidates = [
+    path.join(__dirname, '.env'),
+    path.join(__dirname, '..', '..', '.env')
+  ];
+  for (const envPath of candidates) {
+    if (!fs.existsSync(envPath)) continue;
+    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
+      const raw = String(line || '').trim();
+      if (!raw || raw.startsWith('#')) return;
+      const [key, ...valueParts] = raw.split('=');
+      if (key && valueParts.length > 0) {
+        process.env[key.trim()] = valueParts.join('=').trim();
+      }
+    });
+  }
 }
+loadEnvFromCandidates();
 
 const STORY = require('../../modules/content/storyteller.js');
 const EVENTS = require('../../modules/content/event-system.js');
 const CORE = require('../../modules/core/game-core.js');
+const WORLD_DATA_ROOT = process.env.WORLD_DATA_ROOT || path.join(__dirname, 'data');
 
 // 測試用玩家資料
 const TEST_USER_ID = 'test_user_' + Date.now();
@@ -92,8 +101,9 @@ async function runTest() {
   }
 
   // 清理
-  fs.unlinkSync(path.join(__dirname, 'data/players', TEST_USER_ID + '.json'));
-  const petFile = path.join(__dirname, 'data/pets.json');
+  const playerFile = path.join(WORLD_DATA_ROOT, 'players', TEST_USER_ID + '.json');
+  if (fs.existsSync(playerFile)) fs.unlinkSync(playerFile);
+  const petFile = path.join(WORLD_DATA_ROOT, 'pets.json');
   if (fs.existsSync(petFile)) {
     const pets = JSON.parse(fs.readFileSync(petFile, 'utf-8'));
     delete pets['pet_' + TEST_USER_ID + '_' + egg.createdAt];

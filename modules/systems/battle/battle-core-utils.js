@@ -70,15 +70,22 @@ function createBattleCoreUtils(deps = {}) {
   function resolvePlayerMainPet(player, options = {}) {
     const ownerId = String(player?.id || '').trim();
     const preferredId = String(options?.preferredPetId || '').trim();
+    const preferBattle = Boolean(options?.preferBattle);
     const inBattleAllowDown = Boolean(options?.allowDownInBattle);
+    const fallbackPet = options?.fallbackPet || null;
 
-    if (!ownerId || typeof PET?.loadPet !== 'function') return null;
+    if (!ownerId || typeof PET?.loadPet !== 'function') {
+      return { pet: fallbackPet, changed: false };
+    }
 
     const pool = typeof PET.getAllPetsByOwner === 'function'
       ? PET.getAllPetsByOwner(ownerId)
       : [PET.loadPet(ownerId)].filter(Boolean);
 
-    if (!Array.isArray(pool) || pool.length === 0) return PET.loadPet(ownerId) || null;
+    if (!Array.isArray(pool) || pool.length === 0) {
+      const pet = fallbackPet || PET.loadPet(ownerId) || null;
+      return { pet, changed: false };
+    }
 
     const canUse = (pet) => {
       if (!pet) return false;
@@ -87,21 +94,66 @@ function createBattleCoreUtils(deps = {}) {
       return hp > 0;
     };
 
-    if (preferredId) {
-      const byId = pool.find((p) => String(p?.id || '').trim() === preferredId);
-      if (canUse(byId)) return byId;
+    const byId = new Map();
+    for (const pet of pool) {
+      const id = String(pet?.id || '').trim();
+      if (!id) continue;
+      byId.set(id, pet);
     }
 
+    const battleActiveId = preferBattle
+      ? String(player?.battleState?.activePetId || '').trim()
+      : '';
+    const activeId = String(player?.activePetId || '').trim();
     const mainId = String(player?.mainPetId || '').trim();
-    if (mainId) {
-      const main = pool.find((p) => String(p?.id || '').trim() === mainId);
-      if (canUse(main)) return main;
+    const fallbackId = String(fallbackPet?.id || '').trim();
+    const candidates = [preferredId, battleActiveId, activeId, mainId, fallbackId]
+      .filter((id, idx, arr) => id && arr.indexOf(id) === idx);
+
+    let selected = null;
+    for (const id of candidates) {
+      const pet = byId.get(id);
+      if (canUse(pet)) {
+        selected = pet;
+        break;
+      }
     }
 
-    const alive = pool.find((p) => Number(p?.hp || 0) > 0);
-    if (alive) return alive;
+    if (!selected) {
+      selected = pool.find((p) => Number(p?.hp || 0) > 0) || null;
+    }
+    if (!selected && inBattleAllowDown) {
+      selected = candidates.map((id) => byId.get(id)).find(Boolean) || pool[0] || null;
+    }
+    if (!selected) {
+      selected = fallbackPet && String(fallbackPet?.ownerId || '').trim() === ownerId
+        ? fallbackPet
+        : null;
+    }
 
-    return inBattleAllowDown ? (pool[0] || null) : null;
+    let changed = false;
+    const selectedId = String(selected?.id || '').trim();
+    if (selectedId && player && typeof player === 'object') {
+      if (String(player.activePetId || '').trim() !== selectedId) {
+        player.activePetId = selectedId;
+        changed = true;
+      }
+      if (String(player.mainPetId || '').trim() !== selectedId) {
+        player.mainPetId = selectedId;
+        changed = true;
+      }
+      if (preferBattle && player.battleState && typeof player.battleState === 'object') {
+        if (String(player.battleState.activePetId || '').trim() !== selectedId) {
+          player.battleState.activePetId = selectedId;
+          changed = true;
+        }
+      }
+    }
+
+    return {
+      pet: selected,
+      changed
+    };
   }
 
   function getBattlePetStateSnapshot(player, petId = '') {

@@ -14,6 +14,7 @@ function initStoryRuntimeUtils(deps = {}) {
     MAIN_STORY,
     getLocationPortalHub,
     normalizeLangCode,
+    getLanguageSection,
     formatPetHpWithRecovery,
     normalizeComparableStoryText,
     extractStoryDialogues,
@@ -37,6 +38,7 @@ function initStoryRuntimeUtils(deps = {}) {
   });
   const ADVENTURE_STATUS_UTILS = createAdventureStatusUtils({
     normalizeLangCode,
+    getLanguageSection,
     formatPetHpWithRecovery,
     ISLAND_STORY,
     MAIN_STORY

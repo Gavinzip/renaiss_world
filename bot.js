@@ -189,6 +189,7 @@ const { createMapTextUtils } = require('./modules/systems/map/map-text-utils');
 const { createMapRenderUtils } = require('./modules/systems/map/map-render-utils');
 const { createSettingsTextUtils } = require('./modules/systems/runtime/utils/settings-text-utils');
 const { createSettingsMemoryTextUtils } = require('./modules/systems/ui/settings-memory-text-utils');
+const { createGlobalLanguageResources } = require('./modules/systems/runtime/utils/global-language-resources');
 const { createEntryGateUtils } = require('./modules/systems/runtime/utils/entry-gate-utils');
 const { registerInteractionDispatcher } = require('./modules/systems/routing/interaction-dispatcher-utils');
 const { createNumberFormatUtils } = require('./modules/systems/runtime/utils/number-format-utils');
@@ -392,10 +393,22 @@ const {
   markCurrentLocationStoryBattleDone,
   markSystemChoiceExposure
 } = LOCATION_ARC_UTILS;
+const normalizeLangCodeShared = (lang = 'zh-TW') => {
+  const raw = String(lang || '').trim();
+  if (raw === 'zh-CN' || raw === 'en') return raw;
+  return 'zh-TW';
+};
+const GLOBAL_LANGUAGE_RESOURCES = createGlobalLanguageResources({
+  normalizeLangCode: (...args) => normalizeLangCodeShared(...args)
+});
+const getLanguageSection = (section, lang = 'zh-TW', context = null) =>
+  GLOBAL_LANGUAGE_RESOURCES.getSection(section, lang, context);
+const getLanguageRegionName = (regionName, lang = 'zh-TW') => GLOBAL_LANGUAGE_RESOURCES.getRegionName(regionName, lang);
 const UI_LANGUAGE_UTILS = createUiLanguageUtils({
   configLanguage: CONFIG.LANGUAGE,
   ButtonBuilder,
   ButtonStyle,
+  getLanguageSection: (...args) => getLanguageSection(...args),
   buildQuickShopButton: (player) => buildQuickShopButton(player)
 });
 const {
@@ -409,24 +422,29 @@ const {
 } = UI_LANGUAGE_UTILS;
 const UI_TEXT_UTILS = createUiTextUtils({
   normalizeLangCode: (...args) => normalizeLangCode(...args),
-  defaultLanguage: CONFIG.LANGUAGE
+  defaultLanguage: CONFIG.LANGUAGE,
+  getLanguageSection: (...args) => getLanguageSection(...args)
 });
 ({
   t: tCore
 } = UI_TEXT_UTILS);
-const GACHA_SLOT_UTILS = createGachaSlotUtils();
+const GACHA_SLOT_UTILS = createGachaSlotUtils({
+  getLanguageSection: (...args) => getLanguageSection(...args)
+});
 const {
   buildSlotReels,
   buildGachaReelLines
 } = GACHA_SLOT_UTILS;
 const SETTINGS_TEXT_UTILS = createSettingsTextUtils({
-  normalizeLangCode: (...args) => normalizeLangCode(...args)
+  normalizeLangCode: (...args) => normalizeLangCode(...args),
+  getLanguageSection: (...args) => getLanguageSection(...args)
 });
 const {
   getSettingsText
 } = SETTINGS_TEXT_UTILS;
 const SETTINGS_MEMORY_TEXT_UTILS = createSettingsMemoryTextUtils({
-  normalizeLangCode: (...args) => normalizeLangCode(...args)
+  normalizeLangCode: (...args) => normalizeLangCode(...args),
+  getLanguageSection: (...args) => getLanguageSection(...args)
 });
 const {
   getSettingsHubText,
@@ -437,7 +455,8 @@ const MAP_TEXT_UTILS = createMapTextUtils({
   TELEPORT_DEVICE_COST,
   TELEPORT_DEVICE_DURATION_HOURS,
   LOCATION_ENTRY_MIN_WINRATE: Math.max(1, Math.min(99, Number(process.env.LOCATION_ENTRY_MIN_WINRATE || 50))),
-  format1
+  format1,
+  getLanguageSection: (...args) => getLanguageSection(...args)
 });
 const {
   getMapText,
@@ -445,7 +464,9 @@ const {
 } = MAP_TEXT_UTILS;
 const MAP_RENDER_UTILS = createMapRenderUtils({
   rootDir: __dirname,
-  MAP_ENABLE_WIDE_ANSI
+  MAP_ENABLE_WIDE_ANSI,
+  getLanguageSection: (...args) => getLanguageSection(...args),
+  getLanguageRegionName: (...args) => getLanguageRegionName(...args)
 });
 const {
   normalizeMapViewMode,
@@ -515,6 +536,7 @@ const MAP_ONBOARDING_RUNTIME_UTILS = initMapOnboardingRuntimeUtils({
   normalizePetElementCode: (...args) => normalizePetElementCode(...args),
   normalizePetName: (...args) => normalizePetName(...args),
   rollStarterMoveForElement: (...args) => rollStarterMoveForElement(...args),
+  getLanguageSection: (...args) => getLanguageSection(...args),
   LOCATION_ARC_COMPLETE_TURNS,
   PORTAL_GUIDE_MIN_TURNS,
   PORTAL_RESHOW_COOLDOWN_TURNS,
@@ -979,6 +1001,7 @@ const STORY_RUNTIME_UTILS = initStoryRuntimeUtils({
   MAIN_STORY,
   getLocationPortalHub: (...args) => getLocationPortalHub(...args),
   normalizeLangCode: (...args) => normalizeLangCode(...args),
+  getLanguageSection: (...args) => getLanguageSection(...args),
   formatPetHpWithRecovery: (...args) => formatPetHpWithRecovery(...args),
   normalizeComparableStoryText: (...args) => normalizeComparableStoryText(...args),
   extractStoryDialogues: (...args) => extractStoryDialogues(...args),
@@ -1338,6 +1361,7 @@ const RUNTIME_BASE_DEPS = {
   applyFriendBattleResult,
   getSettingsText,
   getWorldIntroTemplate,
+  getLanguageSection: (...args) => getLanguageSection(...args),
   getPetCapacityForUser,
   ensureMentorSparRecord,
   buildSlotReels,

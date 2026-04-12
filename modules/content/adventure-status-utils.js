@@ -2,13 +2,15 @@ function createAdventureStatusUtils(deps = {}) {
   const {
     normalizeLangCode = (v) => v || 'zh-TW',
     formatPetHpWithRecovery = (pet) => `${Math.round(Number(pet?.hp || 0))}/${Math.round(Number(pet?.maxHp || 0))}`,
+    // Global language resource accessor (section-based).
+    getLanguageSection = null,
     ISLAND_STORY = null,
     MAIN_STORY = null
   } = deps;
 
   function getAdventureText(lang = 'zh-TW') {
     const code = normalizeLangCode(lang);
-    const map = {
+    const fallbackMap = {
       'zh-TW': {
         statusLabel: '狀態',
         statusHp: '氣血',
@@ -61,7 +63,13 @@ function createAdventureStatusUtils(deps = {}) {
         sectionUpcomingChoices: '🆕 Incoming Choices'
       }
     };
-    return map[code] || map['zh-TW'];
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('adventureText', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return fallbackMap[code] || fallbackMap['zh-TW'];
   }
 
   function buildMainStatusBar(player, pet, lang = '') {

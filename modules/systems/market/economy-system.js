@@ -11,6 +11,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
+const { createGlobalLanguageResources } = require('../runtime/utils/global-language-resources');
 
 const PROTECTED_ITEMS = new Set(['乾糧一包', '水囊']);
 
@@ -64,6 +65,25 @@ const MAX_MARKET_NOTE_LEN = 80;
 const FAIR_STATION_SELL_RATE = 0.8;
 const DIGITAL_STATION_DISPLAY_RATE = 0.9;
 const DIGITAL_STATION_ACTUAL_RATE = 0.6;
+
+const LANGUAGE_RESOURCES = createGlobalLanguageResources({
+  normalizeLangCode: (lang = 'zh-TW') => {
+    const raw = String(lang || '').trim();
+    if (raw === 'zh-CN' || raw === 'en') return raw;
+    return 'zh-TW';
+  }
+});
+
+function getEconomyText(lang = 'zh-TW') {
+  return LANGUAGE_RESOURCES.getSection('economyText', lang) || {};
+}
+
+function getAiLanguageDirective(lang = 'zh-TW', tone = 'outputFullstop') {
+  const table = LANGUAGE_RESOURCES.getSection('aiLanguageDirectives', lang) || {};
+  if (tone === 'output') return table.output || '請用繁體中文輸出';
+  if (tone === 'plain') return table.plain || '請用繁體中文';
+  return table.outputFullstop || '請用繁體中文輸出。';
+}
 
 function ensurePlayerEconomy(player) {
   if (!player || typeof player !== 'object') return;
@@ -959,31 +979,20 @@ function buildFallbackAppraiserPitch(options = {}) {
   const avgRatePct = Math.max(1, Math.round(Number(options.avgRate || 1) * 100));
   const digitalMasked = Boolean(options.digitalMasked);
   const lang = String(options.playerLang || 'zh-TW');
-  if (lang === 'en') {
-    if (soldCount <= 0) return 'No sellable items right now. Come back after collecting more materials.';
-    if (marketType === 'digital') {
-      return digitalMasked
-        ? `You moved ${soldCount} items for ${total} Rns. Quick lane complete, but compare a second quote before your next sale.`
-        : `I can close ${soldCount} items at ${total} Rns now. It looks efficient, but this quote favors the desk.`;
-    }
-    return `Appraised ${soldCount} items at ${total} Rns (about ${avgRatePct}% of baseline).`;
-  }
-  if (lang === 'zh-CN') {
-    if (soldCount <= 0) return '你现在没有可出售物品，整理背包后再来。';
-    if (marketType === 'digital') {
-      return digitalMasked
-        ? `这批 ${soldCount} 件我先按 ${total} Rns 代币帮你快速成交；想更稳，下一笔再去另一家比价。`
-        : `这批 ${soldCount} 件我给你 ${total} Rns 代币，成交很快；不过你也知道，这种报价会偏向柜台。`;
-    }
-    return `这批 ${soldCount} 件估值 ${total} Rns 代币，约为基准价的 ${avgRatePct}%。`;
-  }
-  if (soldCount <= 0) return '你現在沒有可出售物品，整理背包後再來。';
+  const tx = getEconomyText(lang);
+  if (soldCount <= 0) return tx.noSellable || '你現在沒有可出售物品，整理背包後再來。';
   if (marketType === 'digital') {
     return digitalMasked
-      ? `這批 ${soldCount} 件我先按 ${total} Rns 代幣幫你快速成交；想更穩，下一筆再去別家比價。`
-      : `這批 ${soldCount} 件我給你 ${total} Rns 代幣，成交很快；不過你也知道，這種報價會偏向櫃台。`;
+      ? (typeof tx.digitalMasked === 'function'
+        ? tx.digitalMasked({ soldCount, total, avgRatePct })
+        : `這批 ${soldCount} 件我先按 ${total} Rns 代幣幫你快速成交；想更穩，下一筆再去別家比價。`)
+      : (typeof tx.digitalNormal === 'function'
+        ? tx.digitalNormal({ soldCount, total, avgRatePct })
+        : `這批 ${soldCount} 件我給你 ${total} Rns 代幣，成交很快；不過你也知道，這種報價會偏向櫃台。`);
   }
-  return `這批 ${soldCount} 件估值 ${total} Rns 代幣，約為基準價的 ${avgRatePct}%。`;
+  return typeof tx.renaissEstimate === 'function'
+    ? tx.renaissEstimate({ soldCount, total, avgRatePct })
+    : `這批 ${soldCount} 件估值 ${total} Rns 代幣，約為基準價的 ${avgRatePct}%。`;
 }
 
 async function generateAppraiserPitch(options = {}) {
@@ -1003,11 +1012,7 @@ async function generateAppraiserPitch(options = {}) {
   const riskScore = Number(options.digitalRiskScore || 0);
   const digitalMasked = Boolean(options.digitalMasked);
   const lang = String(options.playerLang || 'zh-TW');
-  const languageRule = lang === 'en'
-    ? 'Please output in English.'
-    : lang === 'zh-CN'
-      ? '请使用简体中文输出。'
-      : '請使用繁體中文輸出。';
+  const languageRule = getAiLanguageDirective(lang, 'outputFullstop');
   const marketLens = marketType === 'digital'
     ? (
       digitalMasked
@@ -1196,11 +1201,7 @@ async function generateLootFlavorWithAI(meta = {}) {
   const rarity = String(meta.rarity || '普通');
   const valueRange = getLootValueRange(rarity);
   const lang = String(meta.lang || 'zh-TW');
-  const languageRule = lang === 'en'
-    ? 'Output in English.'
-    : lang === 'zh-CN'
-      ? '请使用简体中文输出。'
-      : '請使用繁體中文輸出。';
+  const languageRule = getAiLanguageDirective(lang, 'outputFullstop');
   const sourceType = String(meta.sourceType || 'combat');
   const category = String(meta.category || '素材');
   const location = String(meta.location || '未知地點');

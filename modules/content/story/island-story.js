@@ -10,24 +10,24 @@ const KING_GATE_REGION_ID = 'island_routes';
 const KING_GATE_REQUIRED = 4;
 
 const REGION_STORY_CHAPTER = Object.freeze({
-  central_core: '第一島：異常感',
+  central_core: '第一島：鑑定公信裂痕',
   west_desert: '第二島：供應鏈破口',
   southern_delta: '第三島：偽造工坊',
-  northern_highland: '第四島：滲透網',
-  island_routes: '第五島：四巨頭線',
-  hidden_deeps: '第六島：真相公開與平衡'
+  northern_highland: '第四島：滲透網篩查',
+  island_routes: '第五島：四巨頭控制鏈',
+  hidden_deeps: '第六島：真相公開與新平衡'
 });
 
 const REGION_REVEAL_ROADMAP = Object.freeze({
   central_core: [
-    '遇到一組看起來過度友善且低價的服務，先保持觀察',
-    '做一次正規鑑定，發現與低價結果出現明顯衝突',
+    '遇到一組看起來過度友善且低價的鑑定服務，先保持觀察',
+    '做一次正規鑑定，發現與低價站結果出現明顯衝突',
     '鎖定第一批可疑物證（標籤、印記或序號）',
     '把可疑物證送去第二來源複核，確認不是單點誤差',
-    '訪談現場相關者，收集「誰提供服務、何時出現」',
+    '訪談現場相關者，收集「誰提供服務、何時出現、在哪裡收貨」',
     '比對說法與物證，找出第一個關鍵矛盾點',
     '把矛盾整理成可追查線，定位下一島物流入口',
-    '收尾：沿主傳送門前往下一島，繼續追查供應來源'
+    '收尾：沿主傳送門前往下一島，繼續追查收藏品供應來源'
   ],
   west_desert: [
     '追查貨物流向，先把倉儲、碼頭、轉運的節點關係畫清楚',

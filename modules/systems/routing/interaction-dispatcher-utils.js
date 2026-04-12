@@ -109,6 +109,8 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     showInventory,
     showInventoryFusionLab,
     handleInventoryFusionSelect,
+    handleInventoryFusionConfirm = async () => {},
+    handleInventoryFusionClear = async () => {},
     showPlayerCodex,
     showNpcCodex,
     showSkillCodex,
@@ -1017,6 +1019,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const currentPage = Math.max(0, Number(String(customId).split('_').pop() || 0));
     const nextPage = customId.startsWith('inv_fusion_page_prev_') ? currentPage - 1 : currentPage + 1;
     await showInventoryFusionLab(interaction, user, nextPage);
+    return;
+  }
+
+  if (customId.startsWith('inv_fusion_confirm_')) {
+    await handleInventoryFusionConfirm(interaction, user, customId);
+    return;
+  }
+
+  if (customId.startsWith('inv_fusion_clear_')) {
+    await handleInventoryFusionClear(interaction, user, customId);
     return;
   }
 

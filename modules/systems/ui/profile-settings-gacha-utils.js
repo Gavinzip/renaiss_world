@@ -210,6 +210,7 @@ function createProfileSettingsGachaUtils(deps = {}) {
 
   async function handleGachaResult(interaction, user, count) {
     const player = CORE.loadPlayer(user.id);
+    const uiLang = getPlayerUILang(player);
 
     if (!player) {
       await interaction.update({ content: '❌ 找不到角色！', components: [] });
@@ -236,7 +237,7 @@ function createProfileSettingsGachaUtils(deps = {}) {
       draw,
       reels: buildSlotReels(draw.tier === 3)
     }));
-    const resultsText = buildGachaReelLines(slotRows, 3, true);
+    const resultsText = buildGachaReelLines(slotRows, 3, true, uiLang);
 
     const gainedChips = [];
     for (const draw of result.draws) {
@@ -251,10 +252,10 @@ function createProfileSettingsGachaUtils(deps = {}) {
       .setTitle(`🎰 開包中 x${count}`)
       .setColor(0xffd700)
       .setDescription(
-        `💰 花費 ${result.cost} Rns 代幣\n` +
+          `💰 花費 ${result.cost} Rns 代幣\n` +
           `💡 拉霸規則：三格相同 = 5% 大獎（不改原本機率）\n\n` +
           `**${phaseText}**\n` +
-          `${buildGachaReelLines(slotRows, revealCount, showSkill)}`
+          `${buildGachaReelLines(slotRows, revealCount, showSkill, uiLang)}`
       );
 
     const chipSummary = gainedChips.length > 0

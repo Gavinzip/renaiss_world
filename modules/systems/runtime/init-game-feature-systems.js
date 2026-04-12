@@ -198,6 +198,7 @@ function initGameFeatureSystems(deps = {}) {
     generatePlayerMemoryRecap,
     getAllPetSkillMoves,
     extractSkillChipMoveName,
+    getLanguageSection,
     addSkillChipToInventory,
     normalizeFriendId,
     ensurePlayerFriendState,
@@ -550,6 +551,7 @@ function initGameFeatureSystems(deps = {}) {
     recordNearbyNpcEncounters,
     getAllPetSkillMoves,
     extractSkillChipMoveName,
+    getLanguageSection,
     showMainMenu
   });
   const {
@@ -574,6 +576,8 @@ function initGameFeatureSystems(deps = {}) {
     showInventory,
     showInventoryFusionLab,
     handleInventoryFusionSelect,
+    handleInventoryFusionConfirm,
+    handleInventoryFusionClear,
     showPetEquipmentView,
     collectPlayerCodexData,
     showPlayerCodex,
@@ -761,6 +765,8 @@ function initGameFeatureSystems(deps = {}) {
     showInventory,
     showInventoryFusionLab,
     handleInventoryFusionSelect,
+    handleInventoryFusionConfirm,
+    handleInventoryFusionClear,
     showPetEquipmentView,
     collectPlayerCodexData,
     showPlayerCodex,

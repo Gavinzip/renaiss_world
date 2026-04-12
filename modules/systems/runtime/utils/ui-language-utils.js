@@ -2,6 +2,10 @@ function createUiLanguageUtils(deps = {}) {
   const configLanguage = String(deps.configLanguage || 'zh-TW').trim() || 'zh-TW';
   const ButtonBuilder = deps.ButtonBuilder;
   const ButtonStyle = deps.ButtonStyle;
+  // Global language resource accessor (section-based).
+  const getLanguageSection = typeof deps.getLanguageSection === 'function'
+    ? deps.getLanguageSection
+    : null;
   const buildQuickShopButton = typeof deps.buildQuickShopButton === 'function'
     ? deps.buildQuickShopButton
     : (() => null);
@@ -34,7 +38,7 @@ function createUiLanguageUtils(deps = {}) {
   }
 
   function getUtilityButtonLabels(lang = 'zh-TW') {
-    const map = {
+    const fallbackMap = {
       'zh-TW': {
         inventory: '🎒 背包',
         moves: '🐾 寵物',
@@ -72,7 +76,13 @@ function createUiLanguageUtils(deps = {}) {
         quickShopCooldown: (remaining) => `🏪 Appraisal ${remaining}T`
       }
     };
-    return map[lang] || map['zh-TW'];
+    if (getLanguageSection) {
+      const fromGlobal = getLanguageSection('utilityButtonLabels', lang);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return fallbackMap[lang] || fallbackMap['zh-TW'];
   }
 
   function appendMainMenuUtilityButtons(buttons = [], player = null) {

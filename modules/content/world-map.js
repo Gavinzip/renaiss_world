@@ -3,6 +3,8 @@
  * Bot UI、出生邏輯與 AI 說書共用
  */
 
+const { getLocationCollectibleFlavor } = require('./collectible-culture');
+
 const ISLAND_MAP_TEXT = `                     ~ ~ ~ 雲海航道 ~ ~ ~
                    ╭─────〔 星環海域 〕─────╮
 
@@ -94,10 +96,10 @@ const LOCATION_PROFILES = {
   '襄陽城': {
     region: '中原核心',
     difficulty: 1,
-    desc: '繁華熱鬧的科技城，商隊與探索者在此交會。',
+    desc: '封存艙與修復件交易最密集的快檢城，追查與議價同時發生。',
     nearby: ['機械工坊街', '城南市集', '北門巡邏線'],
-    landmarks: ['能量補充站', '城防塔'],
-    resources: ['鐵礦', '藥草', '低階裝備'],
+    landmarks: ['能量補充站', '城防塔', '快檢封條亭'],
+    resources: ['鐵礦', '藥草', '低階裝備', '封存艙殼件'],
     starterEligible: true
   },
   '龍脊山道': {
@@ -112,10 +114,10 @@ const LOCATION_PROFILES = {
   '洛陽城': {
     region: '中原核心',
     difficulty: 1,
-    desc: '花城與拍賣行並存，社交與情報活動頻繁。',
+    desc: '灰帳與拍賣紀錄匯流的核對城，真假流向在此留下痕跡。',
     nearby: ['牡丹廣場', '拍賣行後巷', '文庫街'],
-    landmarks: ['牡丹山莊', '賞金公告牆'],
-    resources: ['古籍', '珠寶', '情報'],
+    landmarks: ['牡丹山莊', '賞金公告牆', '灰帳檔案庫'],
+    resources: ['古籍', '珠寶', '情報', '物流台帳'],
     starterEligible: true
   },
   '墨林古道': {
@@ -130,10 +132,10 @@ const LOCATION_PROFILES = {
   '大都': {
     region: '中原核心',
     difficulty: 2,
-    desc: '皇城核心都市，權力節點密集，秩序森嚴。',
+    desc: '公信與審核中樞，收藏品價格秩序在此被定義。',
     nearby: ['皇城外環', '軍備庫區', '情報機構巷'],
-    landmarks: ['天樞塔', '皇室議政廳'],
-    resources: ['高級商貨', '政治任務'],
+    landmarks: ['天樞塔', '皇室議政廳', '主鑑價中控台'],
+    resources: ['高級商貨', '政治任務', '高價鑑定委託'],
     starterEligible: true
   },
   '皇城內廷': {
@@ -148,10 +150,10 @@ const LOCATION_PROFILES = {
   '青石關': {
     region: '中原核心',
     difficulty: 3,
-    desc: '戰略關口，常有兩派前哨對峙與補給爭奪。',
+    desc: '跨城關口驗貨線，封條核驗與補給盤查不間斷。',
     nearby: ['關門甬道', '箭樓群', '舊戰壕'],
-    landmarks: ['青石主關'],
-    resources: ['軍需品', '護關任務'],
+    landmarks: ['青石主關', '關口驗貨台'],
+    resources: ['軍需品', '護關任務', '封條耗材'],
     starterEligible: false
   },
   '敦煌': {
@@ -166,10 +168,10 @@ const LOCATION_PROFILES = {
   '喀什爾': {
     region: '西域沙海',
     difficulty: 2,
-    desc: '綠洲商埠，議價與情報交換活躍。',
+    desc: '轉運時鏈最活躍的綠洲商埠，批次與路徑在此被重排。',
     nearby: ['巴扎主巷', '綠洲水道', '駝隊營地'],
-    landmarks: ['絲路交易廳'],
-    resources: ['棉花', '乾果', '走私線索'],
+    landmarks: ['絲路交易廳', '轉運時鏈看板'],
+    resources: ['棉花', '乾果', '走私線索', '批次封單'],
     starterEligible: true
   },
   '赤沙前哨': {
@@ -202,10 +204,10 @@ const LOCATION_PROFILES = {
   '廣州': {
     region: '南疆水網',
     difficulty: 1,
-    desc: '海港商都，船運與飛艇物流最發達。',
+    desc: '港埠快流市場，開箱驗貨與即時轉手節奏極快。',
     nearby: ['南碼頭', '燈塔街', '貨櫃區'],
-    landmarks: ['雙層港務塔'],
-    resources: ['海產', '交易任務'],
+    landmarks: ['雙層港務塔', '港務估測屏'],
+    resources: ['海產', '交易任務', '貨樣封箱'],
     starterEligible: true
   },
   '海潮碼頭': {
@@ -220,10 +222,10 @@ const LOCATION_PROFILES = {
   '鏡湖渡口': {
     region: '南疆水網',
     difficulty: 2,
-    desc: '湖面平靜如鏡，水路四通八達。',
+    desc: '樣本比對前哨，工坊碎件與偽樣常在此換手。',
     nearby: ['湖心浮台', '渡船棧道', '蘆葦灣'],
-    landmarks: ['鏡湖石碑'],
-    resources: ['藥材', '渡運任務'],
+    landmarks: ['鏡湖石碑', '樣本拆解台'],
+    resources: ['藥材', '渡運任務', '製程殘片'],
     starterEligible: true
   },
   '大理': {
@@ -283,10 +285,10 @@ const LOCATION_PROFILES = {
   '雪白山莊': {
     region: '北境高原',
     difficulty: 3,
-    desc: '積雪山莊，適合閉關訓練也常遇強敵試探。',
+    desc: '北境滲透篩查點，真假線人與補給封存同時盤查。',
     nearby: ['冰橋', '雪松林', '山莊內院'],
-    landmarks: ['寒玉演武台'],
-    resources: ['冰蓮', '雪參'],
+    landmarks: ['寒玉演武台', '低溫封存庫'],
+    resources: ['冰蓮', '雪參', '冷凝封條'],
     starterEligible: false
   },
   '玄冰裂谷': {
@@ -787,7 +789,15 @@ function getLocationStoryContext(location) {
   const nearby = getNearbyPoints(location, 5);
   const resourceLine = profile.resources.slice(0, 4).join('、') || '未知';
   const portals = getPortalDestinations(location).slice(0, 3).join('、') || '附近無穩定門';
-  return `區域：${profile.region}｜難度：D${profile.difficulty}｜附近：${nearby.join('、') || '未知'}｜特產：${resourceLine}｜傳送門可往：${portals}`;
+  const flavor = getLocationCollectibleFlavor(location);
+  return [
+    `區域：${profile.region}｜難度：D${profile.difficulty}`,
+    `附近：${nearby.join('、') || '未知'}`,
+    `特產：${resourceLine}`,
+    `收藏口味：${flavor.title}｜${flavor.style}`,
+    `可見後果傾向：${flavor.consequence}`,
+    `傳送門可往：${portals}`
+  ].join('｜');
 }
 
 function getBeginnerSpawnLocations() {

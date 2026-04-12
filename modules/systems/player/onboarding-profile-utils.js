@@ -9,7 +9,9 @@ function createOnboardingProfileUtils(deps = {}) {
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
-    getPetMovePool = () => []
+    getPetMovePool = () => [],
+    // Global language resource accessor (section-based).
+    getLanguageSection = null
   } = deps;
 
   function getLanguageText(lang) {
@@ -87,6 +89,12 @@ function createOnboardingProfileUtils(deps = {}) {
         elementChoiceInvalid: '⚠️ Invalid element selection. Please try again.'
       }
     };
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('onboardingLanguageText', lang || 'zh-TW');
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
     return texts[lang] || texts['zh-TW'];
   }
 
@@ -117,6 +125,12 @@ function createOnboardingProfileUtils(deps = {}) {
         'The world remembers your actions and propagates the consequences as shared long-term rumors.'
       ].join('\n')
     };
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('worldIntroTemplate', lang);
+      if (typeof fromGlobal === 'string' && fromGlobal.trim()) {
+        return fromGlobal;
+      }
+    }
     return templates[lang] || templates['zh-TW'];
   }
 

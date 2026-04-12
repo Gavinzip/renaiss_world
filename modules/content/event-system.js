@@ -14,39 +14,39 @@ const BASE_EVENTS = [
   // ===== 通用事件（1-20）=====
   {
     id: 'goblin',
-    name: '🐾 遭遇哥布林',
-    choice: '抽出武器，與哥布林決一死戰！',
+    name: '🐾 遭遇黑市搬運者',
+    choice: '攔下可疑搬運箱隊伍，當場核對來源',
     type: 'combat',
-    desc: '你沿著Renaiss星球的森林小徑漫步，四周環繞著奇異的熒光植物。陽光透過巨大的葉片灑落，在地上投下斑駁的光影。走著走著，草叢突然劇烈晃動，幾道綠色的身影竄出來——是哥布林！它們拿著生鏽的短刀，眼中閃爍著貪婪的光芒，將你團團包圍！',
+    desc: '你沿著偏僻運輸道前行，忽然聽見金屬箱碰撞聲。幾名穿著偽裝工服的人正試圖把無標封存箱轉往小巷，見你靠近立刻擺出攻擊姿態，顯然不打算讓你看清來源。',
     action: 'fight',
-    enemy: { name: '哥布林', hp: 50, attack: 15, moves: ['抓撓', '尖叫'], reward: { gold: [20, 40] } }
+    enemy: { name: '黑市搬運者', hp: 50, attack: 15, moves: ['突撞', '煙霧掩護'], reward: { gold: [20, 40] } }
   },
   {
     id: 'wolf',
-    name: '🐺 遭遇狼人',
-    choice: '面對狼人的嚎叫，你選擇迎戰！',
+    name: '🐺 遭遇夜巡追獵者',
+    choice: '你決定正面迎戰追獵者，保住手中物證',
     type: 'combat',
-    desc: '夜幕降臨在Renaiss星球的荒野，你獨自行走在無人的道路上。月光冷冷地灑在草原上，突然——黑暗中傳來令人毛骨悚然的嚎叫聲！「嗷嗚——」是狼人的叫聲！聲音越來越近，綠色的眼睛在黑暗中閃爍，充滿了嗜血的渴望！',
+    desc: '夜色落下後，荒野訊號燈一盞盞熄滅。遠處傳來高頻追蹤器的嘯聲，你很快就被一組夜巡追獵者鎖定，他們專挑帶著可疑貨證的人下手。',
     action: 'fight',
-    enemy: { name: '狼人', hp: 80, attack: 25, moves: ['撕咬', '嚎叫'], reward: { gold: [40, 80] } }
+    enemy: { name: '夜巡追獵者', hp: 80, attack: 25, moves: ['破盾撞擊', '追蹤脈衝'], reward: { gold: [40, 80] } }
   },
   {
     id: 'wizard',
-    name: '🧙 遭遇巫師學徒',
-    choice: '魔法師攔路，看來一場惡戰難免！',
+    name: '🧪 遭遇失控調參員',
+    choice: '調參員封鎖去路，你選擇立刻突破',
     type: 'combat',
-    desc: '穿過繁華的Renaiss星球城鎮街道時，一個穿著破舊黑袍的身影突然擋住了你的去路。那是一個巫師學徒，眼中閃爍著不穩定的魔力，手中的法杖微微發光。他冷笑道：「又一個願意奉獻生命的笨蛋...」紫色的電弧開始在法杖上跳動！',
+    desc: '你經過繁忙街口時，一名帶著便攜調參台的人突然攔下你。對方聲稱要「免費校準」你的裝備，實際卻在現場啟動過載脈衝，像是想逼你交出身上的鑑定品。',
     action: 'fight',
-    enemy: { name: '巫師學徒', hp: 120, attack: 35, moves: ['火球', '冰霜'], reward: { gold: [60, 100] } }
+    enemy: { name: '失控調參員', hp: 120, attack: 35, moves: ['過載火線', '低溫鎖頻'], reward: { gold: [60, 100] } }
   },
   {
     id: 'zombie',
-    name: '🧟 遭遇殭屍',
-    choice: '面對亡靈的來襲，你毫不畏懼！',
+    name: '🧟 遭遇失效殼體群',
+    choice: '你決定清掉失效殼體，打開安全通道',
     type: 'combat',
-    desc: '你路過一座荒廢的墓地，氣氛陰森得令人窒息。突然，一隻蒼白腐爛的手從坟墓中伸出，接著是第二隻、第三隻...殭屍！它們發出低沉的呻吟，緩緩地向你逼近。腐爛的氣息撲面而來，場面令人作嘔！',
+    desc: '你路過一片停用倉區，地面到處都是斷線的維修臂。幾具被遠端接管的失效殼體忽然同步啟動，拖著破損外殼朝你逼近，像在阻止你接近某批封存貨。',
     action: 'fight',
-    enemy: { name: '殭屍', hp: 150, attack: 40, moves: ['抓傷', '瘟疫'], reward: { gold: [80, 120] } }
+    enemy: { name: '失效殼體', hp: 150, attack: 40, moves: ['金屬撕扯', '污染噴霧'], reward: { gold: [80, 120] } }
   },
   {
     id: 'herb_gather',
@@ -91,7 +91,7 @@ const BASE_EVENTS = [
     name: '💼 商人請求護送',
     choice: '接受商人的請求，護送他安全抵達',
     type: 'quest',
-    desc: '一位穿著華麗絲綢服飾的商人急匆匆地向你走來，他的馬車後面堆滿了沉重的貨物。「這位壯士！」他氣喘吁吁地說道，「護送我到下一個城鎮吧，這一路上盜賊猖獗，我願意付出豐厚的報酬！」',
+    desc: '一位帶著貨證夾的商人急匆匆地向你走來，後方堆滿待交割的封存箱。他低聲說道：「最近攔貨的人很多，護送我到下一個據點，報酬照高風險算。」',
     action: 'quest',
     quest: { type: 'escort', reward: [50, 150], risk: true }
   },
@@ -108,7 +108,7 @@ const BASE_EVENTS = [
     name: '🍺 情報酒吧聽傳聞',
     choice: '走進情報酒吧，找個角落坐下聆聽傳聞',
     type: 'social',
-    desc: '走進Renaiss星球最熱鬧的情報酒吧，喧鬧的氣氛迎面而來。各色人等聚集在此——商人冒險者探索者盜賊...他們大聲談笑，分享著各自的經歷和傳聞。你找了個角落的位置坐下，豎起耳朵仔細聆聽...',
+    desc: '走進Renaiss星球最熱鬧的情報酒吧，喧鬧聲與終端提示音混在一起。商人、修復師、搬運員與掮客都在交換行情，你找了個角落坐下，專聽誰在談來源異常。',
     action: 'gossip'
   },
   {
@@ -151,16 +151,16 @@ const BASE_EVENTS = [
   },
   {
     id: 'treasure_box',
-    name: '📦 發現路邊寶箱',
+    name: '📦 發現路邊封存箱',
     type: 'random',
-    desc: '沿著Renaiss星球的偏僻小徑前行時，你注意到路邊有個被草叢半遮半掩的木箱。箱子外表斑駁，看起來已被遺棄多年，但或許裡面還藏有些什麼寶藏？',
+    desc: '沿著偏僻小徑前行時，你注意到路邊有個半掩在草叢裡的封存箱。封條已舊，但鎖扣還在發光，裡頭可能還有可用藏品。',
     action: 'treasure'
   },
   {
     id: 'street_perform',
     name: '🎭 街頭表演',
     type: 'perform',
-    desc: '你選了Renaiss星球熱鬧的街角，開始街頭表演。或許是武術、或许是杂耍、又或许是音樂...你使出渾身解數，很快便吸引了路人圍觀。掌聲與喝采聲中，你獲得了來自四面八方的打賞！',
+    desc: '你選了Renaiss星球熱鬧的街角，開始街頭表演。或許是裝備連招展示、或是機械雜耍、又或許是音樂演出...你使出渾身解數，很快便吸引了路人圍觀。掌聲與喝采聲中，你獲得了來自四面八方的打賞！',
     action: 'perform'
   },
   {
@@ -192,9 +192,9 @@ const BASE_EVENTS = [
   // ===== 正派專屬事件（21-30）=====
   {
     id: 'help_justice',
-    name: '⚔️ 幫人打抱不平',
+    name: '⚔️ 阻止強奪貨證',
     type: 'positive',
-    desc: 'Renaiss星球的巷弄中，你聽到遠處傳來呼救聲與得意的笑聲。加快腳步趕到現場，只見幾個流氓正在欺負一個手無寸鐵的村民！',
+    desc: '你在巷弄裡聽到爭吵聲，趕到時看到幾個人正在強奪一名攤商的貨證夾。對方若失去貨證，整批藏品都會被當成來源不明品。',
     action: 'justice',
     reputation: 10,
     risk: true
@@ -210,25 +210,25 @@ const BASE_EVENTS = [
   },
   {
     id: 'arrest_thief',
-    name: '🏛️ 幫官府緝拿盜賊',
+    name: '🏛️ 協助緝拿詐流中介',
     type: 'positive',
-    desc: '官府貼出告示，懸賞緝拿盜賊',
+    desc: '治安署貼出告示，懸賞追查偽造貨流與假標章中介。',
     action: 'quest',
     quest: { type: 'arrest', reward: [80, 150], reputation: 20 }
   },
   {
     id: 'free_clinic',
-    name: '💊 免費義診',
+    name: '🩺 社區維修義站',
     type: 'positive',
-    desc: '你決定在城裡免費為百姓義診',
+    desc: '你決定在城裡開一段免費維修時段，幫居民檢查常用設備與封條狀態。',
     action: 'clinic',
     reputation: 30
   },
   {
     id: 'temple_pray',
-    name: '📿 寺廟祈福',
+    name: '🛰️ 訊號塔祈願',
     type: 'positive',
-    desc: '寺廟裡香火鼎盛',
+    desc: '你在訊號塔下做了短暫祈願，希望下一批追查能避開假線索。',
     action: 'pray',
     reputation: 5,
     luck: 5
@@ -246,7 +246,7 @@ const BASE_EVENTS = [
     id: 'teach_newbie',
     name: '🗡️ 指點新手戰技',
     type: 'positive',
-    desc: '遇到一個習武的新手',
+    desc: '遇到一位剛入行的新手探索者，你示範如何辨識可疑封條與安全應對。',
     action: 'teach',
     reputation: 10
   },
@@ -328,16 +328,16 @@ const BASE_EVENTS = [
   // ===== 特殊隨機事件（41-50）=====
   {
     id: 'fortune_teller',
-    name: '🔮 神秘占卜師',
+    name: '🔮 神秘趨勢師',
     type: 'special',
-    desc: '路邊有個神秘的占卜師...',
+    desc: '路邊一位趨勢師正用舊終端做流向預測，似乎看得出哪條供應線會出事...',
     action: 'fortune'
   },
   {
     id: 'dragon_lair',
-    name: '🐉 發現龍穴',
+    name: '🐉 發現巨型封存庫',
     type: 'special',
-    desc: '山壁上有一個巨大的洞穴...',
+    desc: '山壁後方藏著一座巨型封存庫，門禁還在運作，像是被某勢力刻意遺忘...',
     action: 'dragon'
   },
   {
@@ -371,9 +371,9 @@ const BASE_EVENTS = [
   },
   {
     id: 'martial_contest',
-    name: '🏆 參加武術大賽',
+    name: '🏆 參加實戰評測賽',
     type: 'special',
-    desc: '正好趕上武術大賽報名！',
+    desc: '你正好趕上城市實戰評測賽報名，優勝者可拿到高信度標章。',
     action: 'contest',
     cost: 100,
     reward: 500
@@ -397,9 +397,9 @@ const BASE_EVENTS = [
   },
   {
     id: 'ghost_encounter',
-    name: '👻 遇到幽靈',
+    name: '👻 遇到異常投影',
     type: 'special',
-    desc: '一陣寒意袭来...',
+    desc: '一陣寒意襲來，空中浮現斷續投影，像是某筆被刪改的舊交易記錄...',
     action: 'ghost',
     hp: -10
   },
@@ -548,18 +548,18 @@ function generateEventChoices(player, worldState) {
 // 根據地點獲取情境描述
 function getLocationContext(location) {
   const contexts = {
-    '襄陽城': { desc: '繁華的交通與交易節點，局勢緊繃', mood: '緊張', special: '城防調度員' },
-    '大都': { desc: '核心政務區戒備森嚴', mood: '壓抑', special: '中樞塔' },
-    '洛陽城': { desc: '牡丹花城繁華似錦', mood: '悠閒', special: '戰圈高手' },
+    '襄陽城': { desc: '封存艙快檢與攤位追查同時進行的前線城市', mood: '緊張', special: '城防調度員' },
+    '大都': { desc: '主鑑價中樞區，審核與公信壓力極高', mood: '壓抑', special: '中樞塔' },
+    '洛陽城': { desc: '灰帳核對城，台帳與口供在此交會', mood: '冷靜', special: '灰帳記錄員' },
     '敦煌': { desc: '沙海節點城，風沙裡藏著舊時物流痕跡', mood: '神秘', special: '轉運調度員' },
-    '廣州': { desc: '南部港埠繁忙，貨流節奏極快', mood: '活力', special: '港務檢測員' },
-    '大理': { desc: '山城與水網交會，生活節奏平穩', mood: '祥和', special: '在地工坊主' },
-    '桃花島': { desc: '機關重重的隔離島嶼', mood: '奇幻', special: '島嶼工程師' },
-    '潮汐試煉島': { desc: '高階試煉聖地壁上刻著技術檔案', mood: '莊嚴', special: '技術檔案' },
-    '雪白山莊': { desc: '北境冰封據點，補給線稀薄', mood: '凜冽', special: '低溫維修艙' },
-    '草原部落': { desc: '高原聚落視野開闊，巡邏線漫長', mood: '開闊', special: '巡邏騎隊' },
-    '光明頂': { desc: '光焰議會的能量火炬長明不滅', mood: '熱血', special: '議會執行官' },
-    '黑木崖': { desc: '暗潮議會在此運作高風險地下交易', mood: '詭譎', special: '匿名經紀人' }
+    '廣州': { desc: '港埠快流市場，開箱驗貨節奏極快', mood: '活力', special: '港務檢測員' },
+    '大理': { desc: '山城與水網交會，工坊與民生交易並存', mood: '祥和', special: '在地工坊主' },
+    '桃花島': { desc: '機關密集的跳島樞紐，常有封存艙失聯事件', mood: '緊繃', special: '島嶼工程師' },
+    '潮汐試煉島': { desc: '高階試煉區，牆面留有大量技術紀錄', mood: '莊嚴', special: '技術檔案' },
+    '雪白山莊': { desc: '北境滲透篩查點，補給封條盤查嚴格', mood: '凜冽', special: '低溫維修艙' },
+    '草原部落': { desc: '高原聚落視野開闊，巡邏與補給線拉得很長', mood: '開闊', special: '巡邏騎隊' },
+    '光明頂': { desc: '高風險能源節點，勢力常在此爭奪控制權', mood: '熱血', special: '議會執行官' },
+    '黑木崖': { desc: '暗潮勢力運作的高風險地下交易中樞', mood: '詭譎', special: '匿名經紀人' }
   };
   if (contexts[location]) return sanitizeWorldObject(contexts[location]);
   const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;

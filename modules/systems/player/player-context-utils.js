@@ -29,6 +29,7 @@ function createPlayerContextUtils(deps = {}) {
   }
 
   function getBattleFighterType(player, pet) {
+    if (player?.battleState?.friendDuel) return 'pet';
     if (player?.battleState?.fighter === 'player') return 'player';
     return CORE.canPetFight(pet) ? 'pet' : 'player';
   }
@@ -43,4 +44,3 @@ function createPlayerContextUtils(deps = {}) {
 module.exports = {
   createPlayerContextUtils
 };
-

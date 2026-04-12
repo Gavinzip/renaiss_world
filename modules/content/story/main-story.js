@@ -12,9 +12,9 @@ const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',
   2: 'Act 2 流言（Whispers）',
   3: 'Act 3 狩獵（Marked）',
-  4: 'Act 4 市場戰爭（War）',
+  4: 'Act 4 公信戰（Trust War）',
   5: 'Act 5 四巨頭（Endgame）',
-  6: 'Act 6 Winchman 抉擇'
+  6: 'Act 6 Winchman 抉擇（New Balance）'
 };
 
 const DIGITAL_KINGS = ['Nemo', 'Wolf', 'Adaloc', 'Hom'];

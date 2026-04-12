@@ -53,7 +53,8 @@ function initMapOnboardingRuntimeUtils(deps = {}) {
     getPetCapacityForUser,
     normalizePetElementCode,
     normalizePetName,
-    rollStarterMoveForElement
+    rollStarterMoveForElement,
+    getLanguageSection
   } = deps;
 
   const MAP_NAVIGATION_UTILS = createMapNavigationUtils({
@@ -172,7 +173,8 @@ function initMapOnboardingRuntimeUtils(deps = {}) {
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
-    getPetMovePool: (...args) => getPetMovePool(...args)
+    getPetMovePool: (...args) => getPetMovePool(...args),
+    getLanguageSection: (...args) => getLanguageSection?.(...args)
   });
 
   const CLAIM_PET_UI_UTILS = createClaimPetUiUtils({

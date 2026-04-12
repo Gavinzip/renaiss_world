@@ -36,6 +36,27 @@ HEADER_H = 56
 FOOTER_H = 62
 BG_COLOR = (18, 18, 28)
 
+I18N = {
+    "zh-TW": {
+        "you": "目前位置",
+        "portal": "主傳送門",
+        "city": "城市",
+        "forest": "森林",
+    },
+    "zh-CN": {
+        "you": "目前位置",
+        "portal": "主传送门",
+        "city": "城市",
+        "forest": "森林",
+    },
+    "en": {
+        "you": "You",
+        "portal": "Portal Hub",
+        "city": "City",
+        "forest": "Forest",
+    },
+}
+
 
 def load_font(font_path: str, size: int):
     candidates = []
@@ -93,7 +114,26 @@ def safe_draw_text(draw, xy, text, font, fill):
         draw.text(xy, fallback, font=font, fill=fill)
 
 
-def render_map_image(map_rows, labels=None, zone_name="", status="", output_path="", font_path=""):
+def normalize_lang(lang="zh-TW"):
+    code = str(lang or "zh-TW").strip()
+    if code == "zh-CN":
+        return "zh-CN"
+    if code == "en":
+        return "en"
+    return "zh-TW"
+
+
+def build_legend_labels(lang="zh-TW", legend=None):
+    base = dict(I18N.get(normalize_lang(lang), I18N["zh-TW"]))
+    if isinstance(legend, dict):
+        for key in ("you", "portal", "city", "forest"):
+            val = str(legend.get(key, "")).strip()
+            if val:
+                base[key] = val
+    return base
+
+
+def render_map_image(map_rows, labels=None, zone_name="", status="", output_path="", font_path="", lang="zh-TW", legend=None):
     rows = len(map_rows)
     cols = max(len(r) for r in map_rows) if rows > 0 else 1
 
@@ -193,11 +233,12 @@ def render_map_image(map_rows, labels=None, zone_name="", status="", output_path
     footer_y = h - FOOTER_H
     draw.rectangle([0, footer_y, w, h], fill=(20, 22, 44))
     draw.line([0, footer_y, w, footer_y], fill=(80, 80, 120), width=1)
+    legend_labels = build_legend_labels(lang, legend)
     legend_items = [
-        ("@", (255, 220, 0), "目前位置"),
-        ("◎", (255, 170, 60), "主傳送門"),
-        ("●", (180, 130, 255), "城市"),
-        ("▲", (50, 170, 50), "森林"),
+        ("@", (255, 220, 0), legend_labels["you"]),
+        ("◎", (255, 170, 60), legend_labels["portal"]),
+        ("●", (180, 130, 255), legend_labels["city"]),
+        ("▲", (50, 170, 50), legend_labels["forest"]),
     ]
     lx = PAD
     ly = footer_y + 10
@@ -229,6 +270,8 @@ def main():
         status=payload.get("status", ""),
         output_path=args.output,
         font_path=args.font or "",
+        lang=payload.get("lang", "zh-TW"),
+        legend=payload.get("legend", None),
     )
 
 

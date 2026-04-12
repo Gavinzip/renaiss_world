@@ -1,10 +1,12 @@
 function createUiTextUtils(deps = {}) {
   const {
     normalizeLangCode = (v) => String(v || 'zh-TW'),
-    defaultLanguage = 'zh-TW'
+    defaultLanguage = 'zh-TW',
+    // Global language resource accessor (section-based).
+    getLanguageSection = null
   } = deps;
 
-  const TEXT = {
+  const FALLBACK_TEXT = {
     'zh-TW': {
       welcome: '歡迎來到 Renaiss 星球！',
       welcomeBack: '你回來了！繼續你的冒險吧！',
@@ -73,13 +75,27 @@ function createUiTextUtils(deps = {}) {
     }
   };
 
+  function getTextMap(lang = 'zh-TW') {
+    const code = normalizeLangCode(lang || defaultLanguage || 'zh-TW');
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('uiText', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return FALLBACK_TEXT[code] || FALLBACK_TEXT['zh-TW'];
+  }
+
   function t(key, lang = 'zh-TW') {
     const code = normalizeLangCode(lang || defaultLanguage || 'zh-TW');
-    return TEXT[code]?.[key] || TEXT['zh-TW']?.[key] || key;
+    const map = getTextMap(code);
+    return map?.[key] || FALLBACK_TEXT['zh-TW']?.[key] || key;
   }
 
   return {
-    TEXT,
+    // Keep compatibility for old callers that read TEXT directly.
+    TEXT: FALLBACK_TEXT,
+    getTextMap,
     t
   };
 }

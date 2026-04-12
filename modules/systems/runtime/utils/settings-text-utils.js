@@ -1,11 +1,13 @@
 function createSettingsTextUtils(deps = {}) {
   const {
-    normalizeLangCode = (lang = 'zh-TW') => String(lang || 'zh-TW')
+    normalizeLangCode = (lang = 'zh-TW') => String(lang || 'zh-TW'),
+    // Global language resource accessor (section-based).
+    getLanguageSection = null
   } = deps;
 
   function getSettingsText(lang = 'zh-TW') {
     const code = normalizeLangCode(lang);
-    const map = {
+    const fallbackMap = {
       'zh-TW': {
         title: '⚙️ 設定',
         desc: '遊戲設置（可在此查看世界導讀）',
@@ -70,7 +72,13 @@ function createSettingsTextUtils(deps = {}) {
         btnBackAdventure: '🔙 Back to Adventure'
       }
     };
-    return map[code] || map['zh-TW'];
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('settingsText', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return fallbackMap[code] || fallbackMap['zh-TW'];
   }
 
   return {
