@@ -62,6 +62,115 @@ function createChoicePolicyUtils(deps = {}) {
     return /(鑑價|賣場|市場|收購|估價)/.test(text);
   }
 
+  function getStoryTextForChoicePolicy(player = null) {
+    return String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+  }
+
+  function isLikelyLocationName(token = '') {
+    const text = String(token || '').trim();
+    if (!text || text.length < 2 || text.length > 16) return false;
+    return /(城|市|鎮|站|港|島|都|關|關口|關隘|谷|原|渡口|山莊|山城)$/u.test(text);
+  }
+
+  function extractStoryDirectedDestinations(story = '', previousAction = '') {
+    const source = [story, previousAction].filter(Boolean).join('\n');
+    if (!source) return [];
+    const tail = source.slice(-560);
+    const found = [];
+    const seen = new Set();
+    const push = (raw = '') => {
+      const token = String(raw || '').replace(/[「」『』【】（）()]/g, '').trim();
+      if (!isLikelyLocationName(token)) return;
+      if (seen.has(token)) return;
+      seen.add(token);
+      found.push(token);
+    };
+
+    const patterns = [
+      /(?:得去|要去|需要去|應該去|該去|盡快去|尽快去|前往|趕往|赶往|去)\s*([^\s，。、「」『』【】]{2,16}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城))/gu,
+      /(?:下一站|下一步|下一個目的地|下一个目的地)\s*(?:是|到|往|：|:)?\s*([^\s，。、「」『』【】]{2,16}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城))/gu,
+      /([^\s，。、「」『』【】]{2,16}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城)).{0,20}(?:才(?:有|能)|才能|可查到|找得到|找到真正)/gu
+    ];
+
+    for (const regex of patterns) {
+      let match = regex.exec(tail);
+      while (match) {
+        push(match[1]);
+        match = regex.exec(tail);
+      }
+    }
+    return found.slice(0, 3);
+  }
+
+  function choiceMentionsDestination(choice = null, destination = '') {
+    if (!choice || !destination) return false;
+    const text = [choice?.name || '', choice?.choice || '', choice?.desc || '', choice?.tag || ''].join(' ');
+    return text.includes(destination);
+  }
+
+  function buildDirectedDestinationChoice(player = null, destination = '', storyText = '') {
+    const currentLocation = String(player?.location || '').trim();
+    const clue = /灰帳|灰账/u.test(storyText)
+      ? '灰帳記錄線'
+      : (/物流|流向|供應鏈|供应链/u.test(storyText)
+        ? '物流流向'
+        : (/刻印|零件|後加工|后加工/u.test(storyText)
+          ? '零件刻印'
+          : '當前線索'));
+    const fromHint = currentLocation && currentLocation !== destination ? `離開${currentLocation}，` : '';
+    return {
+      action: 'travel',
+      tag: '[🔍需探索]',
+      name: `前往${destination}`,
+      choice: `${fromHint}趕往${destination}追查${clue}背後來源`,
+      desc: `承接當前劇情，改在${destination}做交叉核對`
+    };
+  }
+
+  function ensureStoryDirectedDestinationChoice(player = null, choices = [], maxCount = CHOICE_DISPLAY_COUNT) {
+    const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, maxCount) : [];
+    if (!player || list.length === 0) return list;
+
+    const storyText = getStoryTextForChoicePolicy(player);
+    const previousAction = String(player?.generationState?.sourceChoice || '').trim();
+    const destinations = extractStoryDirectedDestinations(storyText, previousAction);
+    const currentLocation = String(player?.location || '').trim();
+    const destination = destinations.find((name) => name && name !== currentLocation);
+    if (!destination) return list;
+    if (list.some((choice) => choiceMentionsDestination(choice, destination))) return list;
+
+    const injected = buildDirectedDestinationChoice(player, destination, storyText);
+    if (list.length < maxCount) {
+      list.push(injected);
+      return list.slice(0, maxCount);
+    }
+
+    const protectedActions = new Set([
+      'wish_pool',
+      'market_renaiss',
+      'market_digital',
+      'scratch_lottery',
+      'custom_input',
+      'mentor_spar',
+      'location_story_battle'
+    ]);
+    const signals = buildChoiceContextSignals(player);
+    let replaceIdx = -1;
+    let worstScore = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < list.length; i++) {
+      const action = String(list[i]?.action || '').trim();
+      if (protectedActions.has(action)) continue;
+      const score = computeChoiceContinuityScore(list[i], signals);
+      if (score < worstScore) {
+        worstScore = score;
+        replaceIdx = i;
+      }
+    }
+    if (replaceIdx < 0) replaceIdx = list.length - 1;
+    list[replaceIdx] = injected;
+    return list.slice(0, maxCount);
+  }
+
   function pickCriticalSystemChoices(pool = [], maxCount = 2) {
     const selected = [];
     const used = new Set();
@@ -109,7 +218,8 @@ function createChoicePolicyUtils(deps = {}) {
         .map((choice) => rewriteScratchChoiceToShop(choice, player))
       : [];
     // 傳送改由地圖按鈕（主傳送門/傳送裝置）處理，不再出現在劇情五選項中。
-    const pool = mapped.filter((choice) => !isPortalChoice(choice));
+    let pool = mapped.filter((choice) => !isPortalChoice(choice));
+    pool = ensureStoryDirectedDestinationChoice(player, pool, CHOICE_DISPLAY_COUNT);
     if (pool.length <= CHOICE_DISPLAY_COUNT) return pool;
     const maxPick = Math.min(CHOICE_DISPLAY_COUNT, pool.length);
     const signals = buildChoiceContextSignals(player);
@@ -706,6 +816,9 @@ function createChoicePolicyUtils(deps = {}) {
     isWishPoolChoice,
     pickCriticalSystemChoices,
     rewriteScratchChoiceToShop,
+    getStoryTextForChoicePolicy,
+    extractStoryDirectedDestinations,
+    ensureStoryDirectedDestinationChoice,
     normalizeEventChoices,
     createGuaranteedPortalChoice,
     createGuaranteedWishPoolChoice,

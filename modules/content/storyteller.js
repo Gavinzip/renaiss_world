@@ -1310,6 +1310,42 @@ function buildStoryFocusForChoices(rawStory = '') {
   return { lead, tail, closing };
 }
 
+function isLikelyDirectedLocationToken(token = '') {
+  const text = String(token || '').trim();
+  if (!text || text.length < 2 || text.length > 16) return false;
+  return /(城|市|鎮|站|港|島|都|關|關口|關隘|谷|原|渡口|山莊|山城)$/u.test(text);
+}
+
+function extractDirectedDestinationFromStoryTail(story = '', sourceChoice = '') {
+  const source = [story, sourceChoice].filter(Boolean).join('\n');
+  if (!source) return '';
+  const tail = source.slice(-620);
+  const seen = new Set();
+  const hits = [];
+  const push = (raw = '') => {
+    const token = String(raw || '').replace(/[「」『』【】（）()]/g, '').trim();
+    if (!isLikelyDirectedLocationToken(token)) return;
+    if (seen.has(token)) return;
+    seen.add(token);
+    hits.push(token);
+  };
+
+  const patterns = [
+    /(?:得去|要去|需要去|應該去|該去|盡快去|尽快去|前往|趕往|赶往|去)\s*([^\s，。、「」『』【】]{2,16}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城))/gu,
+    /(?:下一站|下一步|下一個目的地|下一个目的地)\s*(?:是|到|往|：|:)?\s*([^\s，。、「」『』【】]{2,16}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城))/gu,
+    /([^\s，。、「」『』【】]{2,16}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城)).{0,20}(?:才(?:有|能)|才能|可查到|找得到|找到真正)/gu
+  ];
+
+  for (const regex of patterns) {
+    let match = regex.exec(tail);
+    while (match) {
+      push(match[1]);
+      match = regex.exec(tail);
+    }
+  }
+  return hits[0] || '';
+}
+
 const CHOICE_BANNED_PHRASES = [
   /一鍵成交|立即變現|秒賺|躺賺|暴富|無風險套利/gu
 ];
@@ -1606,6 +1642,7 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
     if (hasAnyRegex(text, CHOICE_BANNED_PHRASES)) issues.push(`第 ${i + 1} 個含跳 tone 詞彙`);
     if (hasAnyRegex(text, CHOICE_VAGUE_PHRASES)) issues.push(`第 ${i + 1} 個語意空泛或暴露過早`);
     if (hasAnyRegex(text, CHOICE_PORTAL_PATTERNS)) issues.push(`第 ${i + 1} 個包含傳送類選項（已改由地圖按鈕）`);
+    if (hasUnanchoredEntityToken(text, anchorList)) issues.push(`第 ${i + 1} 個引入了前文未鋪陳的可疑角色稱呼`);
     if (locationRegex && locationRegex.test(text)) issues.push(`第 ${i + 1} 個把地名當作物件`);
 
     if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) {
@@ -2273,6 +2310,12 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const storyFocus = buildStoryFocusForChoices(previousStory || '');
   const fullStoryText = String(previousStory || '').trim();
   const sourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
+  const directedDestination = extractDirectedDestinationFromStoryTail(fullStoryText, sourceChoiceText);
+  const destinationContinuityRule = directedDestination
+    ? `故事結尾已明確指向「${directedDestination}」：5 個選項中至少 1 個要直接銜接「前往${directedDestination}」或「為前往${directedDestination}準備」，不可整組忽略此去向。`
+    : '若結尾明確提到下一站/下一個城市，至少 1 個選項要直接承接該去向，不能只給平行支線。';
+  const memoryRelevanceRule = '使用記憶內容時，需符合「現在場景可作用」。允許「突然想起過去某句話/某人物提醒」作為起點，但必須寫成可執行路徑（回想→驗證來源→前往對應地點或對象）；若該人物此刻不在場，禁止寫成立即當面互動。';
+  const npcRelevanceRule = '禁止憑空新增未鋪陳敵對稱呼（例如匿名滲透者、可疑隊伍）；除非故事全文、當地NPC或附近敵對NPC已出現對應依據。';
   const pendingConflict = player?.pendingConflictFollowup && typeof player.pendingConflictFollowup === 'object'
     ? player.pendingConflictFollowup
     : null;
@@ -2343,6 +2386,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
 導航目標：${navigationTarget || '（未設定）'}
+結尾導向地點：${directedDestination || '（未明示）'}
 附近可疑勢力：${digitalPresenceText}
 玩家：${playerName}
 寵物：${petName}
@@ -2380,8 +2424,12 @@ ${anchorText}
 2. 要符合故事的劇情發展
 3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
    {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]"}
+3a. 不得少於 5 筆、不得輸出 null/空物件；就算資訊不足也要輸出完整 5 筆且保持合理
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前人物、場景或衝突
+4a. ${destinationContinuityRule}
 5. 至少 1 個選項必須包含「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
+5a. ${memoryRelevanceRule}
+5b. ${npcRelevanceRule}
 6. 不可憑空新增前文不存在的關鍵道具/暗號/座標，除非先交代如何取得
 7. 若寫「線索」，必須明說來源（例如哪個人、哪個艙、哪個檢測結果）
 8. 刮刮樂只允許在鑑價站互動中出現，這裡禁止輸出「刮刮樂」相關選項
