@@ -238,6 +238,74 @@ async function runWorldBackup(reason = 'manual') {
   }
 }
 
+async function runWorldDataPull(reason = 'manual_pull') {
+  const manualRequested = String(reason || '').trim().toLowerCase().startsWith('manual');
+  if (!_isBackupEnabled() && !manualRequested) {
+    return { ok: false, skipped: true, reason: 'disabled' };
+  }
+  const repoUrl = _resolveBackupRepoUrl();
+  if (!repoUrl) return { ok: false, skipped: true, reason: 'missing_repo' };
+  if (_isGithubHttpsWithoutAuth(repoUrl)) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'missing_auth',
+      error:
+        'GitHub private repo requires auth. Set WORLD_BACKUP_PAT, or set WORLD_BACKUP_REPO to https://x-access-token:<PAT>@github.com/<owner>/<repo>.git',
+      repo: BACKUP_REPO,
+      branch: BACKUP_BRANCH
+    };
+  }
+  if (_running) return { ok: false, skipped: true, reason: 'already_running' };
+
+  _running = true;
+  try {
+    _ensureRepoReady(repoUrl);
+    const backupRepoDir = _getBackupRepoDir();
+    const sourceDir = path.join(backupRepoDir, BACKUP_SUBDIR);
+    if (!fs.existsSync(sourceDir)) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: 'missing_backup_subdir',
+        error: `Backup subdir not found in repo: ${BACKUP_SUBDIR}`,
+        repo: BACKUP_REPO,
+        branch: BACKUP_BRANCH
+      };
+    }
+
+    const worldDataRoot = getActiveWorldDataRoot();
+    const worldParent = path.dirname(worldDataRoot);
+    const tempRestoreDir = path.join(worldParent, `${path.basename(worldDataRoot)}.__restore_tmp__${Date.now()}`);
+
+    fs.rmSync(tempRestoreDir, { recursive: true, force: true });
+    fs.mkdirSync(worldParent, { recursive: true });
+    fs.cpSync(sourceDir, tempRestoreDir, { recursive: true, dereference: true });
+    fs.rmSync(worldDataRoot, { recursive: true, force: true });
+    fs.renameSync(tempRestoreDir, worldDataRoot);
+
+    return {
+      ok: true,
+      changed: true,
+      reason,
+      repo: BACKUP_REPO,
+      branch: BACKUP_BRANCH,
+      subdir: BACKUP_SUBDIR
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      changed: false,
+      reason,
+      error: String(e?.message || e),
+      repo: BACKUP_REPO,
+      branch: BACKUP_BRANCH
+    };
+  } finally {
+    _running = false;
+  }
+}
+
 function _emitResult(result) {
   if (typeof _onResult !== 'function') return;
   Promise.resolve(_onResult(result)).catch((e) => {
@@ -303,5 +371,6 @@ function startWorldBackupScheduler(onResult) {
 module.exports = {
   getBackupDebugStatus,
   runWorldBackup,
+  runWorldDataPull,
   startWorldBackupScheduler
 };
