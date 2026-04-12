@@ -310,6 +310,7 @@ function initGameFeatureSystems(deps = {}) {
     buildPortalUsageGuide,
     openShopSession,
     getMarketTypeLabel,
+    buildQuickShopNarrativeNotice,
     showWorldShopScene: (...args) => deps.showWorldShopScene?.(...args),
     canEnterLocation,
     syncLocationArcLocation,
@@ -571,6 +572,9 @@ function initGameFeatureSystems(deps = {}) {
     showWorldShopBuyPanel,
     showWorldShopScene,
     showInventory,
+    showInventoryFusionLab,
+    handleInventoryFusionSelect,
+    showPetEquipmentView,
     collectPlayerCodexData,
     showPlayerCodex,
     showNpcCodex,
@@ -712,7 +716,8 @@ function initGameFeatureSystems(deps = {}) {
     showFriendManualModePicker,
     buildFriendDuelSnapshot,
     restoreFriendDuelSnapshot,
-    finalizeFriendDuel
+    finalizeFriendDuel,
+    abortFriendDuel
   } = FRIEND_DUEL_FLOW;
 
   return {
@@ -754,6 +759,9 @@ function initGameFeatureSystems(deps = {}) {
     showWorldShopBuyPanel,
     showWorldShopScene,
     showInventory,
+    showInventoryFusionLab,
+    handleInventoryFusionSelect,
+    showPetEquipmentView,
     collectPlayerCodexData,
     showPlayerCodex,
     showNpcCodex,
@@ -780,7 +788,8 @@ function initGameFeatureSystems(deps = {}) {
     showFriendManualModePicker,
     buildFriendDuelSnapshot,
     restoreFriendDuelSnapshot,
-    finalizeFriendDuel
+    finalizeFriendDuel,
+    abortFriendDuel
   };
 }
 

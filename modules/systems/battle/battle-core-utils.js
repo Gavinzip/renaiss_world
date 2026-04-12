@@ -1,3 +1,5 @@
+const EQUIP = require('../equipment/equipment-fusion-agent');
+
 function createBattleCoreUtils(deps = {}) {
   const {
     CORE,
@@ -28,9 +30,17 @@ function createBattleCoreUtils(deps = {}) {
     return clone;
   }
 
+  function clampInt(value, min, max, fallback = min) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(num)));
+  }
+
   function buildHumanCombatant(player) {
     if (!player) return null;
-    const maxHp = Math.max(1, Number(player?.maxStats?.生命 || player?.stats?.生命 || 100));
+    const equipBonus = EQUIP.getEquippedBonuses(player);
+    const maxHpBase = Math.max(1, Number(player?.maxStats?.生命 || player?.stats?.生命 || 100));
+    const maxHp = Math.max(1, maxHpBase + Math.max(0, Number(equipBonus.hp || 0)));
     const battleState = player?.battleState && typeof player.battleState === 'object'
       ? player.battleState
       : null;
@@ -38,16 +48,20 @@ function createBattleCoreUtils(deps = {}) {
       ? battleState.humanState
       : null;
     const hpFromState = Number(humanState?.hp);
-    const hp = Number.isFinite(hpFromState)
-      ? Math.max(0, Math.min(maxHp, hpFromState))
-      : Math.max(0, Math.min(maxHp, Number(player?.stats?.生命 || maxHp)));
+    const hpBase = Number.isFinite(hpFromState)
+      ? Math.max(0, hpFromState)
+      : Math.max(0, Number(player?.stats?.生命 || maxHpBase));
+    const hp = hpBase <= 0
+      ? 0
+      : Math.max(0, Math.min(maxHp, hpBase + Math.max(0, Number(equipBonus.hp || 0))));
     return {
       id: `human_${String(player.id || '')}`,
       name: String(player.name || '冒險者'),
       hp,
       maxHp,
-      attack: 10,
-      defense: 6,
+      attack: Math.max(1, 10 + Math.floor(Number(equipBonus.attack || 0))),
+      defense: Math.max(0, Number(player?.stats?.防禦 || player?.maxStats?.防禦 || 0)),
+      speed: Math.max(1, 20 + Math.floor(Number(equipBonus.speed || 0))),
       isHuman: true,
       status: cloneStatusState(humanState?.status)
     };
@@ -151,11 +165,19 @@ function createBattleCoreUtils(deps = {}) {
       return buildHumanCombatant(player);
     }
     if (!pet) return null;
+    const equipBonus = EQUIP.getEquippedBonuses(player);
     const snapshot = getBattlePetStateSnapshot(player, pet.id);
+    const hpBonus = Math.max(0, Math.floor(Number(equipBonus.hp || 0)));
+    const maxHp = Math.max(1, Number(pet.maxHp || 100) + hpBonus);
+    const hpRaw = snapshot ? Number(snapshot.hp || 0) : Number(pet.hp || 0);
+    const hpWithBonus = hpRaw <= 0 ? 0 : (hpRaw + hpBonus);
     return {
       ...pet,
-      hp: snapshot ? Math.max(0, snapshot.hp) : Number(pet.hp || 0),
-      maxHp: Number(pet.maxHp || 100),
+      hp: Math.max(0, Math.min(maxHp, hpWithBonus)),
+      maxHp,
+      attack: Math.max(1, Number(pet.attack || 0) + Math.floor(Number(equipBonus.attack || 0))),
+      defense: Math.max(0, Number(pet.defense || 0)),
+      speed: Math.max(1, Number(pet.speed || 20) + Math.floor(Number(equipBonus.speed || 0))),
       status: snapshot ? cloneStatusState(snapshot.status) : cloneStatusState(pet.status)
     };
   }
@@ -274,13 +296,16 @@ function createBattleCoreUtils(deps = {}) {
 
   function persistCombatantState(player, pet, combatant) {
     if (!player || !combatant) return;
+    const equipBonus = EQUIP.getEquippedBonuses(player);
+    const hpBonus = Math.max(0, Math.floor(Number(equipBonus.hp || 0)));
     const statusSnapshot = cloneStatusState(combatant.status);
     if (combatant.isHuman) {
       const maxHp = Math.max(1, player?.maxStats?.生命 || 100);
-      player.stats.生命 = Math.max(0, Math.min(maxHp, combatant.hp));
+      const baseHp = Math.max(0, Math.min(maxHp, Number(combatant.hp || 0) - hpBonus));
+      player.stats.生命 = baseHp;
       if (player.battleState) {
         player.battleState.humanState = {
-          hp: player.stats.生命,
+          hp: baseHp,
           status: statusSnapshot
         };
       }
@@ -297,7 +322,7 @@ function createBattleCoreUtils(deps = {}) {
     }
     if (!targetPet) return;
 
-    targetPet.hp = Math.max(0, combatant.hp);
+    targetPet.hp = Math.max(0, Math.min(Number(targetPet.maxHp || 100), Number(combatant.hp || 0) - hpBonus));
     if (player.battleState) {
       setBattlePetStateSnapshot(player, targetPet.id, {
         hp: targetPet.hp,
@@ -313,7 +338,7 @@ function createBattleCoreUtils(deps = {}) {
       ...combatant,
       hp: Number(combatant.hp || 1),
       maxHp: Number(combatant.maxHp || combatant.hp || 1),
-      defense: Number(combatant.defense || 0),
+      defense: Math.max(0, Number(combatant.defense || 0)),
       attack: Number(combatant.attack || 0),
       status: cloneStatusState(combatant.status)
     };
@@ -325,11 +350,35 @@ function createBattleCoreUtils(deps = {}) {
       ...enemy,
       hp: Number(enemy.hp || 1),
       maxHp: Number(enemy.maxHp || enemy.hp || 1),
-      defense: Number(enemy.defense || 0),
+      defense: Math.max(0, Number(enemy.defense || 0)),
       attack: Number(enemy.attack || 10),
       moves: Array.isArray(enemy.moves) ? [...enemy.moves] : [],
       status: cloneStatusState(enemy.status)
     };
+  }
+
+  function estimateDefenseForMoveScoring(target = {}, move = null) {
+    const effect = move?.effect && typeof move.effect === 'object' ? move.effect : {};
+    const ignoreDefense = Boolean(effect.ignoreResistance);
+    if (ignoreDefense) return 0;
+
+    let defense = Math.max(0, Math.floor(Number(target?.defense || 0)));
+    const defenseDownTurns = Math.max(0, Number(target?.status?.defenseDown || 0));
+    if (defenseDownTurns > 0) {
+      const reductionRate = Math.min(0.55, defenseDownTurns * 0.18);
+      defense = Math.max(0, Math.floor(defense * (1 - reductionRate)));
+    }
+    if (effect.armorBreak) defense = Math.max(0, Math.floor(defense * 0.35));
+    return defense;
+  }
+
+  function estimateNetDamageForMoveScoring(move = null, player = null, attacker = null, target = null) {
+    const dmg = BATTLE.calculatePlayerMoveDamage(move, player, attacker);
+    const instant = Math.max(0, Number(dmg?.instant || 0));
+    const overTime = Math.max(0, Number(dmg?.overTime || 0));
+    const defense = estimateDefenseForMoveScoring(target, move);
+    const instantNet = instant > 0 ? Math.max(1, instant - defense) : 0;
+    return instantNet + overTime * 0.72;
   }
 
   function simulateBattleOnceForEstimate(player, pet, enemy, fighterType = null) {
@@ -400,7 +449,7 @@ function createBattleCoreUtils(deps = {}) {
         fighterName: combatant?.name || '冒險者',
         fighterType: resolvedType,
         avgPlayerDamage: 0,
-        enemyDamage: Math.max(1, (enemy?.attack || 10) - (combatant?.defense || 5)),
+        enemyDamage: Math.max(1, Number(enemy?.attack || 10)),
         turnsToWin: BATTLE_ESTIMATE_MAX_TURNS,
         turnsToLose: 2,
         winRate: 0,
@@ -475,8 +524,7 @@ function createBattleCoreUtils(deps = {}) {
     for (const move of affordableMoves) {
       const cost = BATTLE.getMoveEnergyCost(move);
       const moveSpeed = typeof getMoveSpeedValue === 'function' ? getMoveSpeedValue(move) : 10;
-      const dmg = BATTLE.calculatePlayerMoveDamage(move, player, activeCombatant);
-      const netDamage = Math.max(1, (dmg.total || 0) - (enemy?.defense || 0));
+      const netDamage = Math.max(1, estimateNetDamageForMoveScoring(move, player, activeCombatant, enemy));
       const killBonus = (enemy?.hp || 0) <= netDamage ? 120 : 0;
       const efficiencyBonus = Math.max(0, 4 - cost) * 2;
       const speedBonus = (moveSpeed - 10) * 0.4;
@@ -550,11 +598,10 @@ function createBattleCoreUtils(deps = {}) {
     const newbieZone = getLocationDifficultyForPlayer(player) <= 2;
     const atkGain = Math.max(1, Math.floor(npcPet.attack * (newbieZone ? 0.6 : 0.68)));
     const hpGain = Math.max(1, Math.floor(npcPet.maxHp * (newbieZone ? 0.45 : 0.5)));
-    const defGain = Math.max(1, Math.floor(npcPet.attack * (newbieZone ? 0.1 : 0.14)));
 
     enemy.npcPet = npcPet;
     enemy.attack = Math.max(1, Number(enemy.attack || 0) + atkGain);
-    enemy.defense = Math.max(1, Number(enemy.defense || 0) + defGain);
+    enemy.defense = Math.max(0, Number(enemy.defense || 0)) + Math.max(0, Math.floor(atkGain * 0.08));
     enemy.hp = Math.max(1, Number(enemy.hp || 1) + hpGain);
     enemy.maxHp = Math.max(enemy.hp, Number(enemy.maxHp || enemy.hp || 1) + hpGain);
 
@@ -663,27 +710,22 @@ function createBattleCoreUtils(deps = {}) {
     const playerLevel = Math.max(1, Number(player?.level || 1));
     if (difficulty > 2 || playerLevel > 6) return enemy;
 
-    const hpScale = difficulty <= 1 ? 0.98 : 1.0;
-    const atkScale = difficulty <= 1 ? 0.96 : 1.0;
-    const defScale = difficulty <= 1 ? 0.96 : 1.0;
-    const minHp = Math.max(44, 54 + playerLevel * 11 + difficulty * 6);
-    const minAtk = Math.max(14, 18 + playerLevel * 2 + (difficulty - 1) * 2);
-    const minDef = Math.max(5, 5 + Math.floor(playerLevel * 1.2));
+    const hpScale = difficulty <= 1 ? 1.08 : 1.12;
+    const atkScale = difficulty <= 1 ? 1.10 : 1.14;
+    const minHp = Math.max(56, 66 + playerLevel * 12 + difficulty * 7);
+    const minAtk = Math.max(18, 22 + playerLevel * 2 + (difficulty - 1) * 3);
     const maxHp = difficulty <= 1
-      ? Math.max(86, 104 + playerLevel * 13)
-      : Math.max(120, 132 + playerLevel * 15);
+      ? Math.max(108, 126 + playerLevel * 14)
+      : Math.max(146, 156 + playerLevel * 17);
     const maxAtk = difficulty <= 1
-      ? Math.max(24, 30 + playerLevel * 2)
-      : Math.max(30, 34 + playerLevel * 2);
-    const maxDef = difficulty <= 1
-      ? Math.max(14, 14 + Math.floor(playerLevel))
-      : Math.max(18, 18 + Math.floor(playerLevel * 1.1));
+      ? Math.max(30, 36 + playerLevel * 3)
+      : Math.max(36, 40 + playerLevel * 3);
 
     const scaledHp = Math.max(minHp, Math.floor((enemy.hp || 1) * hpScale));
     enemy.hp = Math.min(maxHp, scaledHp);
     enemy.maxHp = Math.min(maxHp, Math.max(enemy.hp, Math.floor((enemy.maxHp || scaledHp) * hpScale)));
     enemy.attack = Math.min(maxAtk, Math.max(minAtk, Math.floor((enemy.attack || 1) * atkScale)));
-    enemy.defense = Math.min(maxDef, Math.max(minDef, Math.floor((enemy.defense || 0) * defScale)));
+    enemy.defense = Math.max(0, Math.min(4, Math.floor(Number(enemy.defense || 0) + (difficulty <= 1 ? 1 : 2))));
     enemy.beginnerBalanced = true;
     return enemy;
   }
@@ -693,14 +735,78 @@ function createBattleCoreUtils(deps = {}) {
     const difficulty = getLocationDifficultyForPlayer(player);
     const playerLevel = Math.max(1, Number(player?.level || 1));
     if (difficulty > 2 || playerLevel > 8) return enemy;
-    if (Math.random() > 0.42) return enemy;
+    if (Math.random() > 0.26) return enemy;
 
-    const powerScale = difficulty <= 1 ? 1.26 : 1.3;
+    const powerScale = difficulty <= 1 ? 1.14 : 1.18;
     enemy.hp = Math.max(1, Math.floor((enemy.hp || 1) * powerScale));
     enemy.maxHp = Math.max(enemy.hp, Math.floor((enemy.maxHp || enemy.hp || 1) * powerScale));
-    enemy.attack = Math.max(1, Math.floor((enemy.attack || 1) * (powerScale + 0.05)));
-    enemy.defense = Math.max(1, Math.floor((enemy.defense || 1) * (powerScale - 0.01)));
+    enemy.attack = Math.max(1, Math.floor((enemy.attack || 1) * (powerScale + 0.03)));
+    enemy.defense = Math.max(0, Math.floor(Number(enemy.defense || 0) + (difficulty <= 1 ? 0 : 1)));
     enemy.beginnerDanger = true;
+    return enemy;
+  }
+
+  function rollScale(min = 1, max = 1) {
+    const lo = Number(min);
+    const hi = Number(max);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return 1;
+    if (hi <= lo) return lo;
+    return lo + Math.random() * (hi - lo);
+  }
+
+  function isApexEnemyName(name = '') {
+    const text = String(name || '').trim();
+    if (!text) return false;
+    return /^(Nemo|Wolf|Adaloc|Hom)$/i.test(text) || /(四大天王|君主|裂體|風凰|巨蜥)/u.test(text);
+  }
+
+  function applyApexEnemyEscalation(enemy = null) {
+    if (!enemy) return enemy;
+    if (!isApexEnemyName(enemy?.name || enemy?.id)) return enemy;
+    enemy.hp = Math.max(1, Math.floor(Number(enemy.hp || 1) * 1.22));
+    enemy.maxHp = Math.max(enemy.hp, Math.floor(Number(enemy.maxHp || enemy.hp || 1) * 1.22));
+    enemy.attack = Math.max(1, Math.floor(Number(enemy.attack || 1) * 1.18));
+    enemy.defense = Math.max(0, Math.floor(Number(enemy.defense || 0) + 4));
+    enemy.speed = Math.max(1, Math.floor(Number(enemy.speed || 10) + 1));
+    enemy.apexScaled = true;
+    return enemy;
+  }
+
+  function applyRegionalEnemyVariance(enemy, player) {
+    if (!enemy || !player) return enemy;
+    const difficulty = clampInt(getLocationDifficultyForPlayer(player), 1, 8, 3);
+    const profile = {
+      1: { hpMin: 1.03, hpMax: 1.10, atkMin: 1.05, atkMax: 1.12, defMin: 0, defMax: 1, speedShift: 1 },
+      2: { hpMin: 1.05, hpMax: 1.12, atkMin: 1.07, atkMax: 1.14, defMin: 1, defMax: 2, speedShift: 1 },
+      3: { hpMin: 1.04, hpMax: 1.12, atkMin: 1.06, atkMax: 1.14, defMin: 1, defMax: 3, speedShift: 1 },
+      4: { hpMin: 1.05, hpMax: 1.14, atkMin: 1.08, atkMax: 1.16, defMin: 2, defMax: 4, speedShift: 2 },
+      5: { hpMin: 1.07, hpMax: 1.16, atkMin: 1.10, atkMax: 1.18, defMin: 2, defMax: 5, speedShift: 2 },
+      6: { hpMin: 1.08, hpMax: 1.17, atkMin: 1.11, atkMax: 1.20, defMin: 3, defMax: 6, speedShift: 2 },
+      7: { hpMin: 1.10, hpMax: 1.20, atkMin: 1.12, atkMax: 1.22, defMin: 4, defMax: 7, speedShift: 3 },
+      8: { hpMin: 1.12, hpMax: 1.22, atkMin: 1.14, atkMax: 1.24, defMin: 5, defMax: 8, speedShift: 3 }
+    }[difficulty] || { hpMin: 1.05, hpMax: 1.12, atkMin: 1.07, atkMax: 1.14, defMin: 1, defMax: 3, speedShift: 1 };
+
+    const hpScale = rollScale(profile.hpMin, profile.hpMax);
+    const atkScale = rollScale(profile.atkMin, profile.atkMax);
+    const defenseGain = clampInt(
+      profile.defMin + Math.random() * (profile.defMax - profile.defMin + 1),
+      0,
+      profile.defMax,
+      profile.defMin
+    );
+    const speedShift = clampInt(
+      Math.round((Math.random() * 2 - 1) * profile.speedShift),
+      -profile.speedShift,
+      profile.speedShift,
+      0
+    );
+
+    enemy.hp = Math.max(1, Math.floor(Number(enemy.hp || 1) * hpScale));
+    enemy.maxHp = Math.max(enemy.hp, Math.floor(Number(enemy.maxHp || enemy.hp || 1) * hpScale));
+    enemy.attack = Math.max(1, Math.floor(Number(enemy.attack || 1) * atkScale));
+    enemy.defense = Math.max(0, Math.floor(Number(enemy.defense || 0) + defenseGain));
+    enemy.speed = Math.max(1, Math.floor(Number(enemy.speed || 10) + speedShift));
+    enemy.regionVariance = true;
     return enemy;
   }
 
@@ -728,7 +834,7 @@ function createBattleCoreUtils(deps = {}) {
       hp,
       maxHp: sourceEnemy.maxHp || hp,
       attack: sourceEnemy.attack || base.attack,
-      defense: sourceEnemy.defense ?? base.defense,
+      defense: Math.max(0, Number(sourceEnemy.defense ?? base.defense ?? 0)),
       moves: BATTLE.buildEnemyMoveLoadout(
         enemyName,
         level,
@@ -749,6 +855,8 @@ function createBattleCoreUtils(deps = {}) {
     const skipDanger = options?.skipBeginnerDanger || enemy.ignoreBeginnerDanger;
     if (!skipBalance) applyBeginnerZoneEnemyBalance(enemy, player);
     if (!skipDanger) applyBeginnerZoneDangerVariant(enemy, player);
+    applyApexEnemyEscalation(enemy);
+    applyRegionalEnemyVariance(enemy, player);
     return enemy;
   }
 

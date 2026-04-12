@@ -60,6 +60,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     cancelOutgoingFriendRequest,
     showFriendCharacter,
     startFriendDuel,
+    abortFriendDuel,
     clearOnlineFriendDuelTimer,
     showIslandMap,
     getRegionLocationsByLocation,
@@ -104,7 +105,10 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     handleBattleSwitchCancel,
     handleFlee,
     showMovesList,
+    showPetEquipmentView,
     showInventory,
+    showInventoryFusionLab,
+    handleInventoryFusionSelect,
     showPlayerCodex,
     showNpcCodex,
     showSkillCodex,
@@ -196,6 +200,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     }
 
     if (await handleMovesSelectMenu(interaction, user, customId)) {
+      return;
+    }
+
+    if (customId.startsWith('inv_fusion_pick_')) {
+      await handleInventoryFusionSelect(interaction, user, customId);
       return;
     }
 
@@ -323,6 +332,9 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 主選單 =====
   if (customId === 'main_menu') {
+    if (interaction?.message?.id) {
+      await interaction.message.edit({ components: [] }).catch(() => {});
+    }
     const player = CORE.loadPlayer(user.id);
     const pet = PET.loadPet(user.id);
     if (player && pet) {
@@ -333,6 +345,19 @@ CLIENT.on('interactionCreate', async (interaction) => {
         return;
       }
       if (player.battleState) {
+        if (player?.battleState?.friendDuel) {
+          const fallbackPet = PET.loadPet(user.id);
+          const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
+          const activePet = petResolved?.pet || fallbackPet;
+          if (typeof abortFriendDuel === 'function') {
+            abortFriendDuel(player, activePet, { reason: '主動結束好友友誼戰（返回主選單）' });
+          } else {
+            player.battleState = null;
+            CORE.savePlayer(player);
+          }
+          await showFriendsMenu(interaction, user, '已退出友誼戰，主線劇情不受影響。');
+          return;
+        }
         const enemyName = player.battleState?.enemy?.name || '敵人';
         const sourceChoice = String(player.battleState?.sourceChoice || '').trim();
         const preBattleStory = String(player.battleState?.preBattleStory || player.currentStory || '').trim();
@@ -940,6 +965,18 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId.startsWith('moves_show_equipment_')) {
+    const petId = String(customId || '').replace('moves_show_equipment_', '').trim();
+    await showPetEquipmentView(interaction, user, petId);
+    return;
+  }
+
+  if (customId.startsWith('moves_open_pet_')) {
+    const petId = String(customId || '').replace('moves_open_pet_', '').trim();
+    await showMovesList(interaction, user, petId);
+    return;
+  }
+
   if (customId.startsWith('moves_page_prev_') || customId.startsWith('moves_page_next_')) {
     const matched = String(customId).match(/^moves_page_(prev|next)_(.+)_(\d+)$/);
     const direction = String(matched?.[1] || '').trim();
@@ -967,6 +1004,19 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // ===== 顯示行囊 =====
   if (customId === 'show_inventory') {
     await showInventory(interaction, user, 0);
+    return;
+  }
+
+  if (customId.startsWith('inv_fusion_open_')) {
+    const page = Math.max(0, Number(String(customId).split('_').pop() || 0));
+    await showInventoryFusionLab(interaction, user, page);
+    return;
+  }
+
+  if (customId.startsWith('inv_fusion_page_prev_') || customId.startsWith('inv_fusion_page_next_')) {
+    const currentPage = Math.max(0, Number(String(customId).split('_').pop() || 0));
+    const nextPage = customId.startsWith('inv_fusion_page_prev_') ? currentPage - 1 : currentPage + 1;
+    await showInventoryFusionLab(interaction, user, nextPage);
     return;
   }
 
@@ -1544,7 +1594,35 @@ CLIENT.on('interactionCreate', async (interaction) => {
       await interaction.reply({ content: '⚠️ 請回到遊戲討論串使用。', ephemeral: true }).catch(() => {});
       return;
     }
+    const session = player?.shopSession && typeof player.shopSession === 'object'
+      ? JSON.parse(JSON.stringify(player.shopSession))
+      : null;
+    const marketType = String(session?.marketType || 'renaiss').trim() === 'digital' ? 'digital' : 'renaiss';
+    const marketLabel = getMarketTypeLabel(marketType);
+    const sourceChoice = String(session?.sourceChoice || '').trim();
+    const preShopStory = String(session?.preStory || player.currentStory || '').trim();
     leaveShopSession(player);
+    const restoredStory = String(player.currentStory || preShopStory || '').trim();
+    const carryTail = extractStoryTailLine(preShopStory || restoredStory, 140);
+    const exitSummary =
+      `🧭 你離開${marketLabel}，把剛才的報價與櫃檯觀察帶回${player.location || '當前區域'}，準備接回原本主線。` +
+      (carryTail ? `\n📖 承接前情：${carryTail}` : '');
+    player.currentStory = [restoredStory, exitSummary].filter(Boolean).join('\n\n');
+    queuePendingStoryTrigger(player, {
+      name: `離開${marketLabel}`,
+      choice: sourceChoice || `從${marketLabel}返回冒險現場`,
+      desc: `你剛結束${marketLabel}互動，需承接入店前線索並自然銜接下一段劇情`,
+      action: 'market_exit_followup',
+      outcome: `已離開${marketLabel}｜入店前最後情境：${carryTail || '（無）'}`
+    });
+    player.eventChoices = [];
+    rememberPlayer(player, {
+      type: '商店',
+      content: `離開${marketLabel}返回主線`,
+      outcome: sourceChoice ? `承接先前行動：${sourceChoice}` : '返回冒險流程',
+      importance: 2,
+      tags: ['market', marketType, 'shop_exit']
+    });
     CORE.savePlayer(player);
     await interaction.deferUpdate().catch(() => {});
     await sendMainMenuToThread(interaction.channel, player, pet, interaction);

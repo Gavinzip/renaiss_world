@@ -1,3 +1,5 @@
+const FUSION = require('../equipment/equipment-fusion-agent');
+
 function createPlayerPanelUtils(deps = {}) {
   const {
     CORE,
@@ -78,6 +80,94 @@ function createPlayerPanelUtils(deps = {}) {
     showMainMenu
   } = deps;
 
+const SKILL_CHIP_PREFIX = '技能晶片：';
+const FUSION_BLOCKED_ITEMS = new Set(['乾糧一包', '水囊']);
+
+function getFusionSlotLabel(slot = '') {
+  const map = {
+    helmet: '頭盔（攻擊）',
+    armor: '盔甲（生命）',
+    shoes: '鞋子（速度）'
+  };
+  return map[String(slot || '').trim()] || '未知槽位';
+}
+
+function getFusionRarityLabel(rarity = '') {
+  const safe = String(rarity || '').trim().toUpperCase();
+  return ['N', 'R', 'SR', 'SSR', 'UR'].includes(safe) ? safe : 'N';
+}
+
+function isSkillChipItemName(name = '') {
+  const text = String(name || '').trim();
+  return text.startsWith(SKILL_CHIP_PREFIX) || Boolean(extractSkillChipMoveName(text));
+}
+
+function normalizeElementForDamageBalance(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (text === '水' || /水|液|潮|霧|冰/.test(text)) return '水';
+  if (text === '火' || /火|炎|焰|熱|熔/.test(text)) return '火';
+  if (text === '草' || /草|木|藤|森|生質/.test(text)) return '草';
+  return '';
+}
+
+function buildMoveDamageBreakdown(move = {}, pet = {}) {
+  const rawBase = Math.max(0, Number(move?.baseDamage ?? move?.damage ?? 0));
+  const attack = Math.max(0, Number(pet?.attack || 0));
+  const attackBonus = Math.max(0, Math.floor(attack * 0.2));
+  const summedBase = rawBase + attackBonus;
+  const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, pet);
+  const instant = Math.max(0, Number(dmg?.instant || 0));
+  const overTime = Math.max(0, Number(dmg?.overTime || 0));
+  const total = Math.max(0, Number(dmg?.total || 0));
+  const effect = move?.effect && typeof move.effect === 'object' ? move.effect : {};
+
+  let secondTick = 0;
+  const secondTickParts = [];
+  const burnTick = Math.max(1, Math.floor(instant * 0.22));
+  const poisonTick = Math.max(1, Math.floor(instant * 0.16));
+  const trapTick = Math.max(1, Math.floor(instant * 0.18));
+  const bleedTick = Math.max(1, Math.floor(instant * 0.24));
+  const spreadPoisonTick = Math.max(1, Math.floor(instant * 0.12));
+  const dotTick = Math.max(1, Number(effect.dot || 0));
+  if (Number(effect.burn || 0) >= 2) {
+    secondTick += burnTick;
+    secondTickParts.push(`🔥${burnTick}`);
+  }
+  if (Number(effect.poison || 0) >= 2) {
+    secondTick += poisonTick;
+    secondTickParts.push(`☠️${poisonTick}`);
+  }
+  if (Number(effect.trap || 0) >= 2) {
+    secondTick += trapTick;
+    secondTickParts.push(`🪤${trapTick}`);
+  }
+  if (Number(effect.bleed || 0) >= 2) {
+    secondTick += bleedTick;
+    secondTickParts.push(`🩸${bleedTick}`);
+  }
+  if (effect.spreadPoison) {
+    secondTick += spreadPoisonTick;
+    secondTickParts.push(`🧪${spreadPoisonTick}`);
+  }
+  if (Number(effect.dot || 0) > 0) {
+    secondTick += dotTick;
+    secondTickParts.push(`⚡${dotTick}`);
+  }
+
+  return {
+    rawBase,
+    attack,
+    attackBonus,
+    summedBase,
+    instant,
+    overTime,
+    total,
+    secondTick,
+    secondTickText: secondTickParts.length > 0 ? secondTickParts.join('+') : '無'
+  };
+}
+
 // ============== 招式列表 ==============
 async function showMovesList(interaction, user, selectedPetId = '', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
@@ -118,18 +208,28 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   const forgettableMoves = getForgettablePetMoves(selectedPet);
 
   const currentPage = Math.max(0, Number(page || 0));
+  const selectedAttack = Math.max(0, Number(selectedPet?.attack || 0));
+  const selectedAtkBonus = Math.max(0, Math.floor(selectedAttack * 0.2));
+  const elementBalance = typeof BATTLE.getElementDamageBalance === 'function'
+    ? BATTLE.getElementDamageBalance()
+    : {};
+  const normalizedPetElement = normalizeElementForDamageBalance(selectedPet?.type || selectedPet?.element || '');
+  const elementScale = Number(elementBalance?.[normalizedPetElement] || 1);
 
   const unlockedMoves = (selectedPet.moves || []).map((m, i) => {
     const isFlee = Boolean(m?.effect && m.effect.flee);
     const isSelected = selectedSet.has(String(m.id || ''));
     const statusMark = isFlee ? '🏃固定' : (isSelected ? '✅攜帶' : '▫️候補');
-    const dmg = BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet);
+    const dmg = buildMoveDamageBreakdown(m, selectedPet);
     const energyCost = isFlee ? '-' : BATTLE.getMoveEnergyCost(m);
     const moveSpeed = getMoveSpeedValue(m);
     const tierEmoji = m.tier === 3 ? '🔮' : m.tier === 2 ? '💠' : '⚪';
     const tierName = m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通';
     const effectStr = describeMoveEffects(m);
-    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${effectStr || '無效果'}`;
+    const dotSecondLine = dmg.secondTick > 0
+      ? `\n   ⏱️ 持續傷害第2跳：${format1(dmg.secondTick)}（${dmg.secondTickText}）`
+      : '';
+    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | 直傷${format1(dmg.instant)} | 總傷${format1(dmg.total)} | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${effectStr || '無效果'}${dotSecondLine}`;
   });
 
   const petSummary = ownedPets.map((pet, i) => {
@@ -145,11 +245,11 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
         const tierEmoji = move.tier === 3 ? '🔮' : move.tier === 2 ? '💠' : '⚪';
         const tierName = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
         const mark = entry.canLearn ? '✅可學' : (entry.reason === '已學會' ? '📘已學' : '🚫不可學');
-        const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, selectedPet);
+        const dmg = buildMoveDamageBreakdown(move, selectedPet);
         const energyCost = BATTLE.getMoveEnergyCost(move);
         const moveSpeed = getMoveSpeedValue(move);
         const effectStr = describeMoveEffects(move);
-        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.total)}dmg | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${effectStr || '無效果'}`;
+        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | 直${format1(dmg.instant)} / 總${format1(dmg.total)} | ⚡${energyCost} | 🚀${format1(moveSpeed)} | ${effectStr || '無效果'}`;
       })
     : ['（背包目前沒有技能晶片）'];
 
@@ -173,6 +273,9 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   const description = [
     noticeLine,
     `**目前管理：${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）`,
+    `傷害公式：**基礎傷害 + 攻擊加成**（攻擊加成 = ⌊ATK × 0.2⌋）`,
+    `本寵 ATK ${format1(selectedAttack)} → 攻擊加成 +${format1(selectedAtkBonus)}${normalizedPetElement ? `｜屬性平衡 x${format1(elementScale)}` : ''}`,
+    `持續傷害：列表顯示「第2跳」預估值（若效果不足2回合則不顯示）`,
     `學習入口：請用下拉選單「學習技能晶片」`,
     `取消學習：會退回技能晶片到背包，可拿去賣`,
     `可攜帶上陣招式：**${PET_MOVE_LOADOUT_LIMIT}**（逃跑技能固定，不占名額）`,
@@ -212,13 +315,13 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     const learnOptions = learnableChips.slice(0, 25).map((entry) => {
       const move = entry.move || {};
       const tierText = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
-      const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, selectedPet);
+      const dmg = buildMoveDamageBreakdown(move, selectedPet);
       const energyCost = BATTLE.getMoveEnergyCost(move);
       const moveSpeed = getMoveSpeedValue(move);
       const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
       return {
         label: `${move.name}`.slice(0, 100),
-        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.total)}dmg⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
+        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
     });
@@ -252,12 +355,15 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   const attackMoves = getPetAttackMoves(selectedPet);
   let rowMoveAssign = null;
   if (attackMoves.length > 0) {
-    const moveOptions = attackMoves.slice(0, 25).map((m) => ({
-      label: `${m.name}`.slice(0, 100),
-      description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${format1(BATTLE.calculatePlayerMoveDamage(m, {}, selectedPet).total)}dmg⚡${BATTLE.getMoveEnergyCost(m)}🚀${format1(getMoveSpeedValue(m))}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
-      value: `${selectedPet.id}::${m.id}`,
-      default: selectedSet.has(String(m.id || ''))
-    }));
+    const moveOptions = attackMoves.slice(0, 25).map((m) => {
+      const dmg = buildMoveDamageBreakdown(m, selectedPet);
+      return {
+        label: `${m.name}`.slice(0, 100),
+        description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${BATTLE.getMoveEnergyCost(m)}🚀${format1(getMoveSpeedValue(m))}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
+        value: `${selectedPet.id}::${m.id}`,
+        default: selectedSet.has(String(m.id || ''))
+      };
+    });
     const moveSelect = new StringSelectMenuBuilder()
       .setCustomId('moves_assign')
       .setPlaceholder(`為 ${selectedPet.name} 選擇上陣招式（1~${PET_MOVE_LOADOUT_LIMIT}）`)
@@ -309,7 +415,11 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       .setCustomId(`alloc_hp_${selectedPet.id}_max`)
       .setLabel(`❤️ 全加（剩${remainPoints}）`)
       .setStyle(ButtonStyle.Primary)
-      .setDisabled(remainPoints <= 0)
+      .setDisabled(remainPoints <= 0),
+    new ButtonBuilder()
+      .setCustomId(`moves_show_equipment_${selectedPet.id}`)
+      .setLabel('🛡️ 目前裝備')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   // Discord 訊息元件最多 5 列；若超過會導致 update 失敗並看起來像「按鈕消失」。
@@ -334,6 +444,77 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       await interaction.channel.send(payload).catch(() => {});
     }
   }
+}
+
+function buildEquipmentSlotDetailLine(item = null, slot = 'helmet') {
+  if (!item || typeof item !== 'object') return `• ${getFusionSlotLabel(slot)}：未裝備`;
+  const rarity = getFusionRarityLabel(item.rarity);
+  const name = String(item.name || '未命名裝備');
+  const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
+  const statText = slot === 'helmet'
+    ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
+    : slot === 'armor'
+      ? `HP +${Math.max(0, Number(stats.hp || 0))}`
+      : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+  const value = Math.max(0, Number(item.value || 0));
+  return `• ${getFusionSlotLabel(slot)}：${rarity} ${name}｜${statText}｜估值 ${value}`;
+}
+
+async function showPetEquipmentView(interaction, user, selectedPetId = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  const uiLang = getPlayerUILang(player);
+  const changed = FUSION.ensurePlayerEquipmentState(player);
+  if (changed) CORE.savePlayer(player);
+
+  const ownedPets = getPlayerOwnedPets(user.id);
+  let selectedPet = ownedPets.find((p) => String(p?.id || '') === String(selectedPetId || '')) || null;
+  if (!selectedPet) {
+    const defaultPet = PET.loadPet(user.id);
+    selectedPet = ownedPets.find((p) => String(p?.id || '') === String(defaultPet?.id || '')) || ownedPets[0] || null;
+  }
+
+  const equipment = player?.equipment && typeof player.equipment === 'object'
+    ? player.equipment
+    : {};
+  const bonus = FUSION.getEquippedBonuses(player);
+  const slotLines = FUSION.EQUIPMENT_SLOTS.map((slot) => buildEquipmentSlotDetailLine(equipment?.[slot], slot));
+  const loreLines = FUSION.EQUIPMENT_SLOTS
+    .map((slot) => {
+      const item = equipment?.[slot];
+      if (!item || typeof item !== 'object') return '';
+      const lore = String(item.lore || '').trim();
+      if (!lore) return '';
+      return `【${getFusionSlotLabel(slot)}】${lore}`;
+    })
+    .filter(Boolean);
+
+  const embed = new EmbedBuilder()
+    .setTitle('🛡️ 目前裝備總覽')
+    .setColor(0x64748b)
+    .setDescription(
+      `${selectedPet ? `寵物：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）\n` : ''}` +
+      `裝備加成會套用在目前戰鬥系統。\n` +
+      `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`
+    )
+    .addFields(
+      { name: '🎯 裝備欄位', value: slotLines.join('\n').slice(0, 1024), inline: false },
+      { name: '📜 裝備敘述', value: loreLines.length > 0 ? loreLines.join('\n').slice(0, 1024) : '（目前沒有裝備敘述）', inline: false }
+    );
+
+  const backPetId = String(selectedPet?.id || '').trim();
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(backPetId ? `moves_open_pet_${backPetId}` : 'show_moves')
+      .setLabel('🐾 返回寵物管理')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 檔案').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
+  );
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
 async function showFinanceLedger(interaction, user) {
@@ -1360,17 +1541,297 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
 }
 
 // ============== 行囊/背包 ==============
-async function showInventory(interaction, user, page = 0) {
+function getPlayerEquipmentSummary(player = null) {
+  const equipment = player?.equipment && typeof player.equipment === 'object'
+    ? player.equipment
+    : {};
+  const bagCount = Array.isArray(player?.equipmentBag) ? player.equipmentBag.length : 0;
+  const slotLines = FUSION.EQUIPMENT_SLOTS.map((slot) => {
+    const item = equipment?.[slot];
+    if (!item || typeof item !== 'object') {
+      return `• ${getFusionSlotLabel(slot)}：未裝備`;
+    }
+    const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
+    const statText = slot === 'helmet'
+      ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
+      : slot === 'armor'
+        ? `HP +${Math.max(0, Number(stats.hp || 0))}`
+        : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+    return `• ${getFusionSlotLabel(slot)}：${getFusionRarityLabel(item.rarity)} ${String(item.name || '未命名裝備')}｜${statText}`;
+  });
+  const bonus = FUSION.getEquippedBonuses(player);
+  return {
+    slotText: slotLines.join('\n'),
+    totalText: `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`,
+    bagCount
+  };
+}
+
+function getFusionCandidates(player = null) {
+  const out = [];
+  const inventory = Array.isArray(player?.inventory) ? player.inventory : [];
+  const tradeGoods = Array.isArray(player?.tradeGoods) ? player.tradeGoods : [];
+
+  for (let i = 0; i < inventory.length; i += 1) {
+    const name = String(inventory[i] || '').trim();
+    if (!name) continue;
+    if (FUSION_BLOCKED_ITEMS.has(name)) continue;
+    if (isSkillChipItemName(name)) continue;
+    const refValue = Math.max(20, Math.floor(Number(estimateStoryReferencePriceByName(name) || 20)));
+    out.push({
+      token: `iv_${i}`,
+      source: 'inventory',
+      sourceLabel: '背包',
+      name,
+      value: refValue,
+      inventoryIndex: i
+    });
+  }
+
+  for (const good of tradeGoods) {
+    const id = String(good?.id || '').trim();
+    const name = String(good?.name || '').trim();
+    if (!id || !name) continue;
+    const rarity = String(good?.rarity || '普通').trim();
+    const value = Math.max(20, Math.floor(Number(good?.value || estimateStoryReferencePriceByName(name) || 20)));
+    out.push({
+      token: `tg_${id}`,
+      source: 'tradeGoods',
+      sourceLabel: '素材',
+      name,
+      value,
+      rarity,
+      tradeGoodId: id
+    });
+  }
+
+  out.sort((a, b) => {
+    const byValue = Number(b.value || 0) - Number(a.value || 0);
+    if (byValue !== 0) return byValue;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
+  });
+  return out;
+}
+
+function consumeFusionMaterials(player, picks = []) {
+  const removed = [];
+  const tradeIds = new Set();
+  const invIndexes = [];
+  for (const pick of picks) {
+    if (pick?.source === 'tradeGoods' && pick?.tradeGoodId) tradeIds.add(String(pick.tradeGoodId));
+    if (pick?.source === 'inventory') invIndexes.push(Number(pick.inventoryIndex));
+  }
+
+  if (tradeIds.size > 0 && Array.isArray(player.tradeGoods)) {
+    player.tradeGoods = player.tradeGoods.filter((good) => {
+      const id = String(good?.id || '').trim();
+      if (!id || !tradeIds.has(id)) return true;
+      removed.push({
+        name: String(good?.name || '未命名素材'),
+        value: Math.max(20, Math.floor(Number(good?.value || 20))),
+        source: 'tradeGoods'
+      });
+      tradeIds.delete(id);
+      return false;
+    });
+  }
+
+  if (Array.isArray(player.inventory) && invIndexes.length > 0) {
+    const sorted = Array.from(new Set(invIndexes))
+      .filter((idx) => Number.isFinite(idx) && idx >= 0 && idx < player.inventory.length)
+      .sort((a, b) => b - a);
+    for (const idx of sorted) {
+      const raw = player.inventory[idx];
+      const name = String(raw || '').trim();
+      if (!name || isSkillChipItemName(name) || FUSION_BLOCKED_ITEMS.has(name)) continue;
+      player.inventory.splice(idx, 1);
+      removed.push({
+        name,
+        value: Math.max(20, Math.floor(Number(estimateStoryReferencePriceByName(name) || 20))),
+        source: 'inventory'
+      });
+    }
+  }
+
+  return removed.slice(0, 3);
+}
+
+async function showInventoryFusionLab(interaction, user, page = 0, notice = '') {
   const player = CORE.loadPlayer(user.id);
-  const uiLang = getPlayerUILang(player);
-  
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
     return;
   }
+  const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
-  
-  // 顯示物品（分頁，不截斷）
+
+  const changed = FUSION.ensurePlayerEquipmentState(player);
+  const candidates = getFusionCandidates(player);
+  if (changed) CORE.savePlayer(player);
+
+  if (candidates.length < 3) {
+    const embed = new EmbedBuilder()
+      .setTitle('🧪 寶物融合台')
+      .setColor(0x7c3aed)
+      .setDescription(
+        `${notice ? `✅ ${notice}\n\n` : ''}` +
+        `可融合素材不足，目前可用 **${candidates.length}** 件（需要至少 3 件）。\n` +
+        `規則：不可放入技能晶片。`
+      );
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
+    );
+    await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
+    return;
+  }
+
+  const pager = paginateList(candidates, page, 20);
+  const safePage = Math.max(0, Number(pager?.page || 0));
+  const options = (Array.isArray(pager?.items) ? pager.items : []).slice(0, 25).map((row, idx) => {
+    const rarityMark = row?.rarity ? `｜${String(row.rarity)}` : '';
+    return {
+      label: `${idx + 1}. ${String(row.name || '未命名素材')}`.slice(0, 100),
+      description: `${row.sourceLabel}${rarityMark}｜估值 ${Math.max(1, Number(row.value || 1))} Rns`.slice(0, 100),
+      value: String(row.token || '').slice(0, 100)
+    };
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🧪 寶物融合台（第 ${safePage + 1}/${Math.max(1, Number(pager?.totalPages || 1))} 頁）`)
+    .setColor(0x7c3aed)
+    .setDescription(
+      `${notice ? `✅ ${notice}\n\n` : ''}` +
+      `請一次選擇 **3 件素材** 進行融合。\n` +
+      `融合結果會生成裝備（頭盔/盔甲/鞋子），並由 AI 決定名稱、稀有度與價值。\n` +
+      `目前候選：${candidates.length} 件（技能晶片已自動排除）`
+    );
+
+  const rowSelect = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`inv_fusion_pick_${safePage}`)
+      .setPlaceholder('選擇 3 件素材融合')
+      .setMinValues(3)
+      .setMaxValues(3)
+      .addOptions(options)
+  );
+  const rowPage = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`inv_fusion_page_prev_${safePage}`)
+      .setLabel('⬅️ 上一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage <= 0),
+    new ButtonBuilder()
+      .setCustomId(`inv_fusion_page_next_${safePage}`)
+      .setLabel('➡️ 下一頁')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(safePage >= Math.max(1, Number(pager?.totalPages || 1)) - 1)
+  );
+  const rowBack = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('show_inventory').setLabel('🎒 返回背包').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
+  );
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [rowSelect, rowPage, rowBack] });
+}
+
+async function handleInventoryFusionSelect(interaction, user, customId = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const uiLang = getPlayerUILang(player);
+  ECON.ensurePlayerEconomy(player);
+  const changed = FUSION.ensurePlayerEquipmentState(player);
+  if (changed) CORE.savePlayer(player);
+
+  const selectedTokens = Array.isArray(interaction.values) ? interaction.values.map((v) => String(v || '').trim()).filter(Boolean) : [];
+  const uniqueTokens = Array.from(new Set(selectedTokens));
+  if (uniqueTokens.length !== 3) {
+    await interaction.reply({ content: '⚠️ 請一次選擇 3 件素材。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  const candidates = getFusionCandidates(player);
+  const byToken = new Map(candidates.map((row) => [String(row.token || ''), row]));
+  const picks = uniqueTokens.map((token) => byToken.get(token)).filter(Boolean);
+  if (picks.length !== 3) {
+    await interaction.reply({ content: '⚠️ 有素材已不存在，請重新選擇。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  if (picks.some((row) => isSkillChipItemName(row?.name || ''))) {
+    await interaction.reply({ content: '⚠️ 技能晶片不可融合。', ephemeral: true }).catch(() => {});
+    return;
+  }
+
+  await interaction.deferUpdate().catch(() => {});
+  let fused = null;
+  try {
+    const fusionInput = picks.map((row) => ({
+      name: String(row?.name || '未知素材'),
+      value: Math.max(1, Math.floor(Number(row?.value || 1))),
+      source: String(row?.source || 'inventory')
+    }));
+    fused = await FUSION.fuseTreasuresToEquipment(fusionInput, {
+      playerName: String(player?.name || user.username || '旅人'),
+      location: String(player?.location || '未知地點'),
+      lang: uiLang
+    });
+  } catch (err) {
+    const reason = String(err?.message || err || 'fusion failed').slice(0, 180);
+    await showInventoryFusionLab(interaction, user, 0, `融合失敗：${reason}`);
+    return;
+  }
+
+  const consumed = consumeFusionMaterials(player, picks);
+  if (consumed.length !== 3) {
+    await showInventoryFusionLab(interaction, user, 0, '融合失敗：素材狀態已變動，請重試。');
+    return;
+  }
+
+  const equipment = fused?.equipment;
+  if (!equipment || typeof equipment !== 'object') {
+    await showInventoryFusionLab(interaction, user, 0, '融合失敗：鍛造核心沒有返回有效裝備。');
+    return;
+  }
+
+  const equipResult = FUSION.addEquipmentToPlayer(player, equipment);
+  CORE.savePlayer(player);
+
+  const stats = equipment.stats && typeof equipment.stats === 'object' ? equipment.stats : {};
+  const statText = equipment.slot === 'helmet'
+    ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
+    : equipment.slot === 'armor'
+      ? `HP +${Math.max(0, Number(stats.hp || 0))}`
+      : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+  const sourceText = consumed.map((row) => String(row?.name || '未知素材')).join(' + ');
+  const equipNotice = equipResult?.equipped
+    ? `已自動裝備到 ${getFusionSlotLabel(equipment.slot)}`
+    : `已放入裝備背包（${getFusionSlotLabel(equipment.slot)}）`;
+  const replaceNotice = equipResult?.replaced
+    ? `｜替換：${String(equipResult.replaced?.name || '舊裝備')}`
+    : '';
+  const aiTag = 'AI鍛造';
+
+  await showInventory(
+    interaction,
+    user,
+    0,
+    `${aiTag}完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n素材：${sourceText}\n${equipNotice}${replaceNotice}`
+  );
+}
+
+async function showInventory(interaction, user, page = 0, notice = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    return;
+  }
+  const uiLang = getPlayerUILang(player);
+  ECON.ensurePlayerEconomy(player);
+  const stateChanged = FUSION.ensurePlayerEquipmentState(player);
+  if (stateChanged) CORE.savePlayer(player);
+
   const items = Array.isArray(player.inventory) ? player.inventory : [];
   const herbs = Array.isArray(player.herbs) ? player.herbs : [];
   const tradeGoods = Array.isArray(player.tradeGoods) ? player.tradeGoods : [];
@@ -1378,7 +1839,7 @@ async function showInventory(interaction, user, page = 0) {
   const itemLines = items.map((item, i) => `${i + 1}. ${String(item || '')}`);
   const herbLines = herbs.map((h, i) => `${i + 1}. ${String(h || '')}`);
   const goodLines = tradeGoods.map((g, i) =>
-    `${i + 1}. ${String(g?.name || '未命名素材')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns 代幣）`
+    `${i + 1}. ${String(g?.name || '未命名素材')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns）`
   );
 
   const itemPages = buildPagedFieldChunks(itemLines, 1000, '（空）');
@@ -1389,16 +1850,24 @@ async function showInventory(interaction, user, page = 0) {
   const itemsList = itemPages[Math.min(safePage, itemPages.length - 1)] || '（空）';
   const herbsList = herbPages[Math.min(safePage, herbPages.length - 1)] || '（空）';
   const goodsList = goodsPages[Math.min(safePage, goodsPages.length - 1)] || '（空）';
-  
+  const equipmentInfo = getPlayerEquipmentSummary(player);
+  const fusionCandidates = getFusionCandidates(player);
+
   const embed = new EmbedBuilder()
     .setTitle(`🎒 ${player.name} 的行囊`)
     .setColor(0x8B4513)
-    .setDescription('你身上攜帶的物品')
+    .setDescription(
+      `${notice ? `✅ ${notice}\n\n` : ''}` +
+      `你身上攜帶的物品\n` +
+      `寶物融合：可用素材 ${fusionCandidates.length} 件（需 3 件）`
+    )
     .addFields(
       { name: '📦 物品', value: itemsList, inline: true },
       { name: '🌿 草藥', value: herbsList, inline: true }
     )
     .addFields({ name: `🧰 可售素材（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
+    .addFields({ name: `🛡️ 裝備（背包 ${equipmentInfo.bagCount} 件）`, value: equipmentInfo.slotText, inline: false })
+    .addFields({ name: '📈 裝備總加成', value: equipmentInfo.totalText, inline: false })
     .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
 
   const rowPage = new ActionRowBuilder().addComponents(
@@ -1413,11 +1882,18 @@ async function showInventory(interaction, user, page = 0) {
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages - 1)
   );
+  const rowFusion = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('inv_fusion_open_0')
+      .setLabel('🧪 融合寶物')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(fusionCandidates.length < 3)
+  );
   const rowMain = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Primary)
   );
 
-  await interaction.update({ embeds: [embed], components: [rowPage, rowMain] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [rowPage, rowFusion, rowMain] });
 }
 
 function getCodexLabels(uiLang = 'zh-TW') {
@@ -1781,6 +2257,9 @@ async function showSkillCodex(interaction, user) {
     showWorldShopBuyPanel,
     showWorldShopScene,
     showInventory,
+    showInventoryFusionLab,
+    handleInventoryFusionSelect,
+    showPetEquipmentView,
     collectPlayerCodexData,
     showPlayerCodex,
     showNpcCodex,
