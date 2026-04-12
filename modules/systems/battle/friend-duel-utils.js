@@ -70,7 +70,7 @@ function createFriendDuelUtils(deps = {}) {
       hp: fullHp,
       maxHp: fullHp,
       attack: Math.max(8, Number(friendPet?.attack || 20)),
-      defense: Math.max(1, Number(friendPet?.defense || 12)),
+      defense: 0,
       moves: moves.length > 0 ? moves : [fallbackMove],
       reward: { gold: [0, 0] },
       isMonster: false,

@@ -211,6 +211,29 @@ function createFriendOnlineUtils(deps = {}) {
     return msg;
   }
 
+  function estimateDefenseForOnlineMove(target = {}, move = null) {
+    const effect = move?.effect && typeof move.effect === 'object' ? move.effect : {};
+    if (effect.ignoreResistance) return 0;
+
+    let defense = Math.max(0, Math.floor(Number(target?.defense || 0)));
+    const defenseDownTurns = Math.max(0, Number(target?.status?.defenseDown || 0));
+    if (defenseDownTurns > 0) {
+      const reductionRate = Math.min(0.55, defenseDownTurns * 0.18);
+      defense = Math.max(0, Math.floor(defense * (1 - reductionRate)));
+    }
+    if (effect.armorBreak) defense = Math.max(0, Math.floor(defense * 0.35));
+    return defense;
+  }
+
+  function estimateNetDamageForOnlineMove(move = null, attacker = {}, target = {}) {
+    const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, attacker || {});
+    const instant = Math.max(0, Number(dmg?.instant || 0));
+    const overTime = Math.max(0, Number(dmg?.overTime || 0));
+    const defense = estimateDefenseForOnlineMove(target, move);
+    const instantNet = instant > 0 ? Math.max(1, instant - defense) : 0;
+    return instantNet + overTime * 0.72;
+  }
+
   function pickBestMoveForOnlineEnemy(enemy, combatant, moves, availableEnergy = 0) {
     const list = (Array.isArray(moves) ? moves : []).filter((move) => Boolean(move) && !isFleeLikeMove(move));
     const affordable = list.filter((move) => BATTLE.getMoveEnergyCost(move) <= Number(availableEnergy || 0));
@@ -221,8 +244,7 @@ function createFriendOnlineUtils(deps = {}) {
     for (const move of pool) {
       const cost = BATTLE.getMoveEnergyCost(move);
       const speed = getMoveSpeedValue(move);
-      const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, enemy || {}).total || 0;
-      const net = Math.max(1, Number(dmg) - Math.max(0, Number(combatant?.defense || 0)));
+      const net = Math.max(1, Number(estimateNetDamageForOnlineMove(move, enemy, combatant)));
       const killBonus = Number(combatant?.hp || 0) <= net ? 120 : 0;
       const efficiency = Math.max(0, 4 - cost) * 2;
       const score = net + killBonus + efficiency + (speed - 10) * 0.4;
@@ -577,8 +599,7 @@ function createFriendOnlineUtils(deps = {}) {
       .map((move, idx) => {
         const cost = BATTLE.getMoveEnergyCost(move);
         const speed = getMoveSpeedValue(move);
-        const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, attacker || {}).total || 0;
-        const est = Math.max(0, Number(dmg) - Math.max(0, Number(defender?.defense || 0)));
+        const est = Math.max(0, Number(estimateNetDamageForOnlineMove(move, attacker || {}, defender || {})));
         const canUse = Number(energy || 0) >= cost;
         return `${idx + 1}. ${move.name} | 💥${format1(est)} | ⚡${cost} | 🚀${format1(speed)}${canUse ? '' : '（能量不足）'}`;
       })
@@ -602,8 +623,7 @@ function createFriendOnlineUtils(deps = {}) {
       .map((move) => {
         const cost = BATTLE.getMoveEnergyCost(move);
         const speed = getMoveSpeedValue(move);
-        const dmg = BATTLE.calculatePlayerMoveDamage(move, {}, attacker || {}).total || 0;
-        const est = Math.max(0, Number(dmg) - Math.max(0, Number(defender?.defense || 0)));
+        const est = Math.max(0, Number(estimateNetDamageForOnlineMove(move, attacker || {}, defender || {})));
         const canUse = Number(energy || 0) >= cost;
         const effectStr = describeMoveEffects(move);
         return `⚔️ ${move.name} | ${format1(est)} dmg | ⚡${cost} | 🚀速度${format1(speed)} | ${canUse ? '可用' : '能量不足'} | ${effectStr || '無'}`;

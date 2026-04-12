@@ -158,7 +158,7 @@ const MAIN_STORY = require('./modules/content/story/main-story');
 const ECON = require('./modules/systems/market/economy-system');
 const MEMORY_INDEX = require('./modules/systems/data/memory-index');
 const ISLAND_STORY = require('./modules/content/story/island-story');
-const { startWorldBackupScheduler, runWorldBackup, getBackupDebugStatus } = require('./modules/systems/data/world-backup');
+const { startWorldBackupScheduler, runWorldBackup, runWorldDataPull, getBackupDebugStatus } = require('./modules/systems/data/world-backup');
 const {
   ISLAND_MAP_TEXT,
   buildIslandMapAnsi,
@@ -622,6 +622,7 @@ const BATTLE_RUNTIME_DOMAIN = initBattleRuntimeDomain({
   PET_MOVE_LOADOUT_LIMIT,
   isFleeLikeMove: (...args) => isFleeLikeMove(...args),
   finalizeFriendDuel: (...args) => finalizeFriendDuel(...args),
+  abortFriendDuel: (...args) => abortFriendDuel(...args),
   publishBattleWorldEvent: (...args) => publishBattleWorldEvent(...args),
   queuePendingStoryTrigger: (...args) => queuePendingStoryTrigger(...args),
   rememberPlayer: (...args) => rememberPlayer(...args),
@@ -1064,6 +1065,7 @@ const ADMIN_RUNTIME_SYSTEMS = initAdminRuntimeSystems({
   releaseStoryLock: (...args) => releaseStoryLock(...args),
   clearStoryLocks: () => STORY_GEN_LOCKS.clear(),
   runWorldBackup: (...args) => runWorldBackup(...args),
+  runWorldDataPull: (...args) => runWorldDataPull(...args),
   getBackupDebugStatus: (...args) => getBackupDebugStatus(...args),
   getMarketTypeLabel,
   rememberPlayer,
@@ -1119,6 +1121,7 @@ const {
   handleResetWorld,
   handleBackupWorld,
   handleBackupCheck,
+  handlePullWorldData,
   handleWarStatus,
   registerSlashCommandListener
 } = ADMIN_RUNTIME_SYSTEMS;
@@ -1398,7 +1401,8 @@ const {
   showFriendManualModePicker,
   buildFriendDuelSnapshot,
   restoreFriendDuelSnapshot,
-  finalizeFriendDuel
+  finalizeFriendDuel,
+  abortFriendDuel
 } = GAME_FEATURE_SYSTEMS;
 ({
   ensureStarterRewardStateCore,
@@ -1503,6 +1507,7 @@ registerRuntimeHandlers(CLIENT, {
   handleResetWorld,
   handleBackupWorld,
   handleBackupCheck,
+  handlePullWorldData,
   interactionDeps: INTERACTION_DISPATCHER_DEPS
 });
 

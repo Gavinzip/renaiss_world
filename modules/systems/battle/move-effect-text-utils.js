@@ -27,7 +27,7 @@ function createMoveEffectTextUtils(deps = {}) {
     if (effect.confuse) notes.push(`混亂${effect.confuse}回（命中約${getRate('confuse') || '?'}）`);
     if (effect.blind) notes.push(`致盲${effect.blind}回（命中約${getRate('blind') || '?'}）`);
     if (effect.missNext) notes.push(`使對手下次攻擊落空（命中約${getRate('missNext') || '?'})`);
-    if (effect.defenseDown || effect.defDown) notes.push(`降防${effect.defenseDown || effect.defDown}回（防禦約-30%）`);
+    if (effect.defenseDown || effect.defDown) notes.push(`降防${effect.defenseDown || effect.defDown}回（對高防目標更有效）`);
     if (effect.shield) notes.push(`護盾${effect.shield}回（每次受擊減傷）`);
     if (effect.dodge) notes.push(`閃避${effect.dodge}回（約45%躲招）`);
     if (effect.reflect) notes.push(`反射${effect.reflect}回（回彈35%）`);
@@ -37,8 +37,8 @@ function createMoveEffectTextUtils(deps = {}) {
     if (effect.drain) notes.push(`汲取回復（上限${effect.drain}）`);
     if (effect.selfDamage) notes.push(`自損${effect.selfDamage}`);
     if (effect.splash) notes.push('範圍衝擊（本擊+20%）');
-    if (effect.armorBreak) notes.push('破甲（大幅降低對方防禦）');
-    if (effect.ignoreResistance) notes.push('無視防禦');
+    if (effect.armorBreak) notes.push('破甲（大幅削減目標防禦）');
+    if (effect.ignoreResistance) notes.push('無視防禦（直接穿透防禦）');
     if (effect.spreadPoison) notes.push('擴散毒化（附加中毒）');
     if (effect.debuff === 'all') notes.push('全體弱化（緩速+降防+致盲）');
     if (effect.summon) notes.push(`幻像干擾${effect.summon}回（失手率上升）`);

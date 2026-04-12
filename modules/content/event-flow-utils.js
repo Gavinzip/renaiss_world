@@ -95,6 +95,11 @@ function createEventFlowUtils(deps = {}) {
     return { revived: false, changed: false, remainingTurns: 0 };
   }
 
+  function rollByChance(chance = 0) {
+    const safeChance = Math.max(0, Math.min(0.99, Number(chance || 0)));
+    return Math.random() < safeChance;
+  }
+
   async function maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice) {
     if (!player || !event || !result || result.success === false || !ECON) return null;
     const text = [
@@ -114,39 +119,59 @@ function createEventFlowUtils(deps = {}) {
     const investigateHint = /追查|線索|來源|流向|訪談|口供|追蹤|觀察|比對|複核|鑑識|查驗/.test(text);
     const appraisalHint = /鑑價|鑑定|真偽|攤位|商人|低價|可疑貨|贗品|封存艙|鑑價品|貨樣/.test(text);
     const plunderHint = /搶|搶奪|強奪|奪取|打倒|擊敗|搜刮|劫走|逼問|先發制人/.test(text);
+    const storageHeistHint = /(封存[艙舱倉藏函]).{0,16}(搶|奪|撬開|撬开|打開|打开|開艙|开舱|私吞|佔為己有|占为己有)|((搶|奪|撬開|撬开|打開|打开|開艙|开舱|私吞|佔為己有|占为己有).{0,16}封存[艙舱倉藏函])/u.test(text);
+    const highRewardHint = /高回報|高回报|戰利品|战利品|寶物|宝物|私吞|佔為己有|占为己有|撬開|撬开|開艙|开舱/.test(text);
+    const dropRateBoost = highRewardHint ? 1.22 : 1.0;
 
     if (action === 'forage' || herbHint) {
-      if (Math.random() < (action === 'forage' ? 0.92 : 0.68)) {
+      const chance = (action === 'forage' ? 0.96 : 0.82) * dropRateBoost;
+      if (rollByChance(chance)) {
         return ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' });
       }
     }
     if (action === 'hunt' || huntHint) {
-      if (Math.random() < (action === 'hunt' ? 0.9 : 0.66)) {
+      const chance = (action === 'hunt' ? 0.95 : 0.82) * dropRateBoost;
+      if (rollByChance(chance)) {
         const animalName = result?.item || event?.animal?.name || '獵物';
         return ECON.createHuntLoot(animalName, location, luck, { lang: player?.language || 'zh-TW' });
       }
     }
     if (action === 'treasure' || treasureHint) {
-      if (Math.random() < (action === 'treasure' ? 0.78 : 0.45)) {
+      const chance = (action === 'treasure' ? 0.88 : 0.62) * dropRateBoost;
+      if (rollByChance(chance)) {
+        return ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' });
+      }
+    }
+    if ((action === 'fight' || action === 'location_story_battle' || plunderHint) && storageHeistHint) {
+      // 封存艙強奪線：幾乎必掉「可交易戰利品」，讓高風險行動有明顯收益感。
+      if (rollByChance(0.95)) {
         return ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' });
       }
     }
     if (action === 'fight' || action === 'location_story_battle' || plunderHint) {
-      if (Math.random() < 0.58) {
-        return Math.random() < 0.62
+      const chance = 0.82 * dropRateBoost;
+      if (rollByChance(chance)) {
+        return Math.random() < 0.68
           ? ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' })
           : ECON.createHuntLoot(result?.item || event?.name || '可疑貨樣', location, luck, { lang: player?.language || 'zh-TW' });
       }
     }
-    if ((action === 'main_story' || action === 'social' || action === 'trade' || investigateHint || appraisalHint) && Math.random() < 0.42) {
-      return Math.random() < 0.55
+    if (action === 'main_story' || action === 'social' || action === 'trade' || investigateHint || appraisalHint) {
+      const baseChance = appraisalHint ? 0.72 : 0.62;
+      const chance = baseChance * dropRateBoost;
+      if (rollByChance(chance)) {
+        return Math.random() < 0.62
+          ? ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' })
+          : ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' });
+      }
+    }
+    if (action === 'explore') {
+      const chance = 0.52 * dropRateBoost;
+      if (rollByChance(chance)) {
+        return Math.random() < 0.72
         ? ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' })
         : ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' });
-    }
-    if (action === 'explore' && Math.random() < 0.36) {
-      return Math.random() < 0.7
-        ? ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' })
-        : ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' });
+      }
     }
     return null;
   }

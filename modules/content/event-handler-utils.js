@@ -35,6 +35,7 @@ function createEventHandlerUtils(deps = {}) {
     buildPortalUsageGuide,
     openShopSession = () => {},
     getMarketTypeLabel = () => '商店',
+    buildQuickShopNarrativeNotice = () => '',
     showWorldShopScene = async () => {},
     canEnterLocation,
     syncLocationArcLocation,
@@ -302,12 +303,15 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     });
     flushMemories();
     CORE.savePlayer(player);
+    const baseNotice = String(buildQuickShopNarrativeNotice(player, marketType) || '').trim();
+    const scratchHint = '🧭 刮刮樂已移至商店內操作，請點「🎟️ 刮刮樂(100)」。';
+    const intro = [baseNotice, scratchHint].filter(Boolean).join('\n');
     try {
       await showWorldShopScene(
         interaction,
         user,
         marketType,
-        '🧭 刮刮樂已移至商店內操作，請點「🎟️ 刮刮樂(100)」。'
+        intro
       );
     } catch (shopErr) {
       console.error('[商店] 刮刮樂入口開啟失敗:', shopErr?.message || shopErr);
@@ -331,9 +335,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     flushMemories();
     CORE.savePlayer(player);
 
-    const intro = marketType === 'digital'
+    const baseNotice = String(buildQuickShopNarrativeNotice(player, marketType) || '').trim();
+    const flavorLine = marketType === 'digital'
       ? '你推門進入店內，老闆笑著招手，語氣親切卻帶著一絲試探。'
       : '你走進店內，牆上掛著完整估值表，老闆示意你先看規則。';
+    const intro = [baseNotice, flavorLine].filter(Boolean).join('\n');
     try {
       await showWorldShopScene(interaction, user, marketType, intro);
     } catch (shopErr) {

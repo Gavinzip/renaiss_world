@@ -39,6 +39,7 @@ function initAdminRuntimeSystems(deps = {}) {
     releaseStoryLock,
     clearStoryLocks,
     runWorldBackup,
+    runWorldDataPull,
     getBackupDebugStatus,
     getMarketTypeLabel,
     rememberPlayer,
@@ -166,6 +167,7 @@ function initAdminRuntimeSystems(deps = {}) {
     clearWorldRuntimeData,
     CORE,
     runWorldBackup,
+    runWorldDataPull,
     getBackupDebugStatus,
     STORAGE,
     EmbedBuilder
@@ -176,6 +178,7 @@ function initAdminRuntimeSystems(deps = {}) {
     handleResetWorld,
     handleBackupWorld,
     handleBackupCheck,
+    handlePullWorldData,
     handleWarStatus
   } = SLASH_ADMIN_UTILS;
 
@@ -225,6 +228,7 @@ function initAdminRuntimeSystems(deps = {}) {
     handleResetWorld,
     handleBackupWorld,
     handleBackupCheck,
+    handlePullWorldData,
     handleWarStatus,
     registerSlashCommandListener
   };

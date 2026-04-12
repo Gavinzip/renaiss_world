@@ -17,11 +17,11 @@ function createEntryGateUtils(deps = {}) {
   } = deps;
 
   const LOCATION_ENTRY_BASELINE_CURVE = Object.freeze({
-    1: { hp: 56, attack: 10, defense: 3 },
-    2: { hp: 72, attack: 12, defense: 4 },
-    3: { hp: 94, attack: 15, defense: 5 },
-    4: { hp: 122, attack: 18, defense: 7 },
-    5: { hp: 154, attack: 22, defense: 9 }
+    1: { hp: 56, attack: 10, defense: 0 },
+    2: { hp: 72, attack: 12, defense: 0 },
+    3: { hp: 94, attack: 15, defense: 0 },
+    4: { hp: 122, attack: 18, defense: 0 },
+    5: { hp: 154, attack: 22, defense: 0 }
   });
 
   function getPlayerProgressDifficultyTier(player) {
@@ -76,7 +76,6 @@ function createEntryGateUtils(deps = {}) {
 
     const score =
       Number(combatant.attack || 0) * 2.4 +
-      Number(combatant.defense || 0) * 1.6 +
       Number(combatant.maxHp || combatant.hp || 0) * 0.45 +
       avgMovePressure * 1.3 +
       level * 4;
@@ -140,15 +139,15 @@ function createEntryGateUtils(deps = {}) {
     const name = `D${difficulty} 守門者`;
     const scale =
       gap <= 0
-        ? { hp: 1.0, attack: 1.0, defense: 1.0 }
+        ? { hp: 1.0, attack: 1.0 }
         : gap === 1
-          ? { hp: 1.1, attack: 1.1, defense: 1.1 }
+          ? { hp: 1.1, attack: 1.1 }
           : gap === 2
-            ? { hp: 1.25, attack: 1.25, defense: 1.25 }
-            : { hp: 1.4, attack: 1.4, defense: 1.35 };
+            ? { hp: 1.25, attack: 1.25 }
+            : { hp: 1.4, attack: 1.4 };
     const hp = Math.max(1, Math.floor(Number(curve.hp || 140) * scale.hp));
     const attack = Math.max(1, Math.floor(Number(curve.attack || 24) * scale.attack));
-    const defense = Math.max(0, Math.floor(Number(curve.defense || 10) * scale.defense));
+    const defense = 0;
     const levelRef = Math.max(1, Number(player?.level || 1) + difficulty * 2);
     return {
       id: `entry_gate_d${difficulty}`,

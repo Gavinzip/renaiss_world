@@ -594,6 +594,8 @@ async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', locati
       `用途：故事中有人攜帶封存艙，玩家起心動念要直接搶奪。\n` +
       `限制：必須明確是針對「對方手上的封存艙」採取行動；語句要貼合 ${location || '當前場景'}。\n` +
       '限制：封存艙是便攜小型艙體（約小背包大小），禁止寫成巨大艙體。\n' +
+      '限制：choice 必須同時包含「搶奪封存艙」+「現場打開/撬開檢視」+「把內容佔為己有/私吞」。\n' +
+      '限制：不得使用模板句型（例如固定開頭「盯準對方手上的封存艙...」）。\n' +
       '限制：這是高風險衝突，choice 句尾必須附上「（會進入戰鬥）」。\n' +
       '固定標籤：tag 必須是 [⚔️會戰鬥]'
   }[action];
@@ -888,10 +890,10 @@ async function injectStorageHeistChoice(choices, playerLang = 'zh-TW', location 
   const hasSuspiciousTradeCue = Boolean(storySignals?.suspiciousTrade);
   if (!hasCarrierCue && !hasSuspiciousTradeCue) return base.slice(0, CHOICE_OUTPUT_COUNT);
   const hasThreatCueSignal = Boolean(storySignals?.threat);
-  const chance = hasCarrierCue
-    ? (hasThreatCueSignal ? 0.98 : 0.9)
-    : (hasThreatCueSignal ? 0.86 : 0.72);
-  if (Math.random() > chance) return base.slice(0, CHOICE_OUTPUT_COUNT);
+  if (!hasCarrierCue) {
+    const chance = hasThreatCueSignal ? 0.9 : 0.78;
+    if (Math.random() > chance) return base.slice(0, CHOICE_OUTPUT_COUNT);
+  }
 
   let heistChoice = null;
   try {
@@ -901,26 +903,15 @@ async function injectStorageHeistChoice(choices, playerLang = 'zh-TW', location 
       location
     });
   } catch {
-    heistChoice = normalizeChoiceByLanguage({
-      action: 'storage_heist',
-      name: '直接奪取封存艙',
-      choice: `盯準對方手上的封存艙，強行貼身奪取後立刻撤離（會進入戰鬥）`,
-      desc: '高風險硬搶，可能引來附近敵對勢力圍堵',
-      tag: '[⚔️會戰鬥]'
-    }, playerLang);
+    return base.slice(0, CHOICE_OUTPUT_COUNT);
+  }
+  if (!heistChoice || !heistChoice.name || !heistChoice.choice || !heistChoice.desc || !heistChoice.tag) {
+    return base.slice(0, CHOICE_OUTPUT_COUNT);
   }
 
   const normalizedChoice = normalizeChoiceByLanguage({
     ...heistChoice,
-    action: 'fight',
-    tag: '[⚔️會戰鬥]',
-    choice: (() => {
-      const baseChoiceText = String(heistChoice?.choice || '').trim() || '盯準對方手上的封存艙，直接近身強奪';
-      return /[（(]\s*會進入戰鬥\s*[)）]/u.test(baseChoiceText)
-        ? baseChoiceText
-        : `${baseChoiceText}（會進入戰鬥）`;
-    })(),
-    desc: String(heistChoice?.desc || '高風險：你試圖奪走對方手上的封存艙，附近勢力可能立刻介入。').trim()
+    action: 'fight'
   }, playerLang);
 
   const reservedActions = new Set([
@@ -2309,6 +2300,20 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     : '';
   const storyAnchors = extractStoryAnchors(fullStoryText, npcs, location, sourceChoiceText);
   const anchorText = storyAnchors.length > 0 ? storyAnchors.join('、') : '（無）';
+  const choiceStorySignals = buildStorySystemSignals(fullStoryText);
+  const needsStorageHeistRule = Boolean(
+    choiceStorySignals?.storageCarrier ||
+    choiceStorySignals?.storageVault ||
+    /(貨樣|货样|戰利品|战利品|封存[艙舱倉藏函]|storage pod|sealed cache pod)/iu.test(fullStoryText)
+  );
+  const storageHeistPromptRule = needsStorageHeistRule
+    ? [
+      '20. 本段已出現封存艙/貨樣線索：至少 1 個選項要提供「搶奪封存艙→現場開艙檢視→把寶物佔為己有」高風險路線（可進入戰鬥），且文句需貼合當下人物與場景，不可模板化',
+      '21. 封存艙一律視為便攜小型艙體（約小背包大小），不得描寫成人體尺寸或大型艙體',
+      '21a. 至少 1 個選項要明確帶出可獲得實體物件或可交易物（例如奪取、開艙、驗貨、帶走）'
+    ].join('\n')
+    : '';
+  const pendingConflictRuleNumber = needsStorageHeistRule ? 22 : 20;
   const bridgeTail = [storyFocus.closing, storyFocus.tail]
     .map((text) => String(text || '').trim())
     .filter(Boolean)
@@ -2397,9 +2402,8 @@ ${anchorText}
 17. ${cadenceRequirement}
 18. ${wantedRequirement}
 19. 若通緝熱度偏高，5 個選項中最多只允許 1 個「敵對主動逼近/立即戰鬥」類，其餘需維持調查、移動、社交或交易分散度
-20. 若故事已明確提到有人手持/背著封存艙，可允許其中 1 個選項走「直接搶奪封存艙」高風險路線（可進入戰鬥），但文句必須貼合當下人物與場景，不可模板化
-21. 封存艙一律視為便攜小型艙體（約小背包大小），不得描寫成人體尺寸或大型艙體
-${pendingConflictRule ? `22. ${pendingConflictRule}` : ''}
+${storageHeistPromptRule ? `${storageHeistPromptRule}` : ''}
+${pendingConflictRule ? `${pendingConflictRuleNumber}. ${pendingConflictRule}` : ''}
 
 風險標籤可選（根據劇情選擇適合的）：
 - [🔥高風險] - 可能會受傷或失敗

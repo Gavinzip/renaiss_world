@@ -92,6 +92,18 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
+  },
+  {
+    name: 'pullworlddata',
+    description: '從遠端備份 Git 拉最新資料並覆蓋伺服器資料（需密碼）',
+    options: [
+      {
+        type: 3,
+        name: 'password',
+        description: '安全密碼',
+        required: true
+      }
+    ]
   }
 ];
 

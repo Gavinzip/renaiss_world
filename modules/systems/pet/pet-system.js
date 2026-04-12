@@ -138,9 +138,9 @@ const LEGACY_SPEED_MAP = Object.freeze({
   '3': 20
 });
 const TIER_POWER_PROFILE = Object.freeze({
-  1: { target: 13, min: 4, max: 18, supportMax: 10, speedBase: 15, speedMin: 12, speedMax: 20 },
-  2: { target: 22, min: 10, max: 30, supportMax: 15, speedBase: 11, speedMin: 8, speedMax: 16 },
-  3: { target: 32, min: 18, max: 44, supportMax: 20, speedBase: 8, speedMin: 3, speedMax: 13 }
+  1: { target: 14, min: 4, max: 20, supportMax: 10, speedBase: 15, speedMin: 12, speedMax: 20 },
+  2: { target: 24, min: 11, max: 33, supportMax: 16, speedBase: 11, speedMin: 8, speedMax: 16 },
+  3: { target: 35, min: 20, max: 49, supportMax: 22, speedBase: 8, speedMin: 3, speedMax: 13 }
 });
 
 function clampInt(value, min, max, fallback = min) {
@@ -232,9 +232,10 @@ function getMoveEffectStats(move = {}) {
     (stats.spreadPoison ? 3.2 : 0) +
     hardCcTurns * 6.2 +
     softCcTurns * 3.8 +
-    (stats.armorBreak ? 4.4 : 0) +
-    stats.defenseDown * 3.2 +
-    (stats.ignoreResistance ? 5.0 : 0) +
+    // 未來裝備防禦（約 1~10）預留權重：保留破甲/降防/無視防禦價值。
+    (stats.armorBreak ? 2.4 : 0) +
+    stats.defenseDown * 1.6 +
+    (stats.ignoreResistance ? 2.8 : 0) +
     (stats.splash ? 3.6 : 0) +
     stats.summon * 3.0 +
     (stats.debuffAll ? 6.0 : 0) +
@@ -521,9 +522,66 @@ function enforceControlMoveTier(pool = []) {
   }
 }
 
+function enforceBurstMoveTier(pool = []) {
+  for (const move of pool) {
+    if (!move || typeof move !== 'object') continue;
+    const tier = clampInt(move.tier || 1, 1, 3, 1);
+    const baseDamage = Math.max(0, Number(move.baseDamage || 0));
+    const stats = getMoveEffectStats(move);
+    const hasOffenseUtility =
+      stats.burn > 0 ||
+      stats.poison > 0 ||
+      stats.trap > 0 ||
+      stats.bleed > 0 ||
+      stats.dot > 0 ||
+      stats.hardCcTurns > 0 ||
+      stats.softCcTurns > 0 ||
+      stats.armorBreak ||
+      stats.ignoreResistance ||
+      stats.defenseDown > 0;
+    if (tier === 1 && hasOffenseUtility && baseDamage >= 16) {
+      move.tier = 2;
+    }
+  }
+}
+
+function enforceCompositeTierBand(pool = []) {
+  for (const move of pool) {
+    if (!move || typeof move !== 'object') continue;
+    const tier = clampInt(move.tier || 1, 1, 3, 1);
+    const stats = getMoveEffectStats(move);
+    const supportOnly = isSupportOnlyMove(move);
+    const score = calculateMoveCombatPower(move);
+
+    // 以綜合戰力（傷害+控制+持續傷+防禦交互+生存）做階級邊界，避免 T1 實戰效益倒掛。
+    if (tier === 1) {
+      const promoteByPower = score >= 23;
+      const promoteBySupportUtility = supportOnly && Number(stats.utility || 0) >= 11;
+      if (promoteByPower || promoteBySupportUtility) {
+        move.tier = 2;
+        continue;
+      }
+    }
+
+    if (tier === 2) {
+      if (score >= 37) {
+        move.tier = 3;
+        continue;
+      }
+      // T2 若極度弱效且無關鍵控場，允許回落 T1，避免稀有但實戰不如普通。
+      const hasKeyControl = stats.hardCcTurns > 0 || stats.softCcTurns >= 2;
+      if (score < 18 && !hasKeyControl) {
+        move.tier = 1;
+      }
+    }
+  }
+}
+
 // 控制型技能不應落在普通階，避免前期連控失衡
 enforceControlMoveTier(POSITIVE_MOVES);
 enforceControlMoveTier(NEGATIVE_MOVES);
+enforceBurstMoveTier(POSITIVE_MOVES);
+enforceBurstMoveTier(NEGATIVE_MOVES);
 rebalanceMoveDamage(POSITIVE_MOVES);
 rebalanceMoveDamage(NEGATIVE_MOVES);
 rebalanceMoveDamageByElement([...POSITIVE_MOVES, ...NEGATIVE_MOVES]);
@@ -533,7 +591,13 @@ enforceMoveSpeed(POSITIVE_MOVES);
 enforceMoveSpeed(NEGATIVE_MOVES);
 rebalanceCoreElementParity(POSITIVE_MOVES);
 rebalanceCoreElementTierScale(POSITIVE_MOVES);
+enforceCompositeTierBand(POSITIVE_MOVES);
+enforceCompositeTierBand(NEGATIVE_MOVES);
+rebalanceMoveDamage(POSITIVE_MOVES);
+rebalanceMoveDamage(NEGATIVE_MOVES);
+rebalanceMoveDamageByElement([...POSITIVE_MOVES, ...NEGATIVE_MOVES]);
 enforceMoveSpeed(POSITIVE_MOVES);
+enforceMoveSpeed(NEGATIVE_MOVES);
 
 // ============== 初始技能 ==============
 const INITIAL_MOVES = [
@@ -694,6 +758,11 @@ function normalizePetMoves(pet) {
   const normalizedElement = normalizePetElement(pet.type || pet.element);
   pet.type = normalizedElement;
   pet.element = normalizedElement;
+  const normalizedDefense = 0;
+  if (Number(pet.defense || 0) !== normalizedDefense) {
+    pet.defense = normalizedDefense;
+    changed = true;
+  }
   const allowedIds = new Set([
     ...getMovesByElement(normalizedElement).map((m) => String(m?.id || '').trim()).filter(Boolean),
     ...INITIAL_MOVES.map((m) => String(m?.id || '').trim()).filter(Boolean)
@@ -756,14 +825,11 @@ function ensureAutoEquipOnLearn(pet, learnedMoveId) {
 }
 
 // ============== 計算招式總傷害（用於顯示）==============
-function calculateMoveDamage(move, level, attack) {
+function calculateMoveDamage(move, _level, attack) {
   let damage = move.baseDamage || 0;
-  
-  // 等級加成
-  damage += level * 2;
-  
+
   // 攻擊加成
-  damage += Math.floor(attack * 0.5);
+  damage += Math.floor(attack * 0.2);
   
   // 計算持續效果總傷
   let totalEffectDamage = 0;
@@ -803,7 +869,7 @@ function createPetEgg(playerId, type) {
     hp: 100,
     maxHp: 100,
     attack: 20,
-    defense: 15,
+    defense: 0,
     speed: 20,
     moves: [],
     maxMoves: 10,

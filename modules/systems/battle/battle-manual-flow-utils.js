@@ -40,6 +40,7 @@ function createBattleManualFlowUtils(deps = {}) {
     trySwitchFriendDuelEnemy,
     trySwitchFriendDuelPlayerPet,
     finalizeFriendDuel,
+    abortFriendDuel,
     finalizeMentorSparVictory,
     finalizeMentorSparDefeat,
     showTrueGameOver,
@@ -68,6 +69,16 @@ async function renderManualBattle(interaction, player, pet, roundMessage = '', o
     notice: options?.notice || ''
   });
   await sendBattleMessage(interaction, payload, mode);
+}
+
+function appendWinnerLine(detailText = '', winnerName = '', loserName = '') {
+  const body = String(detailText || '').trim();
+  const winner = String(winnerName || '').trim() || '你';
+  const loser = String(loserName || '').trim();
+  const winnerLine = loser
+    ? `🏁 勝者：${winner}（對手：${loser}）`
+    : `🏁 勝者：${winner}`;
+  return body ? `${body}\n\n${winnerLine}` : winnerLine;
 }
 
 async function handleBattleSwitchOpen(interaction, user) {
@@ -428,7 +439,13 @@ async function startAutoBattle(interaction, user) {
     const embed = new EmbedBuilder()
       .setTitle('🤖 AI戰鬥勝利！')
       .setColor(0x00cc66)
-      .setDescription(`**AI 已完成自動作戰**\n\n${buildAIBattleStory(rounds, combatant, enemy, finalResult)}`)
+      .setDescription(
+        appendWinnerLine(
+          `**AI 已完成自動作戰**\n\n${buildAIBattleStory(rounds, combatant, enemy, finalResult)}`,
+          player?.name || '你',
+          enemy?.name || '敵人'
+        )
+      )
       .addFields(
         { name: '💰 獎勵', value: `${finalResult.gold} Rns 代幣`, inline: true },
         { name: '🩸 剩餘 HP', value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
@@ -675,7 +692,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     const embed = new EmbedBuilder()
       .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
-      .setDescription(playerPhase.message)
+      .setDescription(appendWinnerLine(playerPhase.message, player?.name || '你', enemy?.name || '敵人'))
       .addFields(
         { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
@@ -857,7 +874,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     const embed = new EmbedBuilder()
       .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
-      .setDescription(combinedMessage)
+      .setDescription(appendWinnerLine(combinedMessage, player?.name || '你', enemy?.name || '敵人'))
       .addFields(
         { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
@@ -1053,7 +1070,13 @@ async function handleBattleWait(interaction, user) {
     const embed = new EmbedBuilder()
       .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
-      .setDescription(`${playerPhase.message}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
+      .setDescription(
+        appendWinnerLine(
+          `${playerPhase.message}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`,
+          player?.name || '你',
+          enemy?.name || '敵人'
+        )
+      )
       .addFields(
         { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
@@ -1236,7 +1259,13 @@ async function handleBattleWait(interaction, user) {
     const embed = new EmbedBuilder()
       .setTitle(t('victory', uiLang))
       .setColor(0x00ff00)
-      .setDescription(`${combinedMessage}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`)
+      .setDescription(
+        appendWinnerLine(
+          `${combinedMessage}${kingProgressLine ? `\n\n${kingProgressLine}` : ''}`,
+          player?.name || '你',
+          enemy?.name || '敵人'
+        )
+      )
       .addFields(
         { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
@@ -1343,6 +1372,19 @@ async function handleFlee(interaction, user, attemptNum) {
   }
 
   if (result.success) {
+    if (player?.battleState?.friendDuel) {
+      const duel = typeof abortFriendDuel === 'function'
+        ? abortFriendDuel(player, pet, { combatant, reason: result.message })
+        : finalizeFriendDuel(player, pet, combatant, result.message, false);
+      const embed = new EmbedBuilder()
+        .setTitle('🤝 已退出好友友誼戰')
+        .setColor(0x8b5cf6)
+        .setDescription(`${String(result.message || '').trim()}\n\n${duel.summaryLine}`);
+      const row = buildFriendDuelResultRow();
+      await interaction.update({ embeds: [embed], components: [row] });
+      return;
+    }
+
     const battleStateSnapshot = player?.battleState || {};
     const sourceChoice = String(battleStateSnapshot?.sourceChoice || '').trim();
     const preBattleStory = String(battleStateSnapshot?.preBattleStory || player?.currentStory || '').trim();
@@ -1380,7 +1422,7 @@ async function handleFlee(interaction, user, attemptNum) {
     const embed = new EmbedBuilder()
       .setTitle('🏃 逃跑成功！')
       .setColor(0x00ff00)
-      .setDescription(result.message);
+      .setDescription(appendWinnerLine(result.message, `${player?.name || '你'}（成功脫戰）`, enemy?.name || '敵人'));
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)

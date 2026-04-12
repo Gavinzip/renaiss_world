@@ -74,10 +74,10 @@ const KING_MOVE_IDS = Object.freeze({
   Hom: ['ultimate_dark', 'silver_snake', 'hell_fire', 'iron_thorn', 'arhat_kick']
 });
 const KING_STATS = Object.freeze({
-  Nemo: { hp: 320, attack: 68, defense: 30, speed: 24, reward: { gold: [260, 420] } },
-  Wolf: { hp: 340, attack: 74, defense: 28, speed: 30, reward: { gold: [300, 460] } },
-  Adaloc: { hp: 360, attack: 72, defense: 34, speed: 22, reward: { gold: [340, 500] } },
-  Hom: { hp: 400, attack: 78, defense: 36, speed: 20, reward: { gold: [380, 560] } }
+  Nemo: { hp: 560, attack: 96, defense: 8, speed: 26, reward: { gold: [360, 560] } },
+  Wolf: { hp: 590, attack: 102, defense: 9, speed: 31, reward: { gold: [420, 620] } },
+  Adaloc: { hp: 620, attack: 100, defense: 10, speed: 24, reward: { gold: [460, 680] } },
+  Hom: { hp: 680, attack: 108, defense: 11, speed: 22, reward: { gold: [520, 760] } }
 });
 const ENEMY_MOVE_MAX = 6;
 
@@ -166,7 +166,12 @@ function estimateEffectUtilityScore(effect = {}) {
     Number(effect.bleed || 0) * 2.0 +
     Number(effect.dot || 0) * 1.4
   );
-  const offense = (effect.armorBreak ? 3.4 : 0) + (effect.ignoreResistance ? 3.6 : 0) + (effect.splash ? 2.6 : 0);
+  // 預留防禦裝備上線後的對局價值：破甲/降防/無視防禦不應被視為零收益。
+  const offense =
+    (effect.splash ? 2.6 : 0) +
+    (effect.armorBreak ? 1.8 : 0) +
+    Number(effect.defenseDown || effect.defDown || 0) * 1.2 +
+    (effect.ignoreResistance ? 2.2 : 0);
   const penalty = Number(effect.selfDamage || 0) * 0.28;
   return heal + shield + cleanse + reflect + dodge + thorns + hardCc + softCc + dot + offense - penalty;
 }
@@ -371,7 +376,7 @@ function getEnemyMovePlan(enemyName = '', level = 1, options = {}) {
   const villain = options.villain === true || isVillainEnemyName(enemyName);
 
   if (king) {
-    return { king: true, villain: true, minTier: 3, targetCount: 5, powerScale: 1.30 };
+    return { king: true, villain: true, minTier: 3, targetCount: 6, powerScale: 1.38 };
   }
   if (villain) {
     let minTier = 2;
@@ -473,7 +478,7 @@ function createDigitalKingEnemy(king = '') {
     hp: Number(stats.hp || 320),
     maxHp: Number(stats.hp || 320),
     attack: Number(stats.attack || 68),
-    defense: Number(stats.defense || 30),
+    defense: Number(stats.defense || 0),
     speed: Number(stats.speed || 24),
     moves: buildEnemyMoveLoadout(name, 30, [], { villain: true, attack: Number(stats.attack || 68) }),
     reward: { ...(stats.reward || { gold: [260, 420] }) },
@@ -489,7 +494,7 @@ function createEnemy(type, level = 1) {
       hp: 50 + level * 10,
       maxHp: 50 + level * 10,
       attack: 15 + level * 3,
-      defense: 5 + level * 2,
+      defense: 0,
       speed: 12,
       moves: ['抓撓'],
       reward: { gold: [20 + level * 5, 40 + level * 10] }
@@ -499,7 +504,7 @@ function createEnemy(type, level = 1) {
       hp: 80 + level * 15,
       maxHp: 80 + level * 15,
       attack: 25 + level * 5,
-      defense: 10 + level * 3,
+      defense: 0,
       speed: 18,
       moves: ['撕咬', '嚎叫'],
       reward: { gold: [40 + level * 10, 80 + level * 20] }
@@ -509,7 +514,7 @@ function createEnemy(type, level = 1) {
       hp: 120 + level * 20,
       maxHp: 120 + level * 20,
       attack: 35 + level * 7,
-      defense: 15 + level * 4,
+      defense: 0,
       speed: 14,
       moves: ['火球', '冰霜'],
       reward: { gold: [60 + level * 15, 100 + level * 30] }
@@ -519,7 +524,7 @@ function createEnemy(type, level = 1) {
       hp: 150 + level * 25,
       maxHp: 150 + level * 25,
       attack: 40 + level * 8,
-      defense: 20 + level * 5,
+      defense: 0,
       speed: 8,
       moves: ['抓傷', '瘟疫'],
       reward: { gold: [80 + level * 20, 120 + level * 40] }
@@ -529,7 +534,7 @@ function createEnemy(type, level = 1) {
       hp: 200 + level * 30,
       maxHp: 200 + level * 30,
       attack: 55 + level * 10,
-      defense: 25 + level * 6,
+      defense: 0,
       speed: 22,
       moves: ['龍息', '利爪', '飛行'],
       reward: { gold: [200 + level * 50, 400 + level * 100] }
@@ -557,10 +562,10 @@ function createEnemy(type, level = 1) {
 const EPIC_BOSSES = {
   '日冕巨蜥': {
     name: '🦎 日冕巨蜥',
-    hp: 300,
-    maxHp: 300,
-    attack: 55,
-    defense: 30,
+    hp: 360,
+    maxHp: 360,
+    attack: 72,
+    defense: 6,
     speed: 25,
     moves: [
       { name: '尾脊震盪', damage: 45, effect: { stun: 1 } },
@@ -572,10 +577,10 @@ const EPIC_BOSSES = {
   },
   '虛空裂體': {
     name: '👾 虛空裂體',
-    hp: 350,
-    maxHp: 350,
-    attack: 60,
-    defense: 25,
+    hp: 430,
+    maxHp: 430,
+    attack: 80,
+    defense: 8,
     speed: 20,
     moves: [
       { name: '裂界鉤爪', damage: 40, effect: { bind: 2 } },
@@ -588,10 +593,10 @@ const EPIC_BOSSES = {
   },
   '熾羽風凰': {
     name: '🦅 熾羽風凰',
-    hp: 280,
-    maxHp: 280,
-    attack: 65,
-    defense: 20,
+    hp: 340,
+    maxHp: 340,
+    attack: 84,
+    defense: 7,
     speed: 30,
     moves: [
       { name: '熾羽旋舞', damage: 50, effect: { burn: 3 } },
@@ -603,10 +608,10 @@ const EPIC_BOSSES = {
   },
   '白噪君主': {
     name: '💀 白噪君主',
-    hp: 400,
-    maxHp: 400,
-    attack: 70,
-    defense: 35,
+    hp: 520,
+    maxHp: 520,
+    attack: 92,
+    defense: 10,
     speed: 15,
     moves: [
       { name: '骨針噴發', damage: 45, effect: { poison: 3 } },
@@ -733,10 +738,13 @@ function decideActionOrder(fighter, playerMove, enemy, enemyMove) {
 }
 
 function getEffectiveDefense(entity) {
+  const baseDefense = Math.max(0, Math.floor(Number(entity?.defense || 0)));
+  if (baseDefense <= 0) return 0;
   const status = ensureStatusState(entity);
-  let defense = Math.max(0, Number(entity?.defense || 0));
-  if (status.defenseDown > 0) defense = Math.floor(defense * 0.7);
-  return defense;
+  const defenseDownTurns = Math.max(0, Number(status?.defenseDown || 0));
+  if (defenseDownTurns <= 0) return baseDefense;
+  const reductionRate = Math.min(0.55, defenseDownTurns * 0.18);
+  return Math.max(0, Math.floor(baseDefense * (1 - reductionRate)));
 }
 
 function applyDotEffectsAtTurnStart(entity, label) {
@@ -1096,12 +1104,10 @@ function calculatePlayerMoveDamage(move, player, fighter) {
     return { instant: 0, overTime: 0, totalTurns: 0, total: 0 };
   }
 
-  const level = Number(fighter?.level || 1);
   const attack = Number(fighter?.attack || 20);
 
   let base = Number(move.baseDamage || move.damage || 0);
-  base += level * 2;
-  base += Math.floor(attack * 0.5);
+  base += Math.floor(attack * 0.2);
 
   const attackerElement = getCombatantElement(fighter, null);
   const elementScale = Number(ELEMENT_DAMAGE_BALANCE[attackerElement] || 1.0);

@@ -7,6 +7,7 @@ function createSlashAdminUtils(deps = {}) {
     clearWorldRuntimeData = () => ({}),
     CORE,
     runWorldBackup = async () => ({ ok: false, error: 'disabled' }),
+    runWorldDataPull = async () => ({ ok: false, error: 'disabled' }),
     getBackupDebugStatus = () => ({}),
     STORAGE = {},
     EmbedBuilder
@@ -197,6 +198,40 @@ function createSlashAdminUtils(deps = {}) {
     });
   }
 
+  async function handlePullWorldData(interaction, user) {
+    const password = String(interaction.options.getString('password') || '').trim();
+    if (password !== RESETDATA_PASSWORD) {
+      await interaction.reply({ content: '❌ 密碼錯誤，無法拉取遠端資料。', ephemeral: true });
+      return;
+    }
+
+    await interaction.reply({
+      content: '⏳ 正在從遠端備份 Git 拉取資料並覆蓋伺服器資料...',
+      ephemeral: true
+    });
+
+    const reason = `manual_pull:${String(user?.id || 'unknown')}`;
+    const result = await runWorldDataPull(reason);
+    if (result?.ok) {
+      await interaction.followUp({
+        content:
+          `✅ 已完成遠端資料覆蓋\n` +
+          `- 分支：${String(result.branch || 'main')}\n` +
+          `- 子目錄：${String(result.subdir || '(unknown)')}\n` +
+          `- 原因標記：${String(result.reason || reason)}\n` +
+          `- 備註：若目前有活躍流程，建議重啟機器人以確保快取狀態一致。`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    const failReason = result?.error || result?.reason || 'unknown';
+    await interaction.followUp({
+      content: `❌ 遠端資料覆蓋失敗：${failReason}`,
+      ephemeral: true
+    });
+  }
+
   function formatFactionWinnerLabel(winner) {
     if (winner === 'order') return '正派';
     if (winner === 'chaos') return 'Digital';
@@ -265,6 +300,7 @@ function createSlashAdminUtils(deps = {}) {
     handleResetWorld,
     handleBackupWorld,
     handleBackupCheck,
+    handlePullWorldData,
     handleWarStatus
   };
 }

@@ -342,9 +342,7 @@ function createFriendDuelFlow(deps = {}) {
 
     const summaryLine = `目前對 ${rivalName} 戰績：${myRecord?.wins || 0} 勝 / ${myRecord?.losses || 0} 敗`;
     player.currentStory = returnStory || player.currentStory || '';
-    if (returnChoices.length > 0) {
-      player.eventChoices = returnChoices;
-    }
+    player.eventChoices = returnChoices;
     if (player.pendingStoryTrigger) {
       clearPendingStoryTrigger(player);
     }
@@ -359,12 +357,71 @@ function createFriendDuelFlow(deps = {}) {
     };
   }
 
+  function abortFriendDuel(player, pet, options = {}) {
+    if (!player || typeof player !== 'object') {
+      return { rivalName: '好友', summaryLine: '友誼戰已中止，主線不受影響。', sourceChoice: '' };
+    }
+    const battleState = player?.battleState || {};
+    const duel = battleState?.friendDuel || {};
+    const roomId = String(duel?.online?.roomId || '').trim();
+    if (roomId) clearOnlineFriendDuelTimer(roomId);
+    const rivalName = String(duel.friendName || '好友').trim() || '好友';
+    const sourceChoice = String(battleState?.sourceChoice || '').trim();
+    const preBattleStory = String(battleState?.preBattleStory || player?.currentStory || '').trim();
+    const returnStory = String(duel.returnStory || preBattleStory || player?.currentStory || '').trim();
+    const choiceDisplayCount = readChoiceDisplayCount();
+    const returnChoices = Array.isArray(duel.returnChoices)
+      ? duel.returnChoices
+        .filter((choice) => choice && typeof choice === 'object')
+        .slice(0, choiceDisplayCount)
+        .map((choice) => ({ ...choice }))
+      : [];
+    const preState = (duel.preState && typeof duel.preState === 'object') ? duel.preState : null;
+    const combatant = options?.combatant || null;
+
+    const restoredBySnapshot = restoreFriendDuelSnapshot(player, preState, pet);
+    if (!restoredBySnapshot) {
+      if (pet && Number(pet.hp || 0) <= 0) {
+        pet.hp = 1;
+        pet.status = '正常';
+        pet.reviveAt = null;
+        pet.reviveTurnsRemaining = 0;
+        PET.savePet(pet);
+      }
+      if (combatant?.isHuman && Number(player?.stats?.生命 || 0) <= 0) {
+        player.stats.生命 = 1;
+      }
+    }
+
+    player.currentStory = returnStory || player.currentStory || '';
+    player.eventChoices = returnChoices;
+    if (player.pendingStoryTrigger) {
+      clearPendingStoryTrigger(player);
+    }
+    player.pendingFriendDuelReturn = true;
+    player.battleState = null;
+    rememberPlayer(player, {
+      type: '好友友誼戰',
+      content: `中止與 ${rivalName} 的友誼戰`,
+      outcome: String(options?.reason || '友誼戰未結算，已回到原劇情'),
+      importance: 1,
+      tags: ['friend_duel', 'aborted']
+    });
+    CORE.savePlayer(player);
+    return {
+      rivalName,
+      summaryLine: `已中止與 ${rivalName} 的友誼戰，主線劇情不受影響。`,
+      sourceChoice
+    };
+  }
+
   return {
     startFriendDuel,
     showFriendManualModePicker,
     buildFriendDuelSnapshot,
     restoreFriendDuelSnapshot,
-    finalizeFriendDuel
+    finalizeFriendDuel,
+    abortFriendDuel
   };
 }
 

@@ -45,10 +45,10 @@ function createBattlePostflowUtils(deps = {}) {
     const embed = new EmbedBuilder()
       .setTitle('💀 你戰死了...')
       .setColor(0xff0000)
-      .setDescription(`${detailText}\n\n你的旅程就此結束...`);
+      .setDescription(`${detailText}\n\n🏁 勝者：${enemyName}\n你的旅程就此結束...`);
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('restart_onboarding').setLabel('🔄 重新開始').setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId('restart_onboarding').setLabel('📖 繼續（重新開始）').setStyle(ButtonStyle.Danger)
     );
 
     await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
@@ -85,13 +85,14 @@ function createBattlePostflowUtils(deps = {}) {
       .setColor(0xff9900)
       .setDescription(
         `${pet.name} 在戰鬥中倒下了，將於 **${formatRecoveryTurnsShort(remainTurns)}** 後復活。\n\n` +
+        `🏁 本局勝者：${enemyName}\n` +
         `你若還要硬戰，可以改由 **${player.name}** 親自上場（ATK 固定 10）。` +
         `${battleDetail ? `\n\n📜 戰況回放：\n${String(battleDetail).slice(0, 1200)}` : ''}`
       );
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('battle_continue_human').setLabel('🧍 我親自上場').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('main_menu').setLabel('📖 先撤退').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('main_menu').setLabel('📖 繼續（先撤退）').setStyle(ButtonStyle.Secondary)
     );
     await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
   }
