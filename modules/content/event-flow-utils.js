@@ -2,6 +2,7 @@ const {
   getLocationLootFlavorModifier,
   applyLocationFlavorToTradeGood
 } = require('./location-playstyle');
+const { getLocationDifficulty } = require('./world-map');
 
 function createEventFlowUtils(deps = {}) {
   const {
@@ -132,8 +133,14 @@ function createEventFlowUtils(deps = {}) {
       text,
       resultType: actionResultType
     });
+    const locationDifficulty = Math.max(1, Number(getLocationDifficulty(location) || 1));
+    const globalDropNudge = 1.05;
+    const difficultyDropMultiplier = Math.max(
+      1,
+      Math.min(1.12, 1 + (Math.max(0, locationDifficulty - 1) * 0.03))
+    );
     const locationDropMultiplier = Math.max(0.75, Math.min(1.35, Number(locationFlavor?.dropChanceMultiplier || 1)));
-    const dropRateBoost = (highRewardHint ? 1.22 : 1.0) * locationDropMultiplier;
+    const dropRateBoost = (highRewardHint ? 1.22 : 1.0) * locationDropMultiplier * difficultyDropMultiplier * globalDropNudge;
     const finalizeLoot = (loot) => applyLocationFlavorToTradeGood(
       loot,
       location,

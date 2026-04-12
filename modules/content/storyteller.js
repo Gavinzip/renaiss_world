@@ -1441,6 +1441,18 @@ function escapeRegex(source = '') {
   return String(source || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function normalizeMoveToLocation(raw = '') {
+  const text = String(raw || '')
+    .replace(/[「」『』【】（）()]/g, '')
+    .trim();
+  if (!text) return '';
+  const locations = Object.keys(RENAISS_LOCATIONS || {});
+  if (locations.includes(text)) return text;
+  const matched = locations.filter((location) => text.includes(location));
+  if (matched.length === 1) return matched[0];
+  return '';
+}
+
 function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
   const payload = extractJsonPayload(raw);
   if (payload && payload.startsWith('[')) {
@@ -1454,13 +1466,18 @@ function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
             const choice = String(item.choice || item.text || item.desc || '').trim();
             const desc = String(item.desc || item.choice || item.text || '').trim();
             const tag = String(item.tag || '').trim();
+            const moveTo = normalizeMoveToLocation(
+              item.move_to || item.moveTo || item.destination || item.to || ''
+            );
             if (!choice || !tag) return null;
-            return normalizeChoiceByLanguage({
+            const normalized = normalizeChoiceByLanguage({
               name: name || choice.slice(0, 15),
               choice,
               desc: desc || choice,
               tag: tag.startsWith('[') ? tag : `[${tag}]`
             }, playerLang);
+            if (moveTo) normalized.move_to = moveTo;
+            return normalized;
           })
           .filter(Boolean);
         if (mapped.length > 0) return mapped.slice(0, CHOICE_OUTPUT_COUNT);
@@ -1529,13 +1546,18 @@ function parseLooseChoiceArray(text = '', playerLang = 'zh-TW') {
     const choice = readField(block, ['choice', 'text', 'option', 'content', 'desc']);
     const desc = readField(block, ['desc', 'description', 'detail', 'choice', 'text']);
     const tag = readField(block, ['tag', 'risk', 'label']);
+    const moveTo = normalizeMoveToLocation(
+      readField(block, ['move_to', 'moveTo', 'destination', 'to'])
+    );
     if (!choice || !tag) continue;
-    out.push(normalizeChoiceByLanguage({
+    const normalized = normalizeChoiceByLanguage({
       name: name || choice.slice(0, 15),
       choice,
       desc: desc || choice,
       tag: tag.startsWith('[') ? tag : `[${tag}]`
-    }, playerLang));
+    }, playerLang);
+    if (moveTo) normalized.move_to = moveTo;
+    out.push(normalized);
     if (out.length >= CHOICE_OUTPUT_COUNT) break;
   }
   return out;
@@ -1641,6 +1663,8 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
     const choice = list[i];
     const text = [choice?.name || '', choice?.choice || '', choice?.desc || '', choice?.tag || ''].join(' ');
     const fp = normalizeComparableText([choice?.name || '', choice?.choice || '', choice?.desc || ''].join(' '));
+    const moveTo = normalizeMoveToLocation(choice?.move_to || choice?.moveTo || '');
+    const hasCityMoveIntent = /(?:前往|趕往|赶往|轉往|转往|去往|前去|啟程|启程|移動到|移动到)[^，。；\n]{0,24}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城)/u.test(text);
     if (!fp) {
       issues.push(`第 ${i + 1} 個選項為空或格式錯誤`);
       continue;
@@ -1653,6 +1677,8 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
     if (hasAnyRegex(text, CHOICE_PORTAL_PATTERNS)) issues.push(`第 ${i + 1} 個包含傳送類選項（已改由地圖按鈕）`);
     if (hasUnanchoredEntityToken(text, anchorList)) issues.push(`第 ${i + 1} 個引入了前文未鋪陳的可疑角色稱呼`);
     if (locationRegex && locationRegex.test(text)) issues.push(`第 ${i + 1} 個把地名當作物件`);
+    if (moveTo && !text.includes(moveTo)) issues.push(`第 ${i + 1} 個 move_to=${moveTo} 但文案未提到該地點`);
+    if (hasCityMoveIntent && !moveTo) issues.push(`第 ${i + 1} 個是跨城移動選項但缺少 move_to 欄位`);
 
     if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) {
       anchorHitCount += 1;
@@ -2151,12 +2177,14 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 14. 若「地區篇章進度」接近完成，結尾要自然帶出傳送門或跨區線索，引導前往其他島/區域，但不要強制瞬移
 15. 開場第一句必須直接承接「上一個行動」，不能突然切到無關場景
 16. 不可憑空補出前文未出現的關鍵道具/代碼/人物關係（例如突然出現座標卡）；若要引入新線索，必須在當下情境交代它如何被發現
+16a. 若前文只寫「攜帶封存艙/抱著封存艙」但沒有「打開/撬開/開艙檢視」動作，禁止突然揭露艙內具體物件；要揭露內容前，必須先寫出開艙過程
 17. 若使用「線索」「交易」等抽象詞，必須指向具體對象（誰提供、哪個物件、哪個位置）
 18. 若寫「某 NPC 曾說過／提醒過」且使用引號，內容必須逐字對得上【可驗證 NPC 對話原句】；找不到就禁止寫引號引用
 19. 回憶 NPC 提醒時，盡量補上當時場景（例如在哪個地點發生）
 20. 若【上一個行動結果】包含移動（例如從 A 到 B／抵達 B），開場 1-2 句必須寫出過場與抵達，不可直接瞬間換景
 21. 角色「手中持有／使用／遞出／展示」的物件，必須來自【玩家背包與可用物件】；若清單沒有，最多只能寫成「想取得/去購買/去詢問」
 22. 禁止憑空產生關鍵道具（通行卡、座標碼、專用藥劑、啟動器等）；若劇情需要，必須先在當下場景明確寫出取得動作
+22a. 若【上一個行動結果】已明確寫出「打開封存艙並取得某物」，後續不得再把該物寫成仍在艙內未知狀態；只能寫成已在手上或已收進行囊
 23. 若本回合為開局段落，必須明確完成主角身份與動機介紹，且語氣要像故事開場而非條列設定
 24. 凡出現引號對話，必須標明發話者；若是未命名角色，請給固定臨時代號（例如：神秘女子A、神秘女子B）並在後續沿用
 25. 若【主線鋪陳保留】有內容，至少延續其中 1 個重點，但只在相關段落自然呼應，不要每句都硬提
@@ -2442,8 +2470,10 @@ ${anchorText}
 1. 每個選項要有創意！拒絕無聊！
 2. 要符合故事的劇情發展
 3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
-   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]"}
+   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]","move_to":"目的城市或空字串"}
 3a. 不得少於 5 筆、不得輸出 null/空物件；就算資訊不足也要輸出完整 5 筆且保持合理
+3b. move_to 規則：只有「真的會移動到另一座城市」才填城市名（例如「洛陽城」）；非移動選項必須填空字串 ""
+3c. move_to 只能填地圖中的城市名，且要與該選項文案一致
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前人物、場景或衝突
 4a. ${destinationContinuityRule}
 5. 至少 1 個選項必須包含「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）

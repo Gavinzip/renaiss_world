@@ -120,6 +120,7 @@ function createChoicePolicyUtils(deps = {}) {
     const fromHint = currentLocation && currentLocation !== destination ? `離開${currentLocation}，` : '';
     return {
       action: 'travel',
+      move_to: destination,
       tag: '[🔍需探索]',
       name: `前往${destination}`,
       choice: `${fromHint}趕往${destination}追查${clue}背後來源`,
@@ -203,6 +204,7 @@ function createChoicePolicyUtils(deps = {}) {
     return {
       ...choice,
       action: marketAction,
+      move_to: '',
       tag: marketAction === 'market_digital' ? '[🕳️神秘鑑價]' : '[🏪鑑價站]',
       name: marketAction === 'market_digital' ? '前往神秘鑑價站' : '前往附近鑑價站',
       choice: `先進入${location}附近鑑價站，再到櫃檯選擇刮刮樂`,

@@ -1,3 +1,5 @@
+const { MAP_LOCATIONS } = require('./world-map');
+
 function createEventHandlerUtils(deps = {}) {
   const {
     CORE,
@@ -133,6 +135,107 @@ function createEventHandlerUtils(deps = {}) {
     executeEvent,
     negotiationPrompt
   } = deps;
+
+function isStorageLootContext(event = {}, result = {}, selectedChoice = '') {
+  const text = [
+    selectedChoice,
+    event?.choice,
+    event?.name,
+    event?.desc,
+    event?.tag,
+    event?.action,
+    result?.message,
+    result?.type
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const hasStorageCue = /(封存[艙舱倉藏函]|貨樣|货样|貨艙|货舱|臨時艙|临时舱|storage\s*pod|sealed\s*(pod|cache))/iu.test(text);
+  const hasOpenCue = /(打開|打开|開艙|开舱|撬開|撬开|搶奪|抢夺|強奪|强夺|奪取|夺取|搜刮|私吞|佔為己有|占为己有)/u.test(text);
+  return hasStorageCue || hasOpenCue;
+}
+
+function buildLootGainText(tradeGood = {}, options = {}) {
+  const lang = String(options?.lang || 'zh-TW');
+  const isStorageContext = Boolean(options?.isStorageContext);
+  const name = String(tradeGood?.name || '未知物件').trim() || '未知物件';
+  const rarity = String(tradeGood?.rarity || '普通').trim() || '普通';
+  const value = Math.max(1, Math.floor(Number(tradeGood?.value || 0)));
+
+  if (lang === 'en') {
+    if (isStorageContext) {
+      return `🧰 You force the storage pod open and find "${name}" (${rarity}). It is now packed into your bag.`;
+    }
+    return `🧰 You obtained a tradable item: ${name} (${rarity}), appraisal reference ${value} Rns.`;
+  }
+  if (lang === 'zh-CN') {
+    if (isStorageContext) {
+      return `🧰 你当场打开封存舱，里面是「${name}」（${rarity}），已收进行囊。`;
+    }
+    return `🧰 你取得可交易物：${name}（${rarity}），鉴价参考 ${value} Rns 代币。`;
+  }
+  if (isStorageContext) {
+    return `🧰 你當場打開封存艙，裡面是「${name}」（${rarity}），已收進行囊。`;
+  }
+  return `🧰 你取得可交易物：${name}（${rarity}），鑑價參考 ${value} Rns 代幣。`;
+}
+
+function escapeRegex(text = '') {
+  return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractDeclaredTravelDestination(context = {}) {
+  const currentLocation = String(context?.currentLocation || '').trim();
+  const eventAction = String(context?.eventAction || '').trim();
+  const explicitMoveToRaw = String(context?.explicitMoveTo || '').trim();
+  const text = [
+    context?.selectedChoice,
+    context?.eventChoice,
+    context?.eventName,
+    context?.eventDesc
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  const locations = Array.isArray(MAP_LOCATIONS)
+    ? MAP_LOCATIONS
+      .map((loc) => String(loc || '').trim())
+      .filter((loc) => loc && loc !== currentLocation)
+      .sort((a, b) => b.length - a.length)
+    : [];
+  if (locations.length <= 0) return '';
+  const hasTravelVerb = /(前往|趕往|赶往|轉往|转往|去往|前去|朝.+走去|離開|离开|通過|通过|啟程|启程|移動到|移动到)/u.test(text);
+  const actionTravelLike = eventAction === 'travel' || eventAction === 'teleport';
+  const explicitMoveTo = explicitMoveToRaw && locations.includes(explicitMoveToRaw)
+    ? explicitMoveToRaw
+    : '';
+  if (explicitMoveTo && (hasTravelVerb || actionTravelLike)) return explicitMoveTo;
+  if (!text) return '';
+  if (!hasTravelVerb) return '';
+
+  const travelOrderedPatterns = [
+    '前往',
+    '趕往',
+    '赶往',
+    '轉往',
+    '转往',
+    '去往',
+    '前去',
+    '朝',
+    '移動到',
+    '移动到'
+  ];
+  for (const location of locations) {
+    const safe = escapeRegex(location);
+    for (const keyword of travelOrderedPatterns) {
+      const re = new RegExp(`${escapeRegex(keyword)}[^，。；\\n]{0,24}?${safe}`, 'u');
+      if (re.test(text)) return location;
+    }
+    const generic = new RegExp(`(?:通過|通过|離開|离开)[^，。；\\n]{0,24}?(?:前往|趕往|赶往|轉往|转往|去往|前去)[^，。；\\n]{0,24}?${safe}`, 'u');
+    if (generic.test(text)) return location;
+  }
+
+  return '';
+}
 
 async function handleEvent(interaction, user, eventIndex, options = {}) {
   const player = CORE.loadPlayer(user.id);
@@ -718,7 +821,10 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     if (tradeGood) {
       ECON.addTradeGood(player, tradeGood);
       result.loot = tradeGood;
-      const lootText = `🧰 你取得可交易物：${tradeGood.name}（${tradeGood.rarity}），鑑價參考 ${tradeGood.value} Rns 代幣。`;
+      const lootText = buildLootGainText(tradeGood, {
+        lang: player?.language || 'zh-TW',
+        isStorageContext: isStorageLootContext(event, result, selectedChoice)
+      });
       result.message = result.message ? `${result.message}\n\n${lootText}` : lootText;
       queueMemory({
         type: '戰利品',
@@ -727,6 +833,51 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         importance: 2,
         tags: ['loot', String(tradeGood.category || 'goods')]
       });
+    }
+  }
+
+  if (!shouldTriggerBattle(event, result)) {
+    const declaredDestination = extractDeclaredTravelDestination({
+      currentLocation: String(player.location || '').trim(),
+      eventAction: String(event?.action || '').trim(),
+      explicitMoveTo: String(event?.move_to || event?.moveTo || '').trim(),
+      selectedChoice,
+      eventChoice: String(event?.choice || '').trim(),
+      eventName: String(event?.name || '').trim(),
+      eventDesc: String(event?.desc || '').trim()
+    });
+    const fromLocation = String(player.location || '').trim();
+    if (declaredDestination && declaredDestination !== fromLocation) {
+      const entryGate = canEnterLocation(player, declaredDestination);
+      if (entryGate?.allowed) {
+        player.location = declaredDestination;
+        syncLocationArcLocation(player);
+        player.navigationTarget = declaredDestination;
+        const travelLine = `🧭 本回合移動：${fromLocation} → ${declaredDestination}`;
+        result.message = `${String(result.message || '').trim()}\n\n${travelLine}`.trim();
+        result.autoTravel = {
+          fromLocation,
+          targetLocation: declaredDestination,
+          reason: 'declared_destination'
+        };
+        queueMemory({
+          type: '移動',
+          content: `依選項路線移動`,
+          outcome: `${fromLocation} -> ${declaredDestination}`,
+          importance: 2,
+          tags: ['travel', 'choice_move', 'declared_destination']
+        });
+      } else {
+        const blockedLine = `🛑 你嘗試前往 **${declaredDestination}**，但目前勝率僅 **${format1(entryGate?.winRate)}%**（門檻 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`;
+        result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
+        queueMemory({
+          type: '移動',
+          content: `嘗試依選項前往${declaredDestination}`,
+          outcome: `受阻｜勝率 ${format1(entryGate?.winRate)}%`,
+          importance: 1,
+          tags: ['travel', 'choice_move', 'blocked', 'entry_gate']
+        });
+      }
     }
   }
 
@@ -1304,6 +1455,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       CORE.savePlayer(player);
 
       const rewardText = [];
+      const movedFrom = String(result?.autoTravel?.fromLocation || '').trim();
+      const movedTo = String(result?.autoTravel?.targetLocation || '').trim();
+      if (movedFrom && movedTo && !Boolean(result?.autoTravel?.blocked)) {
+        rewardText.push(`🧭 本回合移動：${movedFrom} → ${movedTo}`);
+      }
       if (result.gold) rewardText.push(`💰 +${result.gold} Rns 代幣`);
       if (result.wantedLevel) rewardText.push(`⚠️ 通緝等级: ${result.wantedLevel}`);
       if (result.soldCount > 0) rewardText.push(`🏪 已售出 ${result.soldCount} 件`);
