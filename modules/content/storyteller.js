@@ -16,6 +16,11 @@ const MAIN_STORY = require('./story/main-story');
 const WORLD_LORE = require('../core/world-lore');
 const CORE = require('../core/game-core');
 const { PROJECT_ROOT } = require('../core/storage-paths');
+const {
+  getLocationPlaystyleProfile,
+  getLocationPlaystylePromptBlock,
+  countChoiceKeywordHits
+} = require('./location-playstyle');
 
 const envPath = path.join(PROJECT_ROOT, '.env');
 if (fs.existsSync(envPath)) {
@@ -1560,7 +1565,7 @@ function mergeChoicePool(pool = [], incoming = [], playerLang = 'zh-TW') {
   return out;
 }
 
-function scoreChoiceCandidate(choice = {}, { anchors = [], location = '', previousStory = '' } = {}) {
+function scoreChoiceCandidate(choice = {}, { anchors = [], location = '', previousStory = '', locationPlaystyle = null } = {}) {
   const text = [choice?.name || '', choice?.choice || '', choice?.desc || '', choice?.tag || ''].join(' ');
   if (!String(choice?.choice || '').trim() || !String(choice?.tag || '').trim()) return -999;
 
@@ -1580,6 +1585,10 @@ function scoreChoiceCandidate(choice = {}, { anchors = [], location = '', previo
   const descLen = String(choice?.desc || '').trim().length;
   if (choiceLen >= 10 && choiceLen <= 34) score += 0.6;
   if (descLen >= 10 && descLen <= 42) score += 0.4;
+  if (locationPlaystyle && Array.isArray(locationPlaystyle.keywords) && locationPlaystyle.keywords.length > 0) {
+    const hit = locationPlaystyle.keywords.some((keyword) => String(keyword || '').trim() && text.includes(String(keyword).trim()));
+    if (hit) score += 1.1;
+  }
   return Number(score.toFixed(4));
 }
 
@@ -1609,7 +1618,7 @@ function pickTopChoicesFromPool(pool = [], context = {}, maxCount = CHOICE_OUTPU
   return out;
 }
 
-function validateChoiceSet(choices = [], { anchors = [], location = '', previousStory = '' } = {}) {
+function validateChoiceSet(choices = [], { anchors = [], location = '', previousStory = '', locationPlaystyle = null } = {}) {
   const issues = [];
   const list = Array.isArray(choices) ? choices.filter(Boolean) : [];
   if (list.length !== CHOICE_OUTPUT_COUNT) {
@@ -1655,6 +1664,13 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
 
   if (duplicateCount > 0) issues.push(`有 ${duplicateCount} 個重複選項`);
   if (aggressiveCount < 1) issues.push('至少需要 1 個偏激進選項（[🔥高風險] 或 [⚔️會戰鬥]）');
+  if (locationPlaystyle && Array.isArray(locationPlaystyle.keywords) && locationPlaystyle.keywords.length > 0) {
+    const minKeywordHits = Math.max(1, Number(locationPlaystyle.minKeywordHits || 1));
+    const keywordHits = countChoiceKeywordHits(list, locationPlaystyle.keywords);
+    if (keywordHits < minKeywordHits) {
+      issues.push(`至少需要 ${minKeywordHits} 個選項符合地區玩法口味（目前 ${keywordHits} 個）`);
+    }
+  }
   // 「是否命中過往元素」改為提示詞引導，不作為硬性失敗條件，
   // 避免選項已合理但因命中門檻造成整組失敗。
 
@@ -2218,6 +2234,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const newbieMask = isInNewbiePhase(player);
   const arcMeta = getLocationArcMeta(player);
   const location = player.location || '河港鎮';
+  const locationPlaystyle = getLocationPlaystyleProfile(location);
+  const locationPlaystylePrompt = getLocationPlaystylePromptBlock(location, player?.language || 'zh-TW');
   const islandState = ISLAND_STORY.getIslandStoryState(player, location) || null;
   const islandGuidePrompt = ISLAND_STORY.buildIslandGuidancePrompt(player, location);
   const islandStage = Number(islandState?.stage || 0);
@@ -2378,6 +2396,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 【當前情境】
 位置：${location} - ${locDesc}
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
+地區玩法口味：${locationPlaystylePrompt}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
 戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格
 通緝熱度：${wantedPressure}
@@ -2442,6 +2461,7 @@ ${anchorText}
 11c. 禁止把規則文字直接寫進選項（例如「關鍵任務」「唯一來源」「地區進度 x/8」「鎖定某某拿到某證據」）
 12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
 13. 若島嶼劇情進行中，至少 1 個選項要明確推進島內主題（來自島內引導段），且不得超過 1 個主線強引導選項
+13a. 地區玩法口味必須落地：至少 ${Math.max(1, Number(locationPlaystyle?.minKeywordHits || 1))} 個選項要明顯反映「${locationPlaystyle?.name || '在地探索'}」（${Array.isArray(locationPlaystyle?.keywords) && locationPlaystyle.keywords.length > 0 ? locationPlaystyle.keywords.slice(0, 6).join('、') : '請使用在地語境關鍵詞'}）
 14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例
 15. 玩家名稱「${playerName}」只能指主角本人；禁止再創建同名 NPC
 16. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可直接當成已知真相寫進選項
@@ -2499,12 +2519,14 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       const candidateChoices = pickTopChoicesFromPool(choicePool, {
         anchors: storyAnchors,
         location,
-        previousStory: fullStoryText
+        previousStory: fullStoryText,
+        locationPlaystyle
       }, CHOICE_OUTPUT_COUNT);
       const issues = validateChoiceSet(candidateChoices, {
         anchors: storyAnchors,
         location,
-        previousStory: fullStoryText
+        previousStory: fullStoryText,
+        locationPlaystyle
       });
       if (issues.length === 0) {
         validatedChoices = candidateChoices.slice(0, CHOICE_OUTPUT_COUNT);
@@ -2519,7 +2541,8 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       const mergedChoices = pickTopChoicesFromPool(choicePool, {
         anchors: storyAnchors,
         location,
-        previousStory: fullStoryText
+        previousStory: fullStoryText,
+        locationPlaystyle
       }, CHOICE_OUTPUT_COUNT);
       if (mergedChoices.length === CHOICE_OUTPUT_COUNT) {
         console.warn(`[AI][choices] use merged pool fallback, issues=${lastIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
