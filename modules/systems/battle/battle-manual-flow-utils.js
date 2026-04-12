@@ -125,7 +125,16 @@ async function handleBattleSwitchSelect(interaction, user, targetPetId = '') {
   const currentPet = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet }).pet;
   const enemy = player?.battleState?.enemy;
   const combatant = getActiveCombatant(player, currentPet);
-  const targetPet = targetPetId ? PET.getPetById(targetPetId) : null;
+  const targetRaw = String(targetPetId || '').trim();
+  const ownedPets = typeof PET.getAllPetsByOwner === 'function'
+    ? PET.getAllPetsByOwner(user.id)
+    : [];
+  let targetPet = targetRaw ? PET.getPetById(targetRaw) : null;
+  if (!targetPet || String(targetPet.ownerId || '') !== String(user.id || '')) {
+    targetPet = ownedPets.find((p) => String(p?.id || '').trim() === targetRaw)
+      || ownedPets.find((p) => String(p?.name || '').trim() === targetRaw)
+      || null;
+  }
   if (!player || !currentPet || !combatant || !enemy || !targetPet || String(targetPet.ownerId || '') !== String(user.id || '')) {
     await interaction.reply({ content: '⚠️ 換寵資料失效，請重新操作。', ephemeral: true }).catch(() => {});
     return;
@@ -151,8 +160,21 @@ async function handleBattleSwitchSelect(interaction, user, targetPetId = '') {
   if (savedPet) PET.savePet(savedPet);
   player.battleState.activePetId = targetPet.id;
   player.battleState.fighter = 'pet';
+  player.activePetId = targetPet.id;
   CORE.savePlayer(player);
-  await renderManualBattle(interaction, player, targetPet, `🔁 已切換上場寵物：${targetPet.name}`);
+
+  // 先 ACK 選單互動，避免資料量變大時觸發 3 秒超時導致「選了但沒反應」。
+  if (!interaction.deferred && !interaction.replied && typeof interaction.deferUpdate === 'function') {
+    await interaction.deferUpdate().catch(() => {});
+  }
+  const renderMode = interaction.deferred || interaction.replied ? 'edit' : 'update';
+  await renderManualBattle(
+    interaction,
+    player,
+    targetPet,
+    `🔁 已切換上場寵物：${targetPet.name}`,
+    { mode: renderMode }
+  );
 }
 
 async function startManualBattle(interaction, user) {

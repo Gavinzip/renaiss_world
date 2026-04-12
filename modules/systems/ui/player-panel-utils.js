@@ -520,7 +520,30 @@ function buildEquipmentSlotDetailLine(item = null, slot = 'helmet') {
   return `• ${getFusionSlotLabel(slot)}：${rarity} ${name}｜${statText}｜估值 ${value}`;
 }
 
-async function showPetEquipmentView(interaction, user, selectedPetId = '') {
+function parsePetIdFromEquipmentCustomId(customId = '', prefix = '') {
+  const raw = String(customId || '').trim();
+  if (!raw.startsWith(prefix)) return '';
+  return String(raw.slice(prefix.length) || '').trim();
+}
+
+function buildPetEquipmentOwnershipLines(player = null, ownedPets = []) {
+  const pets = Array.isArray(ownedPets) ? ownedPets : [];
+  if (!player || pets.length <= 0) return ['（尚未有寵物裝備資料）'];
+  const lines = [];
+  for (const pet of pets) {
+    const petId = String(pet?.id || '').trim();
+    if (!petId) continue;
+    const slots = FUSION.getPetEquipmentSlots(player, petId, { ensure: false });
+    const equippedSlots = FUSION.EQUIPMENT_SLOTS
+      .filter((slot) => Boolean(slots?.[slot] && typeof slots[slot] === 'object'))
+      .map((slot) => getFusionSlotLabel(slot));
+    if (equippedSlots.length <= 0) continue;
+    lines.push(`• ${String(pet?.name || '寵物')}：${equippedSlots.join('、')}`);
+  }
+  return lines.length > 0 ? lines : ['（目前尚未有任何寵物穿戴裝備）'];
+}
+
+async function showPetEquipmentView(interaction, user, selectedPetId = '', notice = '') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
     await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
@@ -537,10 +560,9 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '') {
     selectedPet = ownedPets.find((p) => String(p?.id || '') === String(defaultPet?.id || '')) || ownedPets[0] || null;
   }
 
-  const equipment = player?.equipment && typeof player.equipment === 'object'
-    ? player.equipment
-    : {};
-  const bonus = FUSION.getEquippedBonuses(player);
+  const selectedPetIdSafe = String(selectedPet?.id || '').trim();
+  const equipment = FUSION.getPetEquipmentSlots(player, selectedPetIdSafe, { ensure: true });
+  const bonus = FUSION.getEquippedBonuses(player, selectedPetIdSafe);
   const slotLines = FUSION.EQUIPMENT_SLOTS.map((slot) => buildEquipmentSlotDetailLine(equipment?.[slot], slot));
   const loreLines = FUSION.EQUIPMENT_SLOTS
     .map((slot) => {
@@ -551,19 +573,70 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '') {
       return `【${getFusionSlotLabel(slot)}】${lore}`;
     })
     .filter(Boolean);
+  const ownershipLines = buildPetEquipmentOwnershipLines(player, ownedPets);
+  const equipCandidates = Array.isArray(player?.equipmentBag) ? player.equipmentBag : [];
+  const equipOptions = equipCandidates
+    .map((item, idx) => {
+      if (!item || typeof item !== 'object') return null;
+      const slot = String(item.slot || '').trim();
+      if (!FUSION.EQUIPMENT_SLOTS.includes(slot)) return null;
+      const rarity = getFusionRarityLabel(item.rarity);
+      const name = String(item.name || '未命名裝備').slice(0, 46);
+      const value = Math.max(0, Number(item.value || 0));
+      return {
+        label: `【${getFusionSlotLabel(slot)}】${rarity} ${name}`.slice(0, 100),
+        description: `估值 ${value}｜背包編號 #${idx + 1}`.slice(0, 100),
+        value: String(idx)
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 25);
+  const unequipOptions = FUSION.EQUIPMENT_SLOTS
+    .map((slot) => {
+      const item = equipment?.[slot];
+      if (!item || typeof item !== 'object') return null;
+      return {
+        label: `${getFusionSlotLabel(slot)}｜${String(item.name || '未命名裝備')}`.slice(0, 100),
+        description: `拆下後會回到裝備背包`.slice(0, 100),
+        value: slot
+      };
+    })
+    .filter(Boolean);
 
   const embed = new EmbedBuilder()
-    .setTitle('🛡️ 目前裝備總覽')
+    .setTitle('🛡️ 寵物裝備管理')
     .setColor(0x64748b)
     .setDescription(
-      `${selectedPet ? `寵物：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）\n` : ''}` +
-      `裝備加成會套用在目前戰鬥系統。\n` +
+      `${selectedPet ? `目前寵物：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）\n` : ''}` +
+      `${notice ? `${notice}\n` : ''}` +
+      `每隻寵物可獨立穿戴頭盔/盔甲/鞋子。\n` +
       `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`
     )
     .addFields(
       { name: '🎯 裝備欄位', value: slotLines.join('\n').slice(0, 1024), inline: false },
-      { name: '📜 裝備敘述', value: loreLines.length > 0 ? loreLines.join('\n').slice(0, 1024) : '（目前沒有裝備敘述）', inline: false }
+      { name: '📜 裝備敘述', value: loreLines.length > 0 ? loreLines.join('\n').slice(0, 1024) : '（目前沒有裝備敘述）', inline: false },
+      { name: '🐾 裝備歸屬', value: ownershipLines.join('\n').slice(0, 1024), inline: false }
     );
+
+  const rows = [];
+  if (equipOptions.length > 0) {
+    const equipSelect = new StringSelectMenuBuilder()
+      .setCustomId(`pet_eq_equip_${selectedPetIdSafe}`)
+      .setPlaceholder('從裝備背包裝上到目前寵物')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(equipOptions);
+    rows.push(new ActionRowBuilder().addComponents(equipSelect));
+  }
+  if (unequipOptions.length > 0) {
+    const unequipSelect = new StringSelectMenuBuilder()
+      .setCustomId(`pet_eq_unequip_${selectedPetIdSafe}`)
+      .setPlaceholder('拆下目前寵物的已裝備欄位')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(unequipOptions);
+    rows.push(new ActionRowBuilder().addComponents(unequipSelect));
+  }
 
   const backPetId = String(selectedPet?.id || '').trim();
   const row = new ActionRowBuilder().addComponents(
@@ -574,7 +647,56 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '') {
     new ButtonBuilder().setCustomId('open_profile').setLabel('💳 檔案').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
-  await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
+  rows.push(row);
+  await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
+}
+
+async function handlePetEquipmentEquipSelect(interaction, user, customId = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const petId = parsePetIdFromEquipmentCustomId(customId, 'pet_eq_equip_');
+  const ownedPets = getPlayerOwnedPets(user.id);
+  const selectedPet = ownedPets.find((p) => String(p?.id || '').trim() === petId) || null;
+  if (!petId || !selectedPet) {
+    await interaction.reply({ content: '⚠️ 寵物資料失效，請重新開啟裝備頁。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const bagIndex = Number(String(interaction?.values?.[0] || '').trim());
+  const result = FUSION.equipBagItemToPet(player, petId, bagIndex);
+  if (!result?.success) {
+    await interaction.reply({ content: '⚠️ 無法裝備，請重新選擇。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  CORE.savePlayer(player);
+  const equippedName = String(result?.equipped?.name || '裝備').trim() || '裝備';
+  await showPetEquipmentView(interaction, user, petId, `✅ 已為 ${selectedPet.name} 裝上：${equippedName}`);
+}
+
+async function handlePetEquipmentUnequipSelect(interaction, user, customId = '') {
+  const player = CORE.loadPlayer(user.id);
+  if (!player) {
+    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const petId = parsePetIdFromEquipmentCustomId(customId, 'pet_eq_unequip_');
+  const ownedPets = getPlayerOwnedPets(user.id);
+  const selectedPet = ownedPets.find((p) => String(p?.id || '').trim() === petId) || null;
+  if (!petId || !selectedPet) {
+    await interaction.reply({ content: '⚠️ 寵物資料失效，請重新開啟裝備頁。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  const slot = String(interaction?.values?.[0] || '').trim();
+  const result = FUSION.unequipPetSlotToBag(player, petId, slot);
+  if (!result?.success) {
+    await interaction.reply({ content: '⚠️ 拆裝失敗，請重新操作。', ephemeral: true }).catch(() => {});
+    return;
+  }
+  CORE.savePlayer(player);
+  const unequippedName = String(result?.unequipped?.name || '裝備').trim() || '裝備';
+  await showPetEquipmentView(interaction, user, petId, `↩️ 已拆下：${unequippedName}`);
 }
 
 async function showFinanceLedger(interaction, user) {
@@ -1603,9 +1725,8 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
 
 // ============== 行囊/背包 ==============
 function getPlayerEquipmentSummary(player = null) {
-  const equipment = player?.equipment && typeof player.equipment === 'object'
-    ? player.equipment
-    : {};
+  const activePetId = String(player?.activePetId || '').trim();
+  const equipment = FUSION.getPetEquipmentSlots(player, activePetId, { ensure: false });
   const bagCount = Array.isArray(player?.equipmentBag) ? player.equipmentBag.length : 0;
   const slotLines = FUSION.EQUIPMENT_SLOTS.map((slot) => {
     const item = equipment?.[slot];
@@ -1620,7 +1741,7 @@ function getPlayerEquipmentSummary(player = null) {
         : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
     return `• ${getFusionSlotLabel(slot)}：${getFusionRarityLabel(item.rarity)} ${String(item.name || '未命名裝備')}｜${statText}`;
   });
-  const bonus = FUSION.getEquippedBonuses(player);
+  const bonus = FUSION.getEquippedBonuses(player, activePetId);
   return {
     slotText: slotLines.join('\n'),
     totalText: `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`,
@@ -2441,6 +2562,8 @@ async function showSkillCodex(interaction, user) {
     handleInventoryFusionConfirm,
     handleInventoryFusionClear,
     showPetEquipmentView,
+    handlePetEquipmentEquipSelect,
+    handlePetEquipmentUnequipSelect,
     collectPlayerCodexData,
     showPlayerCodex,
     showNpcCodex,

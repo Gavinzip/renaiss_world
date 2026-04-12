@@ -38,7 +38,8 @@ function createBattleCoreUtils(deps = {}) {
 
   function buildHumanCombatant(player) {
     if (!player) return null;
-    const equipBonus = EQUIP.getEquippedBonuses(player);
+    const equipBonusPetId = String(player?.battleState?.activePetId || player?.activePetId || '').trim();
+    const equipBonus = EQUIP.getEquippedBonuses(player, equipBonusPetId);
     const maxHpBase = Math.max(1, Number(player?.maxStats?.生命 || player?.stats?.生命 || 100));
     const maxHp = Math.max(1, maxHpBase + Math.max(0, Number(equipBonus.hp || 0)));
     const battleState = player?.battleState && typeof player.battleState === 'object'
@@ -217,7 +218,7 @@ function createBattleCoreUtils(deps = {}) {
       return buildHumanCombatant(player);
     }
     if (!pet) return null;
-    const equipBonus = EQUIP.getEquippedBonuses(player);
+    const equipBonus = EQUIP.getEquippedBonuses(player, String(pet?.id || '').trim());
     const snapshot = getBattlePetStateSnapshot(player, pet.id);
     const hpBonus = Math.max(0, Math.floor(Number(equipBonus.hp || 0)));
     const maxHp = Math.max(1, Number(pet.maxHp || 100) + hpBonus);
@@ -348,7 +349,10 @@ function createBattleCoreUtils(deps = {}) {
 
   function persistCombatantState(player, pet, combatant) {
     if (!player || !combatant) return;
-    const equipBonus = EQUIP.getEquippedBonuses(player);
+    const equipBonusPetId = combatant.isHuman
+      ? String(player?.battleState?.activePetId || player?.activePetId || '').trim()
+      : String(combatant?.id || '').trim();
+    const equipBonus = EQUIP.getEquippedBonuses(player, equipBonusPetId);
     const hpBonus = Math.max(0, Math.floor(Number(equipBonus.hp || 0)));
     const statusSnapshot = cloneStatusState(combatant.status);
     if (combatant.isHuman) {

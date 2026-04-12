@@ -569,28 +569,134 @@ function getEquipmentPowerScore(item = null) {
   return attack * 3 + hp * 0.18 + speed * 8 + rarityIndex * 5;
 }
 
+function buildEmptyEquipmentSlots() {
+  return { helmet: null, armor: null, shoes: null };
+}
+
+function cloneEquipmentItem(item = null) {
+  if (!item || typeof item !== 'object') return null;
+  return {
+    ...item,
+    stats: item.stats && typeof item.stats === 'object'
+      ? { ...item.stats }
+      : { attack: 0, hp: 0, speed: 0 }
+  };
+}
+
+function normalizeEquipmentItem(item = null) {
+  if (!item || typeof item !== 'object') return null;
+  const slot = normalizeSlot(item.slot);
+  if (!slot) return null;
+  const rarity = normalizeRarity(item.rarity) || 'N';
+  const stats = item.stats && typeof item.stats === 'object'
+    ? {
+      attack: Math.max(0, Math.floor(Number(item.stats.attack || 0))),
+      hp: Math.max(0, Math.floor(Number(item.stats.hp || 0))),
+      speed: Math.max(0, Math.floor(Number(item.stats.speed || 0)))
+    }
+    : buildEquipmentStats(slot, Math.max(0, Number(item.primaryStat || 0)));
+  return {
+    ...item,
+    slot,
+    rarity,
+    value: Math.max(0, Math.floor(Number(item.value || 0))),
+    stats
+  };
+}
+
+function buildNormalizedSlotMap(raw = null) {
+  const out = buildEmptyEquipmentSlots();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const slot of EQUIPMENT_SLOTS) {
+    out[slot] = normalizeEquipmentItem(raw[slot]) || null;
+  }
+  return out;
+}
+
+function hasAnyEquipped(slots = null) {
+  if (!slots || typeof slots !== 'object') return false;
+  return EQUIPMENT_SLOTS.some((slot) => Boolean(slots[slot] && typeof slots[slot] === 'object'));
+}
+
+function syncLegacyEquipmentMirror(player, preferredPetId = '') {
+  if (!player || typeof player !== 'object') return false;
+  const petId = String(preferredPetId || player?.activePetId || '').trim();
+  const currentMirror = buildNormalizedSlotMap(player.equipment);
+  const targetMap = (petId && player?.petEquipment && player.petEquipment[petId] && typeof player.petEquipment[petId] === 'object')
+    ? buildNormalizedSlotMap(player.petEquipment[petId])
+    : currentMirror;
+  const before = JSON.stringify(currentMirror);
+  const after = JSON.stringify(targetMap);
+  if (before === after) return false;
+  player.equipment = targetMap;
+  return true;
+}
+
 function ensurePlayerEquipmentState(player) {
   if (!player || typeof player !== 'object') return false;
   let changed = false;
   if (!player.equipment || typeof player.equipment !== 'object' || Array.isArray(player.equipment)) {
-    player.equipment = { helmet: null, armor: null, shoes: null };
+    player.equipment = buildEmptyEquipmentSlots();
     changed = true;
-  } else {
-    for (const slot of EQUIPMENT_SLOTS) {
-      if (!(slot in player.equipment)) {
-        player.equipment[slot] = null;
-        changed = true;
-      }
-    }
   }
+  player.equipment = buildNormalizedSlotMap(player.equipment);
+
+  if (!player.petEquipment || typeof player.petEquipment !== 'object' || Array.isArray(player.petEquipment)) {
+    player.petEquipment = {};
+    changed = true;
+  }
+  for (const [rawPetId, rawSlots] of Object.entries(player.petEquipment || {})) {
+    const petId = String(rawPetId || '').trim();
+    if (!petId) {
+      delete player.petEquipment[rawPetId];
+      changed = true;
+      continue;
+    }
+    const normalizedSlots = buildNormalizedSlotMap(rawSlots);
+    const before = JSON.stringify(buildNormalizedSlotMap(player.petEquipment[petId]));
+    const after = JSON.stringify(normalizedSlots);
+    player.petEquipment[petId] = normalizedSlots;
+    if (before !== after) changed = true;
+  }
+
+  const legacySlots = buildNormalizedSlotMap(player.equipment);
+  const hasLegacy = hasAnyEquipped(legacySlots);
+  const hasMapped = Object.values(player.petEquipment || {}).some((slots) => hasAnyEquipped(slots));
+  const activePetId = String(player?.activePetId || '').trim();
+  if (hasLegacy && !hasMapped && activePetId) {
+    player.petEquipment[activePetId] = buildNormalizedSlotMap(legacySlots);
+    changed = true;
+  }
+  if (syncLegacyEquipmentMirror(player, activePetId)) changed = true;
+
   if (!Array.isArray(player.equipmentBag)) {
     player.equipmentBag = [];
     changed = true;
   }
+  const normalizedBag = [];
+  for (const row of player.equipmentBag) {
+    const normalized = normalizeEquipmentItem(row);
+    if (normalized) normalizedBag.push(normalized);
+  }
+  if (normalizedBag.length !== player.equipmentBag.length) changed = true;
+  player.equipmentBag = normalizedBag;
   return changed;
 }
 
-function addEquipmentToPlayer(player, equipment) {
+function getPetEquipmentSlots(player, petId = '', options = {}) {
+  if (!player || typeof player !== 'object') return buildEmptyEquipmentSlots();
+  ensurePlayerEquipmentState(player);
+  const safePetId = String(petId || '').trim();
+  if (!safePetId) return buildNormalizedSlotMap(player.equipment);
+  if (!player.petEquipment[safePetId] || typeof player.petEquipment[safePetId] !== 'object') {
+    if (!options?.ensure) return buildEmptyEquipmentSlots();
+    player.petEquipment[safePetId] = buildEmptyEquipmentSlots();
+  }
+  player.petEquipment[safePetId] = buildNormalizedSlotMap(player.petEquipment[safePetId]);
+  return player.petEquipment[safePetId];
+}
+
+function addEquipmentToPlayer(player, equipment, options = {}) {
   if (!player || !equipment || typeof equipment !== 'object') {
     return { success: false, equipped: false, replaced: null };
   }
@@ -598,10 +704,14 @@ function addEquipmentToPlayer(player, equipment) {
   const slot = normalizeSlot(equipment.slot);
   if (!slot) return { success: false, equipped: false, replaced: null };
 
-  const current = player.equipment[slot] && typeof player.equipment[slot] === 'object'
-    ? player.equipment[slot]
+  const targetPetId = String(options?.petId || player?.activePetId || '').trim();
+  const targetSlots = getPetEquipmentSlots(player, targetPetId, { ensure: true });
+  const current = targetSlots[slot] && typeof targetSlots[slot] === 'object'
+    ? targetSlots[slot]
     : null;
-  const newScore = getEquipmentPowerScore(equipment);
+  const normalizedIncoming = normalizeEquipmentItem(equipment);
+  if (!normalizedIncoming) return { success: false, equipped: false, replaced: null };
+  const newScore = getEquipmentPowerScore(normalizedIncoming);
   const oldScore = getEquipmentPowerScore(current);
 
   let equipped = false;
@@ -612,19 +722,75 @@ function addEquipmentToPlayer(player, equipment) {
       player.equipmentBag.unshift(current);
       if (player.equipmentBag.length > 120) player.equipmentBag.length = 120;
     }
-    player.equipment[slot] = equipment;
+    targetSlots[slot] = normalizedIncoming;
     equipped = true;
   } else {
-    player.equipmentBag.unshift(equipment);
+    player.equipmentBag.unshift(normalizedIncoming);
     if (player.equipmentBag.length > 120) player.equipmentBag.length = 120;
   }
-  return { success: true, equipped, replaced };
+  syncLegacyEquipmentMirror(player, targetPetId);
+  return { success: true, equipped, replaced, petId: targetPetId };
 }
 
-function getEquippedBonuses(player = null) {
+function equipBagItemToPet(player, petId = '', bagIndex = -1) {
+  if (!player || typeof player !== 'object') {
+    return { success: false, reason: 'invalid_player' };
+  }
+  ensurePlayerEquipmentState(player);
+  const targetPetId = String(petId || '').trim();
+  if (!targetPetId) return { success: false, reason: 'invalid_pet' };
+  if (!Array.isArray(player.equipmentBag)) player.equipmentBag = [];
+  const idx = Math.floor(Number(bagIndex));
+  if (!Number.isFinite(idx) || idx < 0 || idx >= player.equipmentBag.length) {
+    return { success: false, reason: 'invalid_bag_index' };
+  }
+  const picked = normalizeEquipmentItem(player.equipmentBag[idx]);
+  if (!picked) return { success: false, reason: 'invalid_item' };
+  const slot = normalizeSlot(picked.slot);
+  if (!slot) return { success: false, reason: 'invalid_slot' };
+  const slots = getPetEquipmentSlots(player, targetPetId, { ensure: true });
+  const replaced = slots[slot] && typeof slots[slot] === 'object'
+    ? slots[slot]
+    : null;
+  player.equipmentBag.splice(idx, 1);
+  if (replaced) {
+    player.equipmentBag.unshift(replaced);
+  }
+  slots[slot] = picked;
+  if (player.equipmentBag.length > 120) player.equipmentBag.length = 120;
+  syncLegacyEquipmentMirror(player, targetPetId);
+  return { success: true, petId: targetPetId, slot, equipped: picked, replaced };
+}
+
+function unequipPetSlotToBag(player, petId = '', rawSlot = '') {
+  if (!player || typeof player !== 'object') {
+    return { success: false, reason: 'invalid_player' };
+  }
+  ensurePlayerEquipmentState(player);
+  const targetPetId = String(petId || '').trim();
+  if (!targetPetId) return { success: false, reason: 'invalid_pet' };
+  const slot = normalizeSlot(rawSlot);
+  if (!slot) return { success: false, reason: 'invalid_slot' };
+  const slots = getPetEquipmentSlots(player, targetPetId, { ensure: true });
+  const equipped = slots[slot] && typeof slots[slot] === 'object'
+    ? slots[slot]
+    : null;
+  if (!equipped) return { success: false, reason: 'slot_empty' };
+  slots[slot] = null;
+  player.equipmentBag.unshift(equipped);
+  if (player.equipmentBag.length > 120) player.equipmentBag.length = 120;
+  syncLegacyEquipmentMirror(player, targetPetId);
+  return { success: true, petId: targetPetId, slot, unequipped: equipped };
+}
+
+function getEquippedBonuses(player = null, petId = '') {
   const out = { attack: 0, hp: 0, speed: 0 };
   if (!player || typeof player !== 'object') return out;
-  const equipment = player.equipment && typeof player.equipment === 'object' ? player.equipment : {};
+  ensurePlayerEquipmentState(player);
+  const safePetId = String(petId || '').trim();
+  const equipment = safePetId
+    ? getPetEquipmentSlots(player, safePetId, { ensure: false })
+    : buildNormalizedSlotMap(player.equipment);
   for (const slot of EQUIPMENT_SLOTS) {
     const item = equipment[slot];
     if (!item || typeof item !== 'object') continue;
@@ -647,6 +813,9 @@ module.exports = {
   EQUIPMENT_RARITY_LABELS,
   EQUIPMENT_FUSION_SYSTEM_PROMPT,
   ensurePlayerEquipmentState,
+  getPetEquipmentSlots,
+  equipBagItemToPet,
+  unequipPetSlotToBag,
   getEquippedBonuses,
   getEquipmentPowerScore,
   addEquipmentToPlayer,

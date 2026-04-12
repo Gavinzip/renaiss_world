@@ -114,6 +114,8 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     showPlayerCodex,
     showNpcCodex,
     showSkillCodex,
+    handlePetEquipmentEquipSelect = async () => {},
+    handlePetEquipmentUnequipSelect = async () => {},
     showFinanceLedger,
     showMemoryAudit,
     showMemoryRecap,
@@ -194,6 +196,16 @@ CLIENT.on('interactionCreate', async (interaction) => {
     if (customId === 'battle_switch_select') {
       const targetPetId = String(interaction.values?.[0] || '').trim();
       await handleBattleSwitchSelect(interaction, user, targetPetId);
+      return;
+    }
+
+    if (customId.startsWith('pet_eq_equip_')) {
+      await handlePetEquipmentEquipSelect(interaction, user, customId);
+      return;
+    }
+
+    if (customId.startsWith('pet_eq_unequip_')) {
+      await handlePetEquipmentUnequipSelect(interaction, user, customId);
       return;
     }
 
