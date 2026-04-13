@@ -96,7 +96,10 @@ try {
 const AI_MAX_RETRIES = 3;
 const AI_TIMEOUT_MS = 90000;
 const AI_MAX_RESPONSE_TOKENS = Math.max(512, Number(process.env.AI_MAX_RESPONSE_TOKENS || 4096));
-const STORY_TIMEOUT_MS = Math.max(15000, Number(process.env.STORY_TIMEOUT_MS || 30000) * 2);
+const AI_UNLIMITED_TIMEOUT = !/^(0|false|off|no)$/i.test(String(process.env.AI_UNLIMITED_TIMEOUT || '1').trim());
+const AI_UNLIMITED_MAX_TOKENS = !/^(0|false|off|no)$/i.test(String(process.env.AI_UNLIMITED_MAX_TOKENS || '1').trim());
+const STORY_TIMEOUT_MS = Math.max(12000, Number(process.env.STORY_TIMEOUT_MS || 22000));
+const STORY_GEN_RETRIES = Math.max(1, Math.min(2, Number(process.env.STORY_GEN_RETRIES || 1)));
 const CHOICE_TIMEOUT_MS = Math.max(12000, Number(process.env.CHOICE_TIMEOUT_MS || 26000) * 2);
 const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(10000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000) * 2);
 const CHOICE_MAX_TOKENS = Math.max(700, Number(process.env.CHOICE_MAX_TOKENS || 3000));
@@ -1058,9 +1061,12 @@ function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
       });
     });
 
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error('AI timeout'));
-    });
+    const numericTimeout = Number(timeoutMs);
+    if (Number.isFinite(numericTimeout) && numericTimeout > 0) {
+      req.setTimeout(numericTimeout, () => {
+        req.destroy(new Error('AI timeout'));
+      });
+    }
 
     req.on('error', (e) => {
       console.log('[AI] Network error:', e.message);
@@ -1903,8 +1909,14 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
   if (!API_KEY) throw new Error('No API Key');
 
   const retries = Math.max(1, Number(options.retries || AI_MAX_RETRIES));
-  const timeoutMs = Math.max(5000, Number(options.timeoutMs || AI_TIMEOUT_MS));
-  const maxTokens = Math.max(120, Number(options.maxTokens || AI_MAX_RESPONSE_TOKENS));
+  const unlimitedTimeout = typeof options.unlimitedTimeout === 'boolean'
+    ? options.unlimitedTimeout
+    : AI_UNLIMITED_TIMEOUT;
+  const unlimitedMaxTokens = typeof options.unlimitedMaxTokens === 'boolean'
+    ? options.unlimitedMaxTokens
+    : AI_UNLIMITED_MAX_TOKENS;
+  const timeoutMs = unlimitedTimeout ? 0 : Math.max(5000, Number(options.timeoutMs || AI_TIMEOUT_MS));
+  const maxTokens = unlimitedMaxTokens ? null : Math.max(120, Number(options.maxTokens || AI_MAX_RESPONSE_TOKENS));
   const model = String(options.model || MINIMAX_MODEL);
   const label = String(options.label || 'callAI');
   const strictFinalOnly = Boolean(options.strictFinalOnly);
@@ -1922,13 +1934,18 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
             ? '\n上一輪你可能只輸出了<think>內容。這一輪禁止輸出<think>，直接輸出最終內容。'
             : ''
         );
-      const attemptMaxTokens = attempt > 1 ? Math.max(maxTokens, Math.floor(maxTokens * 1.5)) : maxTokens;
-      const body = JSON.stringify({
+      const attemptMaxTokens = Number.isFinite(Number(maxTokens))
+        ? (attempt > 1 ? Math.max(Number(maxTokens), Math.floor(Number(maxTokens) * 1.5)) : Number(maxTokens))
+        : null;
+      const payload = {
         model,
         messages: [{ role: 'user', content: attemptPrompt }],
-        temperature: temperature,
-        max_tokens: attemptMaxTokens
-      });
+        temperature: temperature
+      };
+      if (Number.isFinite(Number(attemptMaxTokens)) && Number(attemptMaxTokens) > 0) {
+        payload.max_tokens = Number(attemptMaxTokens);
+      }
+      const body = JSON.stringify(payload);
 
       const { content, finishReason } = await requestAI(body, timeoutMs);
       const cleaned = sanitizeAIContent(content);
@@ -2252,7 +2269,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
         model,
         maxTokens: 1600,
         timeoutMs: STORY_TIMEOUT_MS,
-        retries: 3,
+        retries: STORY_GEN_RETRIES,
         strictFinalOnly: true
       });
       const normalizedStory = normalizeOutputByLanguage(stripNarrativeDraftLeak(story), playerLang);
@@ -2505,6 +2522,8 @@ ${anchorText}
 3a. 不得少於 5 筆、不得輸出 null/空物件；就算資訊不足也要輸出完整 5 筆且保持合理
 3b. move_to 規則：只有「真的會移動到另一座城市」才填城市名（例如「洛陽城」）；非移動選項必須填空字串 ""
 3c. move_to 只能填地圖中的城市名，且要與該選項文案一致
+3d. move_to 自檢：若 choice 文案出現「前往/趕往/啟程去 + 城市名」，必須填同一城市；若只是城內行動（調查、詢問、監視、交易），move_to 必須是 ""
+3e. 禁止「文案寫跨城但 move_to 空白」與「move_to 有城市但文案沒提該城市」兩種錯誤
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前人物、場景或衝突
 4a. ${destinationContinuityRule}
 5. 至少 1 個選項必須包含「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
@@ -2554,6 +2573,12 @@ ${pendingConflictRule ? `${pendingConflictRuleNumber}. ${pendingConflictRule}` :
 禁止使用跳 tone 行銷詞：一鍵成交、立即變現、秒賺、躺賺。
 禁止輸出傳送類選項：傳送門、主傳送門、傳送裝置、跨區傳送、瞬間位移。
 並避免過度金融術語：估值、報價、收益率、資本、套利、金融風暴（可用：真偽鑑定、來源線索、藏品修復、封存編號）。
+
+輸出前請先在內部完成自檢（不要把自檢內容輸出）：
+- 檢查 5 筆是否齊全，且每筆都有 name/choice/desc/tag/move_to
+- 檢查至少 1 筆 [🔥高風險] 或 [⚔️會戰鬥]
+- 檢查至少 ${Math.max(1, Number(locationPlaystyle?.minKeywordHits || 1))} 筆符合地區玩法口味
+- 逐筆檢查 move_to 與文案一致：跨城就填該城；非跨城就填 ""
 
 ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
 

@@ -13,6 +13,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     saveMapReturnSnapshot,
     createButtonInteractionTemplateContext,
     attachButtonTemplateReplyAutoRestore,
+    lockPressedButtonImmediately,
     handleBattleSwitchSelect,
     handleMapRegionMoveSelect,
     handleMovesSelectMenu,
@@ -160,6 +161,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton() && !interaction.isModalSubmit() && !interaction.isStringSelectMenu()) return;
   
   const { customId, user } = interaction;
+  const perfStartedAt = Date.now();
+  let perfFailed = false;
   let buttonTemplateContext = null;
   try {
     if (String(customId || '').startsWith('event_')) {
@@ -189,6 +192,9 @@ CLIENT.on('interactionCreate', async (interaction) => {
   if (interaction.isButton()) {
     buttonTemplateContext = createButtonInteractionTemplateContext(interaction, customId);
     attachButtonTemplateReplyAutoRestore(interaction, buttonTemplateContext);
+    if (buttonTemplateContext?.enabled && typeof lockPressedButtonImmediately === 'function') {
+      await lockPressedButtonImmediately(interaction).catch(() => {});
+    }
   }
 
   // ===== 招式配置下拉 =====
@@ -1712,6 +1718,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
   } catch (err) {
+    perfFailed = true;
     console.error(
       `[Interaction] handler failed cid=${String(customId || '')} user=${String(user?.id || '')}:`,
       err?.stack || err?.message || err
@@ -1739,6 +1746,17 @@ CLIENT.on('interactionCreate', async (interaction) => {
         await tryRecoverMainMenuAfterFailure(interaction, user?.id);
       }
     } catch (_) {}
+  } finally {
+    const elapsedMs = Date.now() - perfStartedAt;
+    if (elapsedMs >= 1200) {
+      const kind = interaction?.isButton?.()
+        ? 'button'
+        : (interaction?.isStringSelectMenu?.() ? 'select' : 'modal');
+      console.log(
+        `[Perf][interaction] type=${kind} cid=${String(customId || '')} ` +
+        `user=${String(user?.id || '')} status=${perfFailed ? 'failed' : 'ok'} ${elapsedMs}ms`
+      );
+    }
   }
 });
 }

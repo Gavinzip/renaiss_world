@@ -99,6 +99,7 @@ function createNoopDeps() {
     saveMapReturnSnapshot: () => {},
     createButtonInteractionTemplateContext: () => ({}),
     attachButtonTemplateReplyAutoRestore: () => {},
+    lockPressedButtonImmediately: async () => {},
     restoreButtonTemplateSnapshot: async () => {},
     tryRecoverEventButtonsAfterFailure: async () => false,
     tryRecoverMainMenuAfterFailure: async () => false,

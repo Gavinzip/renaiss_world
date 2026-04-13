@@ -1,4 +1,9 @@
 function createInteractionMessageUtils() {
+  const shouldKeepModalLauncherVisible = (() => {
+    const raw = String(process.env.BUTTON_HIDE_KEEP_MODAL_LAUNCHERS || '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  })();
+
   async function findMessageInChannel(channel, messageId) {
     if (!channel || !messageId || typeof messageId !== 'string') return null;
     if (!channel.messages) return null;
@@ -11,19 +16,26 @@ function createInteractionMessageUtils() {
     }
   }
 
-  async function disableMessageComponents(channel, messageId) {
+  async function disableMessageComponents(channel, messageId, messageRef = null) {
     if (!messageId || messageId.startsWith('instant_')) return;
+    const directMsg = messageRef && typeof messageRef.edit === 'function' ? messageRef : null;
+    if (directMsg) {
+      await directMsg.edit({ components: [] }).catch(() => {});
+      return;
+    }
     const msg = await findMessageInChannel(channel, messageId);
     if (!msg) return;
     await msg.edit({ components: [] }).catch(() => {});
   }
 
   async function lockPressedButtonImmediately(interaction) {
-    if (!interaction?.isButton?.() || !interaction.message?.id) return;
-    await disableMessageComponents(interaction.channel, interaction.message.id);
+    const message = interaction?.message;
+    if (!interaction?.isButton?.() || !message?.id) return;
+    await disableMessageComponents(interaction.channel, message.id, message);
   }
 
   function isModalLauncherButtonId(customId = '') {
+    if (!shouldKeepModalLauncherVisible) return false;
     const cid = String(customId || '').trim();
     if (!cid) return false;
     return (

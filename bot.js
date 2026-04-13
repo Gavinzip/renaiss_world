@@ -1501,6 +1501,7 @@ const INTERACTION_DISPATCHER_DEPS = initInteractionDispatcherDeps({
   saveMapReturnSnapshot,
   createButtonInteractionTemplateContext,
   attachButtonTemplateReplyAutoRestore,
+  lockPressedButtonImmediately,
   consumeMapReturnSnapshot,
   snapshotHasUsableComponents,
   restoreButtonTemplateSnapshot,

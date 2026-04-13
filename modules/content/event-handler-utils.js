@@ -1288,6 +1288,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     choicesSnapshot: []
   });
   CORE.savePlayer(player);
+
+  // 先立即 ACK 互動，避免使用者看到「此交互失敗」或長時間無回應。
+  await interaction.deferUpdate().catch(() => {});
   
   // 取得記憶上下文
   let memoryContext = '';
@@ -1343,9 +1346,6 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   const uiText = getAdventureText(player.language || 'zh-TW');
   const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
   const eventMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
-  
-  // 立即確認按鈕（避免 Discord 顯示失敗）
-  await interaction.deferUpdate().catch(() => {});
   
   // 發送一個「AI 正在思考」的訊息（帶上舊 story，讓 continuity 明顯）
   // choices 變數在 eventChoices 清除前就 capture 了，所以仍有效
