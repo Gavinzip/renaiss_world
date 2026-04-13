@@ -1228,6 +1228,7 @@ const RUNTIME_BASE_DEPS = {
   triggerMainlineForeshadowAIInBackground: (...args) => triggerMainlineForeshadowAIInBackgroundCore(...args),
   releaseStoryLock: (...args) => releaseStoryLock(...args),
   ensurePlayerIslandState,
+  getLocationProfile,
   getRegionLocationsByLocation,
   getMapText: (...args) => getMapText(...args),
   normalizeMapViewMode: (...args) => normalizeMapViewMode(...args),

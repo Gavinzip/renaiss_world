@@ -192,6 +192,25 @@ function checkRuntimeBaseDeps() {
     block.includes('rememberPlayer: (...args) => rememberPlayer(...args),'),
     'RUNTIME_BASE_DEPS missing rememberPlayer injection'
   );
+  assert(
+    block.includes('getLocationProfile,'),
+    'RUNTIME_BASE_DEPS missing getLocationProfile'
+  );
+}
+
+function checkOnboardingRuntimeInjection() {
+  const file = path.join(ROOT, 'modules', 'systems', 'runtime', 'init-game-feature-systems.js');
+  const source = fs.readFileSync(file, 'utf8');
+  const marker = 'const ONBOARDING_RUNTIME_FLOW_UTILS = createOnboardingRuntimeFlowUtils({';
+  const start = source.indexOf(marker);
+  assert(start >= 0, 'ONBOARDING_RUNTIME_FLOW_UTILS wiring block not found');
+  const end = source.indexOf('\n  });', start);
+  assert(end > start, 'ONBOARDING_RUNTIME_FLOW_UTILS wiring block end not found');
+  const block = source.slice(start, end);
+  assert(
+    block.includes('getLocationProfile: deps.getLocationProfile,'),
+    'ONBOARDING_RUNTIME_FLOW_UTILS missing getLocationProfile injection'
+  );
 }
 
 function checkInteractionDispatcherDeps() {
@@ -275,6 +294,7 @@ function main() {
   checkPlayerPanelInjection();
   checkMapNavigationInjection();
   checkRuntimeBaseDeps();
+  checkOnboardingRuntimeInjection();
   checkInteractionDispatcherDeps();
   checkBattleRuntimeDomainDeps();
   checkFriendOnlineTurnStateSync();

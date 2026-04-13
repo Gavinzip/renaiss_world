@@ -12,7 +12,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
-    getLocationProfile,
+    getLocationProfile = () => null,
     updateInteractionMessage,
     getPlayerTempData,
     setPlayerTempData,
@@ -98,17 +98,47 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     };
   }
 
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+  }
+
+  async function syncWalletAndApplyWithRetry(discordUserId, options = {}) {
+    const maxAttempts = Math.max(1, Math.floor(Number(options.maxAttempts || 3)));
+    const retryDelayMs = Math.max(0, Math.floor(Number(options.retryDelayMs || 800)));
+    let lastErr = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const assets = await syncWalletAndApplyNow(discordUserId);
+        return { assets, attempt, maxAttempts };
+      } catch (err) {
+        lastErr = err;
+        if (attempt >= maxAttempts) break;
+        console.warn(`[錢包] 背景同步重試 ${attempt}/${maxAttempts} user=${discordUserId}:`, err?.message || err);
+        await delay(retryDelayMs);
+      }
+    }
+
+    throw (lastErr || new Error('錢包背景同步失敗'));
+  }
+
   function syncWalletInBackground(interaction, user, bindAddress = '') {
     const userId = String(user?.id || '').trim();
     if (!userId) return;
 
     Promise.resolve()
       .then(async () => {
-        const assets = await syncWalletAndApplyNow(userId);
+        const retryDelayMs = Math.max(0, Math.floor(Number(process.env.WALLET_BIND_SYNC_RETRY_DELAY_MS || 800)));
+        const { assets, attempt } = await syncWalletAndApplyWithRetry(userId, {
+          maxAttempts: 3,
+          retryDelayMs
+        });
         const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
+        const retryHint = attempt > 1 ? `（已重試 ${attempt - 1} 次）\n` : '';
         const notice =
           `✅ 錢包資料背景同步完成\n` +
           `錢包：\`${bindAddress || WALLET.getWalletAddress(userId) || 'unknown'}\`\n` +
+          retryHint +
           `🎁 錢包可領總額：${assets.walletTotalRns}\n` +
           `➕ 本次新增入帳：${assets.syncDeltaRns}\n` +
           `🐾 可擁有寵物：${maxPets} 隻`;
@@ -118,6 +148,12 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       })
       .catch((e) => {
         console.error(`[錢包] 背景同步失敗 user=${userId}:`, e?.message || e);
+        if (interaction && typeof interaction.followUp === 'function') {
+          interaction.followUp({
+            content: `⚠️ 錢包背景同步失敗：${e?.message || e}\n請到「檔案 > 🔄 同步資產」再試一次。`,
+            ephemeral: true
+          }).catch(() => {});
+        }
       });
   }
 
@@ -343,7 +379,9 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     const finalPetName = normalizePetName(options?.petName || '', selectedElement);
 
     const player = CORE.createPlayer(user.id, finalCharacterName, selectedGender, '無門無派');
-    const spawnProfile = getLocationProfile(player.location);
+    const spawnProfile = typeof getLocationProfile === 'function'
+      ? getLocationProfile(player.location)
+      : null;
     player.alignment = alignment;
     player.petElement = selectedElement;
     player.wanted = 0;

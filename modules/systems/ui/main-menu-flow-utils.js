@@ -219,6 +219,54 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   // ============================================================
   const playerId = player?.id;
   if (!tryAcquireStoryLock(playerId, 'main_menu')) {
+    const generationPhase = String(player?.generationState?.phase || '').trim();
+    const isPendingGeneration = String(player?.generationState?.status || '').trim() === 'pending';
+    if (isPendingGeneration && interaction) {
+      const busyUiText = getAdventureText(player.language || 'zh-TW');
+      const busyStatusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
+      const busyHintByPhase = {
+        loading: 'AI 說書人正在構思故事...',
+        memory_context: 'AI 說書人正在整理記憶脈絡...',
+        generating_story: 'AI 說書人正在撰寫故事...',
+        story_ready: '故事已送達，正在生成選項...',
+        generating_choices: '故事已送達，正在生成選項...',
+        choices_ready: '選項已完成，正在排版回傳...',
+        recovered_snapshot: '已恢復上次快照，正在整理畫面...',
+        resume_cached: '已恢復上次故事與選項，正在同步畫面...'
+      };
+      const busyHint = busyHintByPhase[generationPhase] || 'AI 說書人正在構思故事...';
+      const busyMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
+      const busyDesc = `${financeNoticeBlock}${worldIntroBlock}**${busyUiText.statusLabel}：【${busyStatusBar}】**${busyMainlineLine ? `\n${busyMainlineLine}` : ''}\n\n⏳ *${busyHint}*${portalGuideBlock}`;
+      const busyEmbed = new EmbedBuilder()
+        .setTitle(`⚔️ ${player.name} - ${pet.name}`)
+        .setColor(0x00ff00)
+        .setDescription(busyDesc);
+
+      const busyButtons = [];
+      appendMainMenuUtilityButtons(busyButtons, player);
+      const busyComponents = [];
+      for (let i = 0; i < busyButtons.length; i += 5) {
+        busyComponents.push(new ActionRowBuilder().addComponents(busyButtons.slice(i, i + 5)));
+      }
+
+      const payload = { content: null, embeds: [busyEmbed], components: busyComponents };
+      let recovered = false;
+      if (interaction.deferred || interaction.replied) {
+        recovered = await interaction.editReply(payload).then(() => true).catch(() => false);
+      } else {
+        recovered = await interaction.update(payload).then(() => true).catch(() => false);
+      }
+      if (recovered && interaction?.message?.id) {
+        trackActiveGameMessage(player, thread.id, interaction.message.id);
+      }
+      if (!recovered && thread && typeof thread.send === 'function') {
+        const busyMsg = await thread.send(payload).catch(() => null);
+        if (busyMsg?.id) {
+          trackActiveGameMessage(player, thread.id, busyMsg.id);
+        }
+      }
+      return;
+    }
     await notifyStoryBusy(interaction);
     return;
   }

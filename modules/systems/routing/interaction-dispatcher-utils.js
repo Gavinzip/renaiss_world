@@ -352,9 +352,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 主選單 =====
   if (customId === 'main_menu') {
-    if (interaction?.message?.id) {
-      await interaction.message.edit({ components: [] }).catch(() => {});
-    }
     const player = CORE.loadPlayer(user.id);
     const pet = PET.loadPet(user.id);
     if (player && pet) {

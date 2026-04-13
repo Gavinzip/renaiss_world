@@ -350,18 +350,7 @@ function classifyUSDTTransfer(from, to, wallet, packSet, marketplace) {
 
 async function fetchUSDTTransfers(walletAddress) {
   if (!BSC_CONFIG.apiKey) {
-    console.log('[錢包] BSCSCAN_API_KEY 未設定');
-    return {
-      packTxCount: 0,
-      packSpentUSDT: 0,
-      tradeSpentUSDT: 0,
-      tradeEarnedUSDT: 0,
-      buybackEarnedUSDT: 0,
-      totalSpentUSDT: 0,
-      totalEarnedUSDT: 0,
-      cashNetUSDT: 0,
-      tradeVolumeUSDT: 0
-    };
+    throw new Error('BSCSCAN_API_KEY 未設定');
   }
   
   try {
@@ -388,11 +377,20 @@ async function fetchUSDTTransfers(walletAddress) {
       const url = `${BSC_CONFIG.apiUrl}?${params}`;
       const response = await fetch(url);
       const data = await response.json();
+      const status = String(data?.status ?? '').trim();
       const message = String(data?.message || '');
-      const rows = Array.isArray(data?.result) ? data.result : [];
+      const resultRaw = data?.result;
+      const rows = Array.isArray(resultRaw) ? resultRaw : [];
+      const noTransactions =
+        /No transactions found/i.test(message) ||
+        /No transactions found/i.test(String(resultRaw || ''));
+
+      if (status === '0' && !noTransactions) {
+        throw new Error(`BSCScan tokentx NOTOK: ${message || String(resultRaw || 'unknown error')}`);
+      }
 
       if (rows.length === 0) {
-        if (/No transactions found/i.test(message) || /No transactions found/i.test(String(data?.result || ''))) {
+        if (noTransactions) {
           break;
         }
         // 非預期格式：當成無資料，避免中斷主流程
@@ -452,17 +450,7 @@ async function fetchUSDTTransfers(walletAddress) {
     };
   } catch (e) {
     console.error('[錢包] 讀取 USDT 交易失敗:', e.message);
-    return {
-      packTxCount: 0,
-      packSpentUSDT: 0,
-      tradeSpentUSDT: 0,
-      tradeEarnedUSDT: 0,
-      buybackEarnedUSDT: 0,
-      totalSpentUSDT: 0,
-      totalEarnedUSDT: 0,
-      cashNetUSDT: 0,
-      tradeVolumeUSDT: 0
-    };
+    throw e;
   }
 }
 
@@ -574,10 +562,12 @@ function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
     ? Math.max(0, Math.floor(rawClaimed))
     : (migrateAsClaimed ? walletTotalRns : 0);
 
-  const delta = Math.max(0, walletTotalRns - claimedBefore);
+  // 已領基準只能前進，避免鏈上暫時低值/異常把基準回寫成更小值，造成重複領取。
+  const claimedAfter = Math.max(claimedBefore, walletTotalRns);
+  const delta = Math.max(0, claimedAfter - claimedBefore);
   const pendingAfter = pendingBefore + delta;
 
-  userData.walletRnsClaimed = walletTotalRns;
+  userData.walletRnsClaimed = claimedAfter;
   userData.walletRnsLastSyncedAt = new Date().toISOString();
   userData.pendingRNS = pendingAfter;
   settings[discordUserId] = userData;
@@ -588,7 +578,7 @@ function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
     migrated: !hasClaimed,
     walletTotalRns,
     claimedBefore,
-    claimedAfter: walletTotalRns,
+    claimedAfter,
     delta,
     pendingBefore,
     pendingAfter
