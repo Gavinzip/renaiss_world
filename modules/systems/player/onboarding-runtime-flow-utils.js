@@ -280,11 +280,20 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
 
     const lang = getPlayerTempData(user.id, 'language') || 'zh-TW';
     setPlayerTempData(user.id, 'gender', gender);
-    await interaction.message?.edit({ components: [] }).catch(() => {});
-    await showCharacterNameModal(interaction, gender, lang).catch(async () => {
+    try {
+      await showCharacterNameModal(interaction, gender, lang);
+    } catch (_) {
       const payload = buildElementSelectionPayload(lang, gender);
-      await interaction.reply({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
-    });
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({ embeds: [payload.embed], components: [payload.row] }).catch(async () => {
+          await interaction.channel?.send({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
+        });
+      } else {
+        await interaction.reply({ embeds: [payload.embed], components: [payload.row] }).catch(async () => {
+          await interaction.channel?.send({ embeds: [payload.embed], components: [payload.row] }).catch(() => {});
+        });
+      }
+    }
   }
 
   async function handleChoosePetElement(interaction, user, customId) {
