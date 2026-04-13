@@ -151,32 +151,20 @@ function isStorageLootContext(event = {}, result = {}, selectedChoice = '') {
     .join(' ');
   const hasStorageCue = /(封存[艙舱倉藏函]|貨樣|货样|貨艙|货舱|臨時艙|临时舱|storage\s*pod|sealed\s*(pod|cache))/iu.test(text);
   const hasOpenCue = /(打開|打开|開艙|开舱|撬開|撬开|搶奪|抢夺|強奪|强夺|奪取|夺取|搜刮|私吞|佔為己有|占为己有)/u.test(text);
-  return hasStorageCue || hasOpenCue;
+  return hasStorageCue && hasOpenCue;
 }
 
-function buildLootGainText(tradeGood = {}, options = {}) {
-  const lang = String(options?.lang || 'zh-TW');
-  const isStorageContext = Boolean(options?.isStorageContext);
-  const name = String(tradeGood?.name || '未知物件').trim() || '未知物件';
-  const rarity = String(tradeGood?.rarity || '普通').trim() || '普通';
-  const value = Math.max(1, Math.floor(Number(tradeGood?.value || 0)));
+function storyMentionsLoot(storyText = '', tradeGood = {}) {
+  const marker = extractStoryTurnMarker(storyText);
+  if (!marker) return false;
+  return /🧰/.test(marker);
+}
 
-  if (lang === 'en') {
-    if (isStorageContext) {
-      return `🧰 You force the storage pod open and find "${name}" (${rarity}). It is now packed into your bag.`;
-    }
-    return `🧰 You obtained a tradable item: ${name} (${rarity}), appraisal reference ${value} Rns.`;
-  }
-  if (lang === 'zh-CN') {
-    if (isStorageContext) {
-      return `🧰 你当场打开封存舱，里面是「${name}」（${rarity}），已收进行囊。`;
-    }
-    return `🧰 你取得可交易物：${name}（${rarity}），鉴价参考 ${value} Rns 代币。`;
-  }
-  if (isStorageContext) {
-    return `🧰 你當場打開封存艙，裡面是「${name}」（${rarity}），已收進行囊。`;
-  }
-  return `🧰 你取得可交易物：${name}（${rarity}），鑑價參考 ${value} Rns 代幣。`;
+function extractStoryTurnMarker(storyText = '') {
+  const story = String(storyText || '');
+  if (!story) return '';
+  const m = story.match(/^🧾\s*回合標記[:：]\s*(.+)$/m);
+  return m ? String(m[1] || '').trim() : '';
 }
 
 function escapeRegex(text = '') {
@@ -369,6 +357,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   // 執行事件（傳送門為特殊流程，不走一般事件表）
   let result = null;
   let selectedChoice = event.choice || event.name || '未知選擇';
+  let pendingStoryLoot = null;
   const eventMainlineGoal = String(event?.mainlineGoal || '').trim();
   const eventMainlineProgress = String(event?.mainlineProgress || '').trim();
   const eventMainlineStage = Math.max(1, Number(event?.mainlineStage || 1));
@@ -819,20 +808,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       player.noLootStreak = 0;
     }
     if (tradeGood) {
-      ECON.addTradeGood(player, tradeGood);
-      result.loot = tradeGood;
-      const lootText = buildLootGainText(tradeGood, {
-        lang: player?.language || 'zh-TW',
-        isStorageContext: isStorageLootContext(event, result, selectedChoice)
-      });
-      result.message = result.message ? `${result.message}\n\n${lootText}` : lootText;
-      queueMemory({
-        type: '戰利品',
-        content: tradeGood.name,
-        outcome: `${tradeGood.rarity}｜估值 ${tradeGood.value} Rns 代幣`,
-        importance: 2,
-        tags: ['loot', String(tradeGood.category || 'goods')]
-      });
+      pendingStoryLoot = tradeGood;
     }
   }
 
@@ -1399,7 +1375,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     try {
       updateGenerationState(player, { phase: 'generating_story' });
       CORE.savePlayer(player);
-      const storyText = await STORY.generateStory(
+      let storyText = await STORY.generateStory(
         event,
         player,
         pet,
@@ -1409,6 +1385,17 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
           desc: previousOutcomeText || event?.desc || '',
           action: event?.action || '',
           outcome: previousOutcomeText || '',
+          pendingLoot: pendingStoryLoot
+            ? {
+              name: String(pendingStoryLoot.name || '').trim(),
+              rarity: String(pendingStoryLoot.rarity || '').trim(),
+              value: Math.max(1, Math.floor(Number(pendingStoryLoot.value || 0))),
+              category: String(pendingStoryLoot.category || '').trim()
+            }
+            : null,
+          turnMoveSummary: result?.autoTravel?.fromLocation && result?.autoTravel?.targetLocation
+            ? `${String(result.autoTravel.fromLocation).trim()} → ${String(result.autoTravel.targetLocation).trim()}`
+            : '',
           mainlineGoal: eventMainlineGoal,
           mainlineProgress: eventMainlineProgress,
           mainlineStage: eventMainlineStage,
@@ -1436,6 +1423,18 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         return;
       }
 
+      if (pendingStoryLoot && storyMentionsLoot(storyText, pendingStoryLoot)) {
+        ECON.addTradeGood(player, pendingStoryLoot);
+        result.loot = pendingStoryLoot;
+        rememberPlayer(player, {
+          type: '戰利品',
+          content: pendingStoryLoot.name,
+          outcome: `${pendingStoryLoot.rarity}｜估值 ${pendingStoryLoot.value} Rns 代幣`,
+          importance: 2,
+          tags: ['loot', String(pendingStoryLoot.category || 'goods')]
+        });
+      }
+
       player.currentStory = storyText;
       if (getMainlineBridgeLock(player, { autoClear: true })) {
         consumeMainlineBridgeLock(player);
@@ -1457,14 +1456,19 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const rewardText = [];
       const movedFrom = String(result?.autoTravel?.fromLocation || '').trim();
       const movedTo = String(result?.autoTravel?.targetLocation || '').trim();
-      if (movedFrom && movedTo && !Boolean(result?.autoTravel?.blocked)) {
-        rewardText.push(`🧭 本回合移動：${movedFrom} → ${movedTo}`);
+      const hasMovedThisTurn = movedFrom && movedTo && !Boolean(result?.autoTravel?.blocked);
+      if (hasMovedThisTurn) {
+        const moveLine = `🧭 本回合移動：${movedFrom} → ${movedTo}`;
+        if (result?.loot?.name) {
+          rewardText.push(`${moveLine} | 🧰 ${result.loot.name}（${result.loot.rarity || '普通'}）`);
+        } else {
+          rewardText.push(moveLine);
+        }
       }
       if (result.gold) rewardText.push(`💰 +${result.gold} Rns 代幣`);
       if (result.wantedLevel) rewardText.push(`⚠️ 通緝等级: ${result.wantedLevel}`);
       if (result.soldCount > 0) rewardText.push(`🏪 已售出 ${result.soldCount} 件`);
       if (result.item && result.success) rewardText.push(`📦 取得 ${result.item}`);
-      if (result.loot?.name) rewardText.push(`🧰 ${result.loot.name}（${result.loot.rarity || '普通'}）`);
       if (result.petRevived) rewardText.push(`🐾 ${pet.name} 復活完成（2回合制）`);
       if (Number(result?.passivePetHeal || 0) > 0) rewardText.push(`🩹 ${pet.name} 行進恢復 +${Number(result.passivePetHeal)} HP`);
       if (Number.isFinite(Number(result.digitalRiskScore))) {

@@ -2059,6 +2059,24 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     360,
     4
   );
+  const pendingLoot = previousChoice?.pendingLoot && typeof previousChoice.pendingLoot === 'object'
+    ? previousChoice.pendingLoot
+    : null;
+  const turnMoveSummary = String(previousChoice?.turnMoveSummary || '').trim();
+  const pendingLootName = String(pendingLoot?.name || '').trim();
+  const pendingLootRarity = String(pendingLoot?.rarity || '').trim() || '普通';
+  const pendingLootValue = Math.max(1, Math.floor(Number(pendingLoot?.value || 0)));
+  const pendingLootCategory = String(pendingLoot?.category || '').trim();
+  const pendingLootSection = pendingLootName
+    ? `\n【本回候選戰利品（由敘事決定是否落地）】\n` +
+      `名稱：${pendingLootName}\n` +
+      `稀有度：${pendingLootRarity}\n` +
+      `參考鑑價：${pendingLootValue} Rns 代幣\n` +
+      `${pendingLootCategory ? `類別：${pendingLootCategory}` : ''}`.trim()
+    : '';
+  const turnMoveSection = turnMoveSummary
+    ? `\n【本回移動摘要（供回合標記使用）】\n🧭 本回合移動：${turnMoveSummary}`
+    : '';
   
   // 保留玩家原始名稱，避免模型把玩家名誤當其他 NPC。
   let safePlayerName = playerName.trim();
@@ -2165,6 +2183,8 @@ ${mainlineBridgeSection}
 動作代碼：${previousActionCode || '（無）'}
 ${previousAction}
 ${previousOutcome ? `\n【上一個行動結果（必須銜接）】\n${previousOutcome}` : ''}
+${turnMoveSection}
+${pendingLootSection}
 
 【任務】
 ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousAction}」後發生了什麼。故事目標長度約 400-500 字。要點：
@@ -2211,6 +2231,12 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 38. 若存在【主線橋接鎖定】，開場 1-2 段必須優先承接該目標，且給出「現在就能做」的行動落點
 39. 主線橋接鎖定只能當「本回合先落地」的方向，不可直接照抄成模板句或條列宣告
 40. 若「動作代碼」是 portal_jump_followup 或 device_jump_followup，開場必須採三段銜接：先交代原地點最後情勢（1-2句）→ 再寫啟動傳送與過程（1-2句）→ 最後落在新地點且立刻有可互動對象/環境回應（至少2句），禁止只寫「已抵達」空句
+41. 若有【本回候選戰利品】，你可以選擇讓它出現或不出現；由敘事自然判斷，禁止硬塞獎勵句
+42. 若選擇讓候選戰利品出現，必須在故事中交代取得動作，且明確寫出該物件名稱；若不出現則完全不提該物件
+43. 故事最後一行必須輸出「🧾 回合標記：...」。
+44. 回合標記只允許兩種片段，用「 | 」串接：「🧭 本回合移動：...」與「🧰 物件名（稀有度）」。沒有就省略對應片段。
+45. 若有【本回移動摘要】就必須把同一段「🧭」放進回合標記；若你決定本回沒有寶物，就不要放「🧰」。
+46. 若你決定本回有寶物，回合標記中的「🧰」必須使用【本回候選戰利品】同名同稀有度。
 
 直接開始講：`;
 

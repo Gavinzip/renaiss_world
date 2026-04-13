@@ -118,16 +118,17 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
       : ('```ansi\n' + renderedMap + '\n```'))
     : compactMap;
   const mapImageStatus = tx.mapLegendImage;
-  const mapRenderResult = regionSnapshot
+  const shouldRenderImage = !useWideAnsiMap;
+  const mapRenderResult = shouldRenderImage && regionSnapshot
     ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus, uiLang)
-    : { buffer: null, error: '缺少區域地圖資料' };
+    : { buffer: null, error: shouldRenderImage ? '缺少區域地圖資料' : '' };
   const renderedMapImage = mapRenderResult?.buffer || null;
-  const hasRenderedMapImage = Boolean(renderedMapImage);
+  const hasRenderedMapImage = shouldRenderImage && Boolean(renderedMapImage);
   const renderErrorText = !hasRenderedMapImage ? String(mapRenderResult?.error || '').trim() : '';
   const visibleMapBlock = hasRenderedMapImage ? '' : mapBlock;
   const mapDisplayLabel = hasRenderedMapImage
     ? tx.mapDisplayImage
-    : (useWideAnsiMap ? tx.mapDisplayAsciiFallback : tx.mapDisplayTextFallback);
+    : (useWideAnsiMap ? (tx.mapDisplayAscii || tx.mapDisplayAsciiFallback) : tx.mapDisplayTextFallback);
   const nearbyPlaces = Array.isArray(currentProfile?.nearby) && currentProfile.nearby.length > 0
     ? joinByLang(currentProfile.nearby.slice(0, 4), uiLang)
     : tx.mapNoNearby;

@@ -12,7 +12,7 @@ function createEventFlowUtils(deps = {}) {
     PET,
     ECON,
     isImmediateBattleChoice = () => false,
-    PET_PASSIVE_HEAL_PER_STORY_TURN = 10
+    PET_PASSIVE_HEAL_PER_STORY_TURN = 20
   } = deps;
 
   function rememberPlayer(player, memory) {

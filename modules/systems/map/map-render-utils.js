@@ -26,6 +26,10 @@ function createMapRenderUtils(deps = {}) {
     return path.join(rootDir, 'tools', 'render_region_map.py');
   }
 
+  function getRegionPosterRendererScriptPath() {
+    return path.join(rootDir, 'tools', 'map_poster_renderer', 'render_poster_map_v6_island_glass.py');
+  }
+
   function normalizeMapLang(lang = 'zh-TW') {
     const raw = String(lang || '').trim();
     if (raw === 'zh-CN') return 'zh-CN';
@@ -112,15 +116,20 @@ function createMapRenderUtils(deps = {}) {
     if (!snapshot || !Array.isArray(snapshot.mapRows) || snapshot.mapRows.length === 0) {
       return { buffer: null, error: '地圖資料為空' };
     }
-    const scriptPath = getRegionMapRendererScriptPath();
-    if (!fs.existsSync(scriptPath)) {
-      return { buffer: null, error: '找不到地圖渲染腳本 tools/render_region_map.py' };
+    const legacyScriptPath = getRegionMapRendererScriptPath();
+    const posterScriptPath = getRegionPosterRendererScriptPath();
+    if (!fs.existsSync(posterScriptPath) && !fs.existsSync(legacyScriptPath)) {
+      return { buffer: null, error: '找不到地圖渲染腳本（新版/舊版）' };
     }
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'renaiss-map-'));
     const inPath = path.join(tempDir, 'map-input.json');
     const outPath = path.join(tempDir, 'map-output.png');
     const fontPath = path.join(rootDir, 'NotoSansMonoCJKtc-Regular.otf');
+    const mapLang = normalizeMapLang(lang);
+    const currentLocation = Array.isArray(snapshot.locations)
+      ? String(snapshot.locations.find((row) => row?.isCurrent)?.location || '').trim()
+      : '';
     const localizedRegionName = getLocalizedRegionName(snapshot.regionName || '', lang);
     const payload = {
       map_rows: snapshot.mapRows,
@@ -140,39 +149,56 @@ function createMapRenderUtils(deps = {}) {
         : [],
       zone_name: `${localizedRegionName} ${snapshot.difficultyRange ? `(${snapshot.difficultyRange})` : ''}`.trim(),
       status: statusText,
-      lang: normalizeMapLang(lang),
+      lang: mapLang,
       legend: getMapImageLegendLabels(lang)
     };
 
     try {
       fs.writeFileSync(inPath, JSON.stringify(payload), 'utf8');
-      const args = [scriptPath, '--input', inPath, '--output', outPath];
-      if (fs.existsSync(fontPath)) args.push('--font', fontPath);
+      const legacyArgs = [legacyScriptPath, '--input', inPath, '--output', outPath];
       const runners = ['python3', 'python'];
-      let run = null;
       const failReasons = [];
-      for (const runner of runners) {
-        run = spawnSync(runner, args, { cwd: rootDir, encoding: 'utf8', timeout: 12000 });
-        if (run.status === 0) {
-          if (fs.existsSync(outPath)) {
-            return { buffer: fs.readFileSync(outPath), error: '' };
+
+      if (fs.existsSync(posterScriptPath)) {
+        const posterArgs = [posterScriptPath, '--current', currentLocation || '廣州', '--lang', mapLang, '--output', outPath];
+        for (const runner of runners) {
+          const run = spawnSync(runner, posterArgs, { cwd: rootDir, encoding: 'utf8', timeout: 12000 });
+          if (run.status === 0) {
+            if (fs.existsSync(outPath)) {
+              return { buffer: fs.readFileSync(outPath), error: '' };
+            }
+            failReasons.push(`${runner}(poster_v6) 執行成功但未產生 PNG`);
+            continue;
           }
-          failReasons.push(`${runner} 執行成功但未產生 PNG`);
-          continue;
+          failReasons.push(summarizeMapRenderFailure(`${runner}(poster_v6)`, run));
         }
-        failReasons.push(summarizeMapRenderFailure(runner, run));
       }
-      if (!run || run.status !== 0) {
-        console.log('[MapRender] python render failed:', {
-          status: run?.status,
-          signal: run?.signal,
-          error: run?.error ? String(run.error.message || run.error) : '',
-          stdout: String(run?.stdout || '').slice(0, 600),
-          stderr: String(run?.stderr || '').slice(0, 600)
-        });
-        return { buffer: null, error: (failReasons.join('｜') || 'Python 渲染失敗').slice(0, 220) };
+
+      if (fs.existsSync(legacyScriptPath)) {
+        if (fs.existsSync(fontPath)) legacyArgs.push('--font', fontPath);
+        let run = null;
+        for (const runner of runners) {
+          run = spawnSync(runner, legacyArgs, { cwd: rootDir, encoding: 'utf8', timeout: 12000 });
+          if (run.status === 0) {
+            if (fs.existsSync(outPath)) {
+              return { buffer: fs.readFileSync(outPath), error: '' };
+            }
+            failReasons.push(`${runner}(legacy) 執行成功但未產生 PNG`);
+            continue;
+          }
+          failReasons.push(summarizeMapRenderFailure(`${runner}(legacy)`, run));
+        }
+        if (!run || run.status !== 0) {
+          console.log('[MapRender] python render failed:', {
+            status: run?.status,
+            signal: run?.signal,
+            error: run?.error ? String(run.error.message || run.error) : '',
+            stdout: String(run?.stdout || '').slice(0, 600),
+            stderr: String(run?.stderr || '').slice(0, 600)
+          });
+        }
       }
-      return { buffer: null, error: (failReasons.join('｜') || '渲染失敗（未知原因）').slice(0, 220) };
+      return { buffer: null, error: (failReasons.join('｜') || '地圖渲染失敗（新版與舊版皆不可用）').slice(0, 220) };
     } catch (e) {
       console.log('[MapRender] exception:', e?.message || e);
       return { buffer: null, error: `程式例外：${String(e?.message || e).slice(0, 140)}` };
@@ -187,6 +213,7 @@ function createMapRenderUtils(deps = {}) {
     normalizeMapViewMode,
     getPlayerMapViewMode,
     getRegionMapRendererScriptPath,
+    getRegionPosterRendererScriptPath,
     summarizeMapRenderFailure,
     renderRegionMapImageBuffer
   };

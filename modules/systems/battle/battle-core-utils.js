@@ -134,14 +134,17 @@ function createBattleCoreUtils(deps = {}) {
 
     let changed = false;
     const selectedId = String(selected?.id || '').trim();
+    const lockMainPetByFriendDuel = Boolean(preferBattle && player?.battleState?.friendDuel);
     if (selectedId && player && typeof player === 'object') {
-      if (String(player.activePetId || '').trim() !== selectedId) {
-        player.activePetId = selectedId;
-        changed = true;
-      }
-      if (String(player.mainPetId || '').trim() !== selectedId) {
-        player.mainPetId = selectedId;
-        changed = true;
+      if (!lockMainPetByFriendDuel) {
+        if (String(player.activePetId || '').trim() !== selectedId) {
+          player.activePetId = selectedId;
+          changed = true;
+        }
+        if (String(player.mainPetId || '').trim() !== selectedId) {
+          player.mainPetId = selectedId;
+          changed = true;
+        }
       }
       if (preferBattle && player.battleState && typeof player.battleState === 'object') {
         if (String(player.battleState.activePetId || '').trim() !== selectedId) {
