@@ -1,4 +1,9 @@
 function createInteractionMessageUtils() {
+  const ALWAYS_KEEP_VISIBLE_BUTTONS = new Set([
+    'open_friend_add_modal',
+    'open_wallet_modal'
+  ]);
+
   const shouldKeepModalLauncherVisible = (() => {
     const raw = String(process.env.BUTTON_HIDE_KEEP_MODAL_LAUNCHERS || '').trim().toLowerCase();
     return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
@@ -35,11 +40,11 @@ function createInteractionMessageUtils() {
   }
 
   function isModalLauncherButtonId(customId = '') {
-    if (!shouldKeepModalLauncherVisible) return false;
     const cid = String(customId || '').trim();
     if (!cid) return false;
+    if (ALWAYS_KEEP_VISIBLE_BUTTONS.has(cid)) return true;
+    if (!shouldKeepModalLauncherVisible) return false;
     return (
-      cid === 'open_wallet_modal' ||
       cid === 'open_profile' ||
       cid === 'open_character' ||
       cid === 'open_friends' ||

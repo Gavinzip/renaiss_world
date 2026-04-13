@@ -33,7 +33,17 @@ function createFriendUiSystem(deps = {}) {
       .setMaxLength(22);
 
     modal.addComponents(new ActionRowBuilder().addComponents(input));
-    await interaction.showModal(modal);
+    try {
+      await interaction.showModal(modal);
+    } catch (err) {
+      console.error('[Friends] showFriendAddModal failed:', err?.message || err);
+      const failMsg = '⚠️ 開啟「新增好友」輸入框失敗，請再按一次。';
+      if (interaction?.deferred || interaction?.replied) {
+        await interaction.followUp({ content: failMsg, ephemeral: true }).catch(() => {});
+      } else {
+        await interaction.reply({ content: failMsg, ephemeral: true }).catch(() => {});
+      }
+    }
   }
 
   async function showFriendsMenu(interaction, user, notice = '') {
