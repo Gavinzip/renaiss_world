@@ -81,6 +81,13 @@ function appendWinnerLine(detailText = '', winnerName = '', loserName = '') {
   return body ? `${body}\n\n${winnerLine}` : winnerLine;
 }
 
+async function resolveBattleInteractionMode(interaction) {
+  if (!interaction?.deferred && !interaction?.replied && typeof interaction?.deferUpdate === 'function') {
+    await interaction.deferUpdate().catch(() => {});
+  }
+  return interaction?.deferred || interaction?.replied ? 'edit' : 'update';
+}
+
 async function handleBattleSwitchOpen(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const fallbackPet = PET.loadPet(user.id);
@@ -607,6 +614,8 @@ async function handleUseMove(interaction, user, moveIndex) {
     return;
   }
 
+  const responseMode = await resolveBattleInteractionMode(interaction);
+
   const battleOptions = (player?.battleState?.mentorSpar || player?.battleState?.friendDuel) ? { nonLethal: true } : undefined;
   const enemyMove = BATTLE.enemyChooseMove(enemy);
   const playerPhaseRaw = BATTLE.executeBattlePlayerPhase(
@@ -635,7 +644,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           player,
           activePet,
           `${playerPhase.message}\n\n${switchedEnemy.message}`,
-          { mode: 'update' }
+          { mode: responseMode }
         );
         return;
       }
@@ -649,7 +658,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -663,7 +672,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     const battleStateSnapshot = player?.battleState || {};
@@ -725,7 +734,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
     
-    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
     return;
   }
 
@@ -739,7 +748,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           player,
           switchedPet.nextPet,
           `${playerPhase.message}\n\n${switchedPet.message}`,
-          { mode: 'update' }
+          { mode: responseMode }
         );
         return;
       }
@@ -749,7 +758,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setColor(0x8b5cf6)
         .setDescription(`${playerPhase.message}\n\n${duel.summaryLine}`);
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -761,14 +770,14 @@ async function handleUseMove(interaction, user, moveIndex) {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (combatant.isHuman) {
-      await showTrueGameOver(interaction, user, playerPhase.message, 'update');
+      await showTrueGameOver(interaction, user, playerPhase.message, responseMode);
       return;
     }
-    await showPetDefeatedTransition(interaction, player, pet, playerPhase.message, 'update');
+    await showPetDefeatedTransition(interaction, player, pet, playerPhase.message, responseMode);
     return;
   }
 
@@ -778,6 +787,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     pet,
     '',
     {
+      mode: responseMode,
       disableActions: true,
       actionView: buildActionViewFromPhase(playerPhase, null, { enemyPending: true }),
       turnStartLines: playerPhase.turnStartLines || [],
@@ -817,7 +827,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           player,
           activePet,
           `${combinedMessage}\n\n${switchedEnemy.message}`,
-          { mode: 'edit' }
+          { mode: responseMode }
         );
         return;
       }
@@ -831,7 +841,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -845,7 +855,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     const battleStateSnapshot = player?.battleState || {};
@@ -905,7 +915,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
-    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
     return;
   }
 
@@ -919,7 +929,7 @@ async function handleUseMove(interaction, user, moveIndex) {
           player,
           switchedPet.nextPet,
           `${combinedMessage}\n\n${switchedPet.message}`,
-          { mode: 'edit' }
+          { mode: responseMode }
         );
         return;
       }
@@ -929,7 +939,7 @@ async function handleUseMove(interaction, user, moveIndex) {
         .setColor(0x8b5cf6)
         .setDescription(`${combinedMessage}\n\n${duel.summaryLine}`);
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -941,14 +951,14 @@ async function handleUseMove(interaction, user, moveIndex) {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (combatant.isHuman) {
-      await showTrueGameOver(interaction, user, combinedMessage, 'edit');
+      await showTrueGameOver(interaction, user, combinedMessage, responseMode);
       return;
     }
-    await showPetDefeatedTransition(interaction, player, pet, combinedMessage, 'edit');
+    await showPetDefeatedTransition(interaction, player, pet, combinedMessage, responseMode);
     return;
   }
 
@@ -962,7 +972,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     pet,
     `⚡ 消耗：${chosenMove.name} -${energyCost} 能量，下一回合能量 ${next.energy}`,
     {
-      mode: 'edit',
+      mode: responseMode,
       actionView: buildActionViewFromPhase(playerPhase, enemyPhase),
       notice: '✅ 敵方已行動，輪到你選擇下一步。'
     }
@@ -983,6 +993,7 @@ async function handleBattleWait(interaction, user) {
     return;
   }
   if (petResolved?.changed) CORE.savePlayer(player);
+  const responseMode = await resolveBattleInteractionMode(interaction);
 
   const state = ensureBattleEnergyState(player);
   const beforeEnergy = state.energy;
@@ -1014,7 +1025,7 @@ async function handleBattleWait(interaction, user) {
           player,
           activePet,
           `${playerPhase.message}\n\n${switchedEnemy.message}`,
-          { mode: 'update' }
+          { mode: responseMode }
         );
         return;
       }
@@ -1028,7 +1039,7 @@ async function handleBattleWait(interaction, user) {
           { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -1042,7 +1053,7 @@ async function handleBattleWait(interaction, user) {
           { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     player.stats.財富 += playerPhase.gold;
@@ -1107,7 +1118,7 @@ async function handleBattleWait(interaction, user) {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
-    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
     return;
   }
 
@@ -1121,7 +1132,7 @@ async function handleBattleWait(interaction, user) {
           player,
           switchedPet.nextPet,
           `${playerPhase.message || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`}\n\n${switchedPet.message}`,
-          { mode: 'update' }
+          { mode: responseMode }
         );
         return;
       }
@@ -1131,7 +1142,7 @@ async function handleBattleWait(interaction, user) {
         .setColor(0x8b5cf6)
         .setDescription(`${playerPhase.message || ''}\n\n${duel.summaryLine}`.trim());
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -1143,17 +1154,17 @@ async function handleBattleWait(interaction, user) {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'update');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     CORE.savePlayer(player);
     if (combatant.isHuman) {
       player.battleState = null;
       CORE.savePlayer(player);
-      await showTrueGameOver(interaction, user, playerPhase.message || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, 'update');
+      await showTrueGameOver(interaction, user, playerPhase.message || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, responseMode);
       return;
     }
-    await showPetDefeatedTransition(interaction, player, pet, playerPhase.message || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`, 'update');
+    await showPetDefeatedTransition(interaction, player, pet, playerPhase.message || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`, responseMode);
     return;
   }
 
@@ -1163,6 +1174,7 @@ async function handleBattleWait(interaction, user) {
     pet,
     '',
     {
+      mode: responseMode,
       disableActions: true,
       actionView: buildActionViewFromPhase(playerPhase, null, { enemyPending: true }),
       turnStartLines: playerPhase.turnStartLines || [],
@@ -1201,7 +1213,7 @@ async function handleBattleWait(interaction, user) {
           player,
           activePet,
           `${combinedMessage}\n\n${switchedEnemy.message}`,
-          { mode: 'edit' }
+          { mode: responseMode }
         );
         return;
       }
@@ -1215,7 +1227,7 @@ async function handleBattleWait(interaction, user) {
           { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true }
         );
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -1231,7 +1243,7 @@ async function handleBattleWait(interaction, user) {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
-      await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, responseMode);
       return;
     }
     player.stats.財富 += enemyPhase.gold;
@@ -1296,7 +1308,7 @@ async function handleBattleWait(interaction, user) {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
     );
-    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+    await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
     return;
   }
 
@@ -1310,7 +1322,7 @@ async function handleBattleWait(interaction, user) {
           player,
           switchedPet.nextPet,
           `${combinedMessage || `⚡ 你在蓄能待機時敗給 ${enemy.name}。`}\n\n${switchedPet.message}`,
-          { mode: 'edit' }
+          { mode: responseMode }
         );
         return;
       }
@@ -1320,7 +1332,7 @@ async function handleBattleWait(interaction, user) {
         .setColor(0x8b5cf6)
         .setDescription(`${combinedMessage || ''}\n\n${duel.summaryLine}`.trim());
       const row = buildFriendDuelResultRow();
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     if (player?.battleState?.mentorSpar) {
@@ -1332,17 +1344,17 @@ async function handleBattleWait(interaction, user) {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
       );
-      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, 'edit');
+      await sendBattleMessage(interaction, { embeds: [embed], components: [row] }, responseMode);
       return;
     }
     CORE.savePlayer(player);
     if (combatant.isHuman) {
       player.battleState = null;
       CORE.savePlayer(player);
-      await showTrueGameOver(interaction, user, combinedMessage || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, 'edit');
+      await showTrueGameOver(interaction, user, combinedMessage || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, responseMode);
       return;
     }
-    await showPetDefeatedTransition(interaction, player, pet, combinedMessage || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`, 'edit');
+    await showPetDefeatedTransition(interaction, player, pet, combinedMessage || `⚡ 你在蓄能待機時被 ${enemy.name} 擊倒。`, responseMode);
     return;
   }
 
@@ -1357,7 +1369,7 @@ async function handleBattleWait(interaction, user) {
     pet,
     `⚡ 能量 ${beforeEnergy} → ${next.energy}（+2）`,
     {
-      mode: 'edit',
+      mode: responseMode,
       actionView: buildActionViewFromPhase(playerPhase, enemyPhase),
       notice: '✅ 敵方已行動，輪到你選擇下一步。'
     }
