@@ -9,6 +9,9 @@ function createPetChipUtils(deps = {}) {
     getPetMovePool = () => [],
     getPetAttackMoves = () => []
   } = deps;
+  const LEGACY_MOVE_NAME_ALIASES = new Map([
+    ['火蓮碎', '日核裂解']
+  ]);
 
   function buildSkillChipPrefixAliases() {
     const raw = String(SKILL_CHIP_PREFIX || '技能晶片：').trim();
@@ -23,6 +26,53 @@ function createPetChipUtils(deps = {}) {
 
   const SKILL_CHIP_PREFIX_ALIASES = buildSkillChipPrefixAliases();
 
+  function normalizeMoveNameKey(name = '') {
+    return String(name || '')
+      .replace(/\u3000/g, ' ')
+      .replace(/[「」『』"'`]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function buildMoveLookup() {
+    const byId = new Map();
+    const byNameKey = new Map();
+    const allMoves = Array.isArray(getAllPetSkillMoves()) ? getAllPetSkillMoves() : [];
+    for (const move of allMoves) {
+      const moveId = String(move?.id || '').trim();
+      const moveName = String(move?.name || '').trim();
+      if (!moveId || !moveName) continue;
+      if (!byId.has(moveId)) byId.set(moveId, move);
+      const key = normalizeMoveNameKey(moveName);
+      if (key && !byNameKey.has(key)) byNameKey.set(key, move);
+    }
+    for (const [legacyName, targetName] of LEGACY_MOVE_NAME_ALIASES.entries()) {
+      const target = byNameKey.get(normalizeMoveNameKey(targetName));
+      const legacyKey = normalizeMoveNameKey(legacyName);
+      if (!target || !legacyKey || byNameKey.has(legacyKey)) continue;
+      byNameKey.set(legacyKey, target);
+    }
+    return { byId, byNameKey };
+  }
+
+  const MOVE_LOOKUP = buildMoveLookup();
+
+  function resolveMoveTemplate(input = {}) {
+    const moveId = String(input?.moveId || '').trim();
+    if (moveId && MOVE_LOOKUP.byId.has(moveId)) {
+      return MOVE_LOOKUP.byId.get(moveId);
+    }
+    const moveName = normalizeMoveNameKey(input?.moveName || '');
+    if (!moveName) return null;
+    return MOVE_LOOKUP.byNameKey.get(moveName) || null;
+  }
+
+  function canonicalizeMoveName(name = '') {
+    const template = resolveMoveTemplate({ moveName: name });
+    if (template?.name) return String(template.name || '').trim();
+    return normalizeMoveNameKey(name);
+  }
+
   function stripSkillChipPrefix(name = '') {
     const text = String(name || '').trim();
     if (!text) return '';
@@ -36,24 +86,40 @@ function createPetChipUtils(deps = {}) {
 
   function extractSkillChipMoveName(rawItem = null) {
     const name = getDraftItemName(rawItem);
-    return stripSkillChipPrefix(name);
+    const rawMoveName = stripSkillChipPrefix(name);
+    if (!rawMoveName) return '';
+    return canonicalizeMoveName(rawMoveName);
   }
 
   function addSkillChipToInventory(player, moveName = '') {
-    const normalized = String(moveName || '').trim();
+    const normalized = canonicalizeMoveName(moveName);
     if (!normalized) return false;
     if (!Array.isArray(player.inventory)) player.inventory = [];
     player.inventory.unshift(`${SKILL_CHIP_PREFIX}${normalized}`);
     return true;
   }
 
-  function consumeSkillChipFromInventory(player, moveName = '') {
-    const normalized = String(moveName || '').trim();
+  function consumeSkillChipFromInventory(player, moveName = '', options = {}) {
+    const normalized = canonicalizeMoveName(moveName);
     if (!normalized || !Array.isArray(player?.inventory)) return false;
+    const targetMove = resolveMoveTemplate({ moveId: options?.moveId, moveName: normalized });
+    const targetMoveId = String(targetMove?.id || '').trim();
+    const targetMoveName = canonicalizeMoveName(targetMove?.name || normalized);
+
     for (let i = 0; i < player.inventory.length; i++) {
       const itemName = getDraftItemName(player.inventory[i]);
       const extracted = stripSkillChipPrefix(itemName);
-      if (extracted !== normalized) continue;
+      if (!extracted) continue;
+      const currentMove = resolveMoveTemplate({ moveName: extracted });
+      const currentMoveId = String(currentMove?.id || '').trim();
+      const currentMoveName = canonicalizeMoveName(currentMove?.name || extracted);
+
+      if (targetMoveId) {
+        if (currentMoveId !== targetMoveId) continue;
+      } else if (currentMoveName !== targetMoveName) {
+        continue;
+      }
+
       player.inventory.splice(i, 1);
       return true;
     }
@@ -62,14 +128,25 @@ function createPetChipUtils(deps = {}) {
 
   function getLearnableSkillChipEntries(player, pet) {
     const allPool = getAllPetSkillMoves();
-    const byName = new Map(allPool.map((m) => [String(m?.name || '').trim(), m]));
+    const byName = new Map();
+    for (const move of allPool) {
+      const nameKey = normalizeMoveNameKey(move?.name || '');
+      if (!nameKey || byName.has(nameKey)) continue;
+      byName.set(nameKey, move);
+    }
+    for (const [legacyName, targetName] of LEGACY_MOVE_NAME_ALIASES.entries()) {
+      const legacyKey = normalizeMoveNameKey(legacyName);
+      const target = byName.get(normalizeMoveNameKey(targetName));
+      if (!legacyKey || !target || byName.has(legacyKey)) continue;
+      byName.set(legacyKey, target);
+    }
     const petPoolIds = new Set(getPetMovePool(pet?.type).map((m) => String(m?.id || '').trim()).filter(Boolean));
     const learnedIds = new Set((Array.isArray(pet?.moves) ? pet.moves : []).map((m) => String(m?.id || '').trim()));
     const stats = new Map();
     for (const raw of Array.isArray(player?.inventory) ? player.inventory : []) {
       const moveName = extractSkillChipMoveName(raw);
       if (!moveName) continue;
-      const move = byName.get(moveName);
+      const move = byName.get(normalizeMoveNameKey(moveName));
       const key = move?.id ? String(move.id || '').trim() : `name::${moveName}`;
       const prev = stats.get(key) || {
         move: move || { id: '', name: moveName, element: '未知', tier: 0 },

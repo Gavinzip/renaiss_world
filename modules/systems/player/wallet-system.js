@@ -92,7 +92,11 @@ function bindWallet(discordUserId, walletAddress) {
     boundAt: new Date().toISOString(),
     pendingRNS: 0,
     walletRnsClaimed: 0,
-    walletRnsLastSyncedAt: null
+    walletRnsLastSyncedAt: null,
+    maxPetsUnlocked: 1,
+    walletRnsCreditedTotal: 0,
+    walletRnsLastCredited: 0,
+    walletRnsLastCreditedAt: null
   };
   
   if (saveWalletSettings(settings)) {
@@ -194,12 +198,26 @@ async function resolveUserFromWallet(walletAddress) {
   const wallet = normalizeWalletAddress(walletAddress);
   if (!wallet) return { userId: null, matchedRows: [] };
 
-  const limit = 100;
-  const maxPages = 60;
-  let offset = 0;
+  const limit = Math.max(10, Math.min(100, Number(process.env.WALLET_RESOLVE_PAGE_LIMIT || 100)));
+  const maxPagesByAddress = Math.max(1, Math.min(80, Number(process.env.WALLET_RESOLVE_ADDRESS_MAX_PAGES || 8)));
+  const maxOffsetGlobal = Math.max(limit, Number(process.env.WALLET_RESOLVE_GLOBAL_MAX_OFFSET || 5000));
   const matchedRows = [];
 
-  for (let page = 0; page < maxPages; page++) {
+  const scanRowsForOwner = (rows = []) => {
+    for (const row of rows) {
+      const ownerAddress = normalizeWalletAddress(row?.ownerAddress);
+      if (ownerAddress !== wallet) continue;
+      matchedRows.push(row);
+      const userId = row?.owner?.id;
+      if (typeof userId === 'string' && userId.trim()) {
+        return userId.trim();
+      }
+    }
+    return null;
+  };
+
+  // 快路徑：先嘗試 address 查詢（部分時段 API 可直接命中）。
+  for (let page = 0, offset = 0; page < maxPagesByAddress; page += 1) {
     const result = await trpcCollectibleList({
       address: wallet,
       filter: 'all',
@@ -211,21 +229,29 @@ async function resolveUserFromWallet(walletAddress) {
       includeOpenCardPackRecords: true
     });
     const rows = extractCollectibleRows(result);
-    for (const row of rows) {
-      const ownerAddress = normalizeWalletAddress(row?.ownerAddress);
-      if (ownerAddress !== wallet) continue;
-      matchedRows.push(row);
-      const userId = row?.owner?.id;
-      if (typeof userId === 'string' && userId.trim()) {
-        return { userId: userId.trim(), matchedRows };
-      }
-    }
-
+    const found = scanRowsForOwner(rows);
+    if (found) return { userId: found, matchedRows };
     const pagination = result?.pagination || {};
     if (!pagination.hasMore) break;
     const step = Number(pagination.limit) || limit;
     if (step <= 0) break;
     offset += step;
+  }
+
+  // 慢路徑：address 查詢偶發回傳非持倉專屬清單時，掃描全局分頁找 ownerAddress。
+  for (let offset = 0; offset <= maxOffsetGlobal; offset += limit) {
+    const result = await trpcCollectibleList({
+      limit,
+      offset,
+      sortBy: 'mintDate',
+      sortOrder: 'desc',
+      includeOpenCardPackRecords: true
+    });
+    const rows = extractCollectibleRows(result);
+    const found = scanRowsForOwner(rows);
+    if (found) return { userId: found, matchedRows };
+    const pagination = result?.pagination || {};
+    if (!pagination.hasMore) break;
   }
 
   return { userId: null, matchedRows };
@@ -491,6 +517,18 @@ async function getPlayerWalletAssets(discordUserId) {
   }
   
   const assets = await calculateTotalAssets(walletAddress);
+  const settings = loadWalletSettings();
+  const cached = settings[discordUserId] || {};
+
+  const cachedCount = Math.max(0, Number(cached.cardCount || 0));
+  const cachedFMV = Math.max(0, Number(cached.cardFMV || 0));
+  const freshCount = Math.max(0, Number(assets.cardCount || 0));
+  const freshFMV = Math.max(0, Number(assets.cardFMV || 0));
+  const likelyTransientFmvMiss = freshCount <= 0 && freshFMV <= 0 && cachedCount > 0 && cachedFMV > 0;
+  if (likelyTransientFmvMiss) {
+    assets.cardCount = cachedCount;
+    assets.cardFMV = cachedFMV;
+  }
   
   return {
     success: true,
@@ -506,6 +544,15 @@ function getMaxPetsByFMV(cardFMV) {
   if (fmv > 1000) return 3; // > 1000U → 3 隻
   if (fmv > 100) return 2;  // > 100U  → 2 隻
   return 1;                 // 其餘 → 1 隻
+}
+
+// ============== 取得玩家當前可擁有寵物數（含歷史最高解鎖，不回退） ==============
+function getMaxPetsForUser(discordUserId) {
+  const settings = loadWalletSettings();
+  const userData = settings[discordUserId] || {};
+  const byFMV = getMaxPetsByFMV(userData.cardFMV || 0);
+  const unlocked = Math.max(1, Math.floor(Number(userData.maxPetsUnlocked || 1)));
+  return Math.max(byFMV, unlocked);
 }
 
 // ============== 根據 RNS 計算可擁有寵物數（向後兼容）==============
@@ -552,15 +599,19 @@ function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
   }
 
   const walletTotalRns = Math.max(0, Math.floor(Number(latestRns || 0)));
-  const pendingBefore = Math.max(0, Math.floor(Number(userData.pendingRNS || 0)));
+  const forceResetClaimedBaseline = Boolean(options?.forceResetClaimedBaseline);
+  const pendingBefore = forceResetClaimedBaseline
+    ? 0
+    : Math.max(0, Math.floor(Number(userData.pendingRNS || 0)));
 
   const rawClaimed = Number(userData.walletRnsClaimed);
   const hasClaimed = Number.isFinite(rawClaimed) && rawClaimed >= 0;
   const assumeClaimedIfMissing = Boolean(options?.assumeClaimedIfMissing);
   const migrateAsClaimed = !hasClaimed && (assumeClaimedIfMissing || pendingBefore > 0);
-  const claimedBefore = hasClaimed
+  const claimedBeforeBase = hasClaimed
     ? Math.max(0, Math.floor(rawClaimed))
     : (migrateAsClaimed ? walletTotalRns : 0);
+  const claimedBefore = forceResetClaimedBaseline ? 0 : claimedBeforeBase;
 
   // 已領基準只能前進，避免鏈上暫時低值/異常把基準回寫成更小值，造成重複領取。
   const claimedAfter = Math.max(claimedBefore, walletTotalRns);
@@ -575,6 +626,7 @@ function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
 
   return {
     success: true,
+    resetApplied: forceResetClaimedBaseline,
     migrated: !hasClaimed,
     walletTotalRns,
     claimedBefore,
@@ -589,14 +641,60 @@ function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
 function updateWalletData(discordUserId, data) {
   const settings = loadWalletSettings();
   if (settings[discordUserId]) {
-    settings[discordUserId].cardFMV = data.cardFMV;
-    settings[discordUserId].cardCount = data.cardCount;
+    const userData = settings[discordUserId];
+    const prevCount = Math.max(0, Number(userData.cardCount || 0));
+    const prevFMV = Math.max(0, Number(userData.cardFMV || 0));
+    const nextCountRaw = Math.max(0, Number(data.cardCount || 0));
+    const nextFMVRaw = Math.max(0, Number(data.cardFMV || 0));
+    const likelyTransientFmvMiss = nextCountRaw <= 0 && nextFMVRaw <= 0 && prevCount > 0 && prevFMV > 0;
+
+    const safeCardCount = likelyTransientFmvMiss ? prevCount : nextCountRaw;
+    const safeCardFMV = likelyTransientFmvMiss ? prevFMV : nextFMVRaw;
+
+    userData.cardFMV = safeCardFMV;
+    userData.cardCount = safeCardCount;
     settings[discordUserId].packTxCount = data.packTxCount;
     settings[discordUserId].packSpentUSDT = data.packSpentUSDT;
     settings[discordUserId].tradeSpentUSDT = data.tradeSpentUSDT;
     settings[discordUserId].totalSpentUSDT = data.totalSpentUSDT;
+    const prevUnlocked = Math.max(1, Math.floor(Number(userData.maxPetsUnlocked || 1)));
+    const unlockedByNow = getMaxPetsByFMV(safeCardFMV);
+    userData.maxPetsUnlocked = Math.max(prevUnlocked, unlockedByNow);
+    settings[discordUserId] = userData;
     saveWalletSettings(settings);
   }
+}
+
+// ============== 記錄同步實際入帳 ==============
+function recordWalletCredit(discordUserId, amount) {
+  const settings = loadWalletSettings();
+  const userData = settings[discordUserId];
+  if (!userData) {
+    return { success: false, reason: '尚未綁定錢包！' };
+  }
+  const credited = Math.max(0, Math.floor(Number(amount || 0)));
+  if (credited <= 0) {
+    return {
+      success: true,
+      creditedNow: 0,
+      creditedTotal: Math.max(0, Math.floor(Number(userData.walletRnsCreditedTotal || 0))),
+      lastCredited: Math.max(0, Math.floor(Number(userData.walletRnsLastCredited || 0))),
+      lastCreditedAt: userData.walletRnsLastCreditedAt || null
+    };
+  }
+  const totalBefore = Math.max(0, Math.floor(Number(userData.walletRnsCreditedTotal || 0)));
+  userData.walletRnsCreditedTotal = totalBefore + credited;
+  userData.walletRnsLastCredited = credited;
+  userData.walletRnsLastCreditedAt = new Date().toISOString();
+  settings[discordUserId] = userData;
+  saveWalletSettings(settings);
+  return {
+    success: true,
+    creditedNow: credited,
+    creditedTotal: userData.walletRnsCreditedTotal,
+    lastCredited: userData.walletRnsLastCredited,
+    lastCreditedAt: userData.walletRnsLastCreditedAt
+  };
 }
 
 // ============== 取得錢包完整資料 ==============
@@ -615,11 +713,13 @@ module.exports = {
   calculateTotalAssets,
   getPlayerWalletAssets,
   getMaxPetsByFMV,
+  getMaxPetsForUser,
   getMaxPetsByRNS,
   isWalletBound,
   getPendingRNS,
   updatePendingRNS,
   applyWalletRnsDelta,
   updateWalletData,
+  recordWalletCredit,
   getWalletData
 };

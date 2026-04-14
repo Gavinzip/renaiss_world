@@ -44,7 +44,7 @@ function createMovesSelectUtils(deps = {}) {
         return true;
       }
 
-      const consumed = consumeSkillChipFromInventory(player, moveTemplate.name);
+      const consumed = consumeSkillChipFromInventory(player, moveTemplate.name, { moveId });
       if (!consumed) {
         await interaction.reply({ content: `⚠️ 背包內找不到「${SKILL_CHIP_PREFIX}${moveTemplate.name}」。`, ephemeral: true }).catch(() => {});
         return true;
