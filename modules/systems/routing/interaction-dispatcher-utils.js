@@ -1020,7 +1020,15 @@ CLIENT.on('interactionCreate', async (interaction) => {
   
   // ===== 顯示行囊 =====
   if (customId === 'show_inventory') {
-    await showInventory(interaction, user, 0);
+    await showInventory(interaction, user, 0, '', 'items');
+    return;
+  }
+
+  if (customId.startsWith('inv_tab_')) {
+    const matched = String(customId || '').match(/^inv_tab_([a-z]+)_(\d+)$/);
+    const mode = String(matched?.[1] || '').trim() || 'items';
+    const page = Math.max(0, Number(matched?.[2] || 0));
+    await showInventory(interaction, user, page, '', mode);
     return;
   }
 
@@ -1048,9 +1056,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
 
   if (customId.startsWith('inv_page_prev_') || customId.startsWith('inv_page_next_')) {
-    const currentPage = Math.max(0, Number(String(customId).split('_').pop() || 0));
-    const nextPage = customId.startsWith('inv_page_prev_') ? currentPage - 1 : currentPage + 1;
-    await showInventory(interaction, user, nextPage);
+    const matched = String(customId || '').match(/^inv_page_(prev|next)_([a-z]+)_(\d+)$/);
+    const direction = String(matched?.[1] || '').trim() || (customId.startsWith('inv_page_prev_') ? 'prev' : 'next');
+    const mode = String(matched?.[2] || '').trim() || 'items';
+    const currentPage = Math.max(0, Number(matched?.[3] || String(customId).split('_').pop() || 0));
+    const nextPage = direction === 'prev' ? currentPage - 1 : currentPage + 1;
+    await showInventory(interaction, user, nextPage, '', mode);
     return;
   }
 
@@ -1403,10 +1414,21 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
 
   if (customId.startsWith('shop_buy_item_')) {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate().catch(() => {});
+    }
+    const replyOrFollowUp = async (content) => {
+      const payload = { content, ephemeral: true };
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp(payload).catch(() => {});
+      } else {
+        await interaction.reply(payload).catch(() => {});
+      }
+    };
     const listingId = customId.replace('shop_buy_item_', '').trim();
     const buyer = CORE.loadPlayer(user.id);
     if (!buyer) {
-      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      await replyOrFollowUp('❌ 找不到角色！');
       return;
     }
     ECON.ensurePlayerEconomy(buyer);
@@ -1415,7 +1437,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       savePlayerById: (p) => CORE.savePlayer(p)
     });
     if (!outcome?.success) {
-      await interaction.reply({ content: `❌ 購買失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+      await replyOrFollowUp(`❌ 購買失敗：${outcome?.reason || '未知錯誤'}`);
       return;
     }
     CORE.savePlayer(buyer);

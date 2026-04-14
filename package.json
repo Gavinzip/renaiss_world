@@ -13,6 +13,7 @@
     "test:battle-balance": "node tools/tests/battle-balance-full.js",
     "test:start-mainmenu": "node tools/tests/start-mainmenu-smoke.js",
     "test:button-routes": "node tools/tests/button-route-smoke.js",
+    "test:interaction-routes": "node tools/tests/interaction-route-sim.js",
     "test:contracts": "node tools/tests/runtime-contracts.js"
   },
   "keywords": [],

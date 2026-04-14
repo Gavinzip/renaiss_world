@@ -10,10 +10,33 @@ function createPetChipUtils(deps = {}) {
     getPetAttackMoves = () => []
   } = deps;
 
+  function buildSkillChipPrefixAliases() {
+    const raw = String(SKILL_CHIP_PREFIX || '技能晶片：').trim();
+    const aliases = new Set();
+    if (raw) aliases.add(raw);
+    aliases.add('技能晶片：');
+    aliases.add('技能晶片:');
+    aliases.add('技能晶片-');
+    aliases.add('技能晶片－');
+    return Array.from(aliases);
+  }
+
+  const SKILL_CHIP_PREFIX_ALIASES = buildSkillChipPrefixAliases();
+
+  function stripSkillChipPrefix(name = '') {
+    const text = String(name || '').trim();
+    if (!text) return '';
+    for (const prefix of SKILL_CHIP_PREFIX_ALIASES) {
+      if (!prefix) continue;
+      if (!text.startsWith(prefix)) continue;
+      return text.slice(prefix.length).trim();
+    }
+    return '';
+  }
+
   function extractSkillChipMoveName(rawItem = null) {
     const name = getDraftItemName(rawItem);
-    if (!name.startsWith(SKILL_CHIP_PREFIX)) return '';
-    return name.slice(SKILL_CHIP_PREFIX.length).trim();
+    return stripSkillChipPrefix(name);
   }
 
   function addSkillChipToInventory(player, moveName = '') {
@@ -27,9 +50,10 @@ function createPetChipUtils(deps = {}) {
   function consumeSkillChipFromInventory(player, moveName = '') {
     const normalized = String(moveName || '').trim();
     if (!normalized || !Array.isArray(player?.inventory)) return false;
-    const target = `${SKILL_CHIP_PREFIX}${normalized}`;
     for (let i = 0; i < player.inventory.length; i++) {
-      if (getDraftItemName(player.inventory[i]) !== target) continue;
+      const itemName = getDraftItemName(player.inventory[i]);
+      const extracted = stripSkillChipPrefix(itemName);
+      if (extracted !== normalized) continue;
       player.inventory.splice(i, 1);
       return true;
     }

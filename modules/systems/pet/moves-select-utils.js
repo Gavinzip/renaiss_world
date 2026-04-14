@@ -4,7 +4,7 @@ function createMovesSelectUtils(deps = {}) {
     PET,
     PROTECTED_MOVE_IDS = new Set(),
     PET_MOVE_LOADOUT_LIMIT = 5,
-    SKILL_CHIP_PREFIX = '技能晶片-',
+    SKILL_CHIP_PREFIX = '技能晶片：',
     getPetMovePool = () => [],
     consumeSkillChipFromInventory = () => false,
     addSkillChipToInventory = () => {},
@@ -169,4 +169,3 @@ function createMovesSelectUtils(deps = {}) {
 module.exports = {
   createMovesSelectUtils
 };
-

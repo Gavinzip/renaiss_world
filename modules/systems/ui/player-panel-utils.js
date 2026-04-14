@@ -228,6 +228,43 @@ function buildMoveDamageBreakdown(move = {}, pet = {}) {
   };
 }
 
+function isComponentInteraction(interaction) {
+  return Boolean(
+    (interaction?.isButton && interaction.isButton()) ||
+    (interaction?.isStringSelectMenu && interaction.isStringSelectMenu())
+  );
+}
+
+async function deferPanelInteractionIfNeeded(interaction, context = 'panel_update') {
+  if (!isComponentInteraction(interaction)) return;
+  if (interaction.deferred || interaction.replied) return;
+  try {
+    await interaction.deferUpdate();
+  } catch (err) {
+    console.error(`[PanelUI] ${context} deferUpdate failed:`, err?.message || err);
+  }
+}
+
+async function safeUpdatePanelInteraction(interaction, payload, context = 'panel_update') {
+  try {
+    await updateInteractionMessage(interaction, payload);
+    return true;
+  } catch (err) {
+    console.error(`[PanelUI] ${context} update failed:`, err?.message || err);
+  }
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(payload);
+    } else {
+      await interaction.reply(payload);
+    }
+    return true;
+  } catch (fallbackErr) {
+    console.error(`[PanelUI] ${context} fallback send failed:`, fallbackErr?.message || fallbackErr);
+    return false;
+  }
+}
+
 // ============== 招式列表 ==============
 async function showMovesList(interaction, user, selectedPetId = '', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
@@ -1573,9 +1610,10 @@ async function handleMarketPostModal(interaction, user, listingType = 'sell', ma
 async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await safeUpdatePanelInteraction(interaction, { content: '❌ 找不到角色！', components: [] }, 'showWorldShopBuyPanel:not_found');
     return;
   }
+  await deferPanelInteractionIfNeeded(interaction, 'showWorldShopBuyPanel');
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const allListings = ECON.getMarketListingsView({
@@ -1662,10 +1700,13 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
       .setDisabled(pager.page >= pager.totalPages - 1),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   ));
-  try {
-    await updateInteractionMessage(interaction, { embeds: [embed], components: rows });
-  } catch (err) {
-    console.error('[Shop] show buy panel update failed:', err?.message || err);
+  const sentMain = await safeUpdatePanelInteraction(
+    interaction,
+    { embeds: [embed], components: rows },
+    'showWorldShopBuyPanel:main'
+  );
+  if (!sentMain) {
+    console.error('[Shop] show buy panel update failed: fallback mode');
     const fallbackRows = rows.filter((row, idx) => idx !== 0); // 下拉選單失敗時保留功能按鈕
     const fallbackEmbed = new EmbedBuilder()
       .setTitle(`🛒 商店可購買商品｜${getMarketTypeLabel(safeMarket)}`)
@@ -1675,16 +1716,17 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
         `${notice ? `提示：${notice}\n` : ''}` +
         `你仍可使用下方按鈕購買水晶、點數與傳送裝置。`
       );
-    await updateInteractionMessage(interaction, { embeds: [fallbackEmbed], components: fallbackRows }).catch(() => {});
+    await safeUpdatePanelInteraction(interaction, { embeds: [fallbackEmbed], components: fallbackRows }, 'showWorldShopBuyPanel:fallback');
   }
 }
 
 async function showWorldShopScene(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await safeUpdatePanelInteraction(interaction, { content: '❌ 找不到角色！', components: [] }, 'showWorldShopScene:not_found');
     return;
   }
+  await deferPanelInteractionIfNeeded(interaction, 'showWorldShopScene');
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const bossName = safeMarket === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員';
@@ -1720,7 +1762,7 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
     new ButtonBuilder().setCustomId(`shop_buy_${safeMarket}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
   );
-  await updateInteractionMessage(interaction, { embeds: [embed], components: [row1, row2] });
+  await safeUpdatePanelInteraction(interaction, { embeds: [embed], components: [row1, row2] }, 'showWorldShopScene:main');
 }
 
 // ============== 行囊/背包 ==============
@@ -1747,6 +1789,44 @@ function getPlayerEquipmentSummary(player = null) {
     totalText: `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`,
     bagCount
   };
+}
+
+function normalizeInventoryViewMode(raw = '') {
+  const text = String(raw || '').trim().toLowerCase();
+  if (text === 'goods' || text === 'trade' || text === 'tradegoods') return 'goods';
+  if (text === 'equipment' || text === 'equip') return 'equipment';
+  return 'items';
+}
+
+function getInventoryViewLabel(view = 'items') {
+  const safeView = normalizeInventoryViewMode(view);
+  if (safeView === 'goods') return '🧰 可售藏品';
+  if (safeView === 'equipment') return '🛡️ 裝備';
+  return '📦 物品';
+}
+
+function getEquipmentGeneratedTag(item = null) {
+  const source = String(item?.generatedBy || '').trim().toLowerCase();
+  if (source === 'fallback') return '🧱保底';
+  if (source === 'ai' || source === 'ai_guided') return '🤖AI';
+  return '❔未知';
+}
+
+function buildEquipmentBagLine(item = null, index = 0) {
+  if (!item || typeof item !== 'object') return '';
+  const slot = String(item?.slot || '').trim();
+  if (!FUSION.EQUIPMENT_SLOTS.includes(slot)) return '';
+  const rarity = getFusionRarityLabel(item.rarity);
+  const name = String(item.name || '未命名裝備').trim() || '未命名裝備';
+  const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
+  const statText = slot === 'helmet'
+    ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
+    : slot === 'armor'
+      ? `HP +${Math.max(0, Number(stats.hp || 0))}`
+      : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+  const value = Math.max(0, Number(item.value || 0));
+  const generatedTag = getEquipmentGeneratedTag(item);
+  return `${index + 1}. 【${getFusionSlotLabel(slot)}】${rarity} ${name}｜${statText}｜估值 ${value}｜${generatedTag}`;
 }
 
 function getFusionCandidates(player = null) {
@@ -2175,11 +2255,12 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
     interaction,
     user,
     0,
-    `${aiTag}完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n藏品：${sourceText}\n${equipNotice}${replaceNotice}${fallbackHint}`
+    `${aiTag}完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n藏品：${sourceText}\n${equipNotice}${replaceNotice}${fallbackHint}`,
+    'equipment'
   );
 }
 
-async function showInventory(interaction, user, page = 0, notice = '') {
+async function showInventory(interaction, user, page = 0, notice = '', viewMode = 'items') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
     await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
@@ -2194,21 +2275,36 @@ async function showInventory(interaction, user, page = 0, notice = '') {
   const items = Array.isArray(player.inventory) ? player.inventory : [];
   const herbs = Array.isArray(player.herbs) ? player.herbs : [];
   const tradeGoods = Array.isArray(player.tradeGoods) ? player.tradeGoods : [];
+  const equipmentBag = Array.isArray(player.equipmentBag) ? player.equipmentBag : [];
+  const safeView = normalizeInventoryViewMode(viewMode);
 
   const itemLines = items.map((item, i) => `${i + 1}. ${String(item || '')}`);
   const herbLines = herbs.map((h, i) => `${i + 1}. ${String(h || '')}`);
   const goodLines = tradeGoods.map((g, i) =>
     `${i + 1}. ${String(g?.name || '未命名藏品')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns）`
   );
+  const equipmentBagLines = equipmentBag
+    .map((row, i) => buildEquipmentBagLine(row, i))
+    .filter(Boolean);
 
   const itemPages = buildPagedFieldChunks(itemLines, 1000, '（空）');
   const herbPages = buildPagedFieldChunks(herbLines, 1000, '（空）');
   const goodsPages = buildPagedFieldChunks(goodLines, 1000, '（空）');
-  const totalPages = Math.max(itemPages.length, herbPages.length, goodsPages.length, 1);
+  const equipmentBagPages = buildPagedFieldChunks(equipmentBagLines, 1000, '（空）');
+
+  let totalPages = 1;
+  if (safeView === 'goods') {
+    totalPages = Math.max(goodsPages.length, 1);
+  } else if (safeView === 'equipment') {
+    totalPages = Math.max(equipmentBagPages.length, 1);
+  } else {
+    totalPages = Math.max(itemPages.length, herbPages.length, 1);
+  }
   const safePage = Math.max(0, Math.min(totalPages - 1, Number(page || 0)));
   const itemsList = itemPages[Math.min(safePage, itemPages.length - 1)] || '（空）';
   const herbsList = herbPages[Math.min(safePage, herbPages.length - 1)] || '（空）';
   const goodsList = goodsPages[Math.min(safePage, goodsPages.length - 1)] || '（空）';
+  const equipmentBagList = equipmentBagPages[Math.min(safePage, equipmentBagPages.length - 1)] || '（空）';
   const equipmentInfo = getPlayerEquipmentSummary(player);
   const fusionCandidates = getFusionCandidates(player);
 
@@ -2217,26 +2313,62 @@ async function showInventory(interaction, user, page = 0, notice = '') {
     .setColor(0x8B4513)
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
+      `目前分頁：${getInventoryViewLabel(safeView)}（第 ${safePage + 1}/${totalPages} 頁）\n` +
       `你身上攜帶的物品\n` +
       `寶物融合：可用藏品 ${fusionCandidates.length} 件（需 3 件）`
-    )
-    .addFields(
-      { name: '📦 物品', value: itemsList, inline: true },
-      { name: '🌿 草藥', value: herbsList, inline: true }
-    )
-    .addFields({ name: `🧰 可售藏品（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
-    .addFields({ name: `🛡️ 裝備（背包 ${equipmentInfo.bagCount} 件）`, value: equipmentInfo.slotText, inline: false })
-    .addFields({ name: '📈 裝備總加成', value: equipmentInfo.totalText, inline: false })
-    .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
+    );
+
+  if (safeView === 'goods') {
+    embed
+      .addFields({ name: `🧰 可售藏品（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
+      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
+  } else if (safeView === 'equipment') {
+    embed
+      .addFields({ name: `🛡️ 目前穿戴（背包 ${equipmentInfo.bagCount} 件）`, value: equipmentInfo.slotText, inline: false })
+      .addFields({ name: '📈 裝備總加成', value: equipmentInfo.totalText, inline: false })
+      .addFields({ name: `🎒 裝備背包（第 ${safePage + 1}/${totalPages} 頁）`, value: equipmentBagList, inline: false })
+      .addFields({ name: '🏷️ 來源標記', value: '🤖AI＝AI鍛造｜🧱保底＝fallback 鍛造', inline: false })
+      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
+  } else {
+    embed
+      .addFields(
+        { name: `📦 物品（第 ${safePage + 1}/${totalPages} 頁）`, value: itemsList, inline: true },
+        { name: `🌿 草藥（第 ${safePage + 1}/${totalPages} 頁）`, value: herbsList, inline: true }
+      )
+      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
+  }
+
+  const rowTabs = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('inv_tab_items_0')
+      .setLabel('📦 物品')
+      .setStyle(safeView === 'items' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(safeView === 'items'),
+    new ButtonBuilder()
+      .setCustomId('inv_tab_goods_0')
+      .setLabel('🧰 可售藏品')
+      .setStyle(safeView === 'goods' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(safeView === 'goods'),
+    new ButtonBuilder()
+      .setCustomId('inv_tab_equipment_0')
+      .setLabel('🛡️ 裝備')
+      .setStyle(safeView === 'equipment' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(safeView === 'equipment')
+  );
 
   const rowPage = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`inv_page_prev_${safePage}`)
+      .setCustomId(`inv_page_prev_${safeView}_${safePage}`)
       .setLabel('⬅️ 上一頁')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage <= 0),
     new ButtonBuilder()
-      .setCustomId(`inv_page_next_${safePage}`)
+      .setCustomId(`inv_page_info_${safeView}_${safePage}`)
+      .setLabel(`${safePage + 1}/${totalPages}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId(`inv_page_next_${safeView}_${safePage}`)
       .setLabel('➡️ 下一頁')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages - 1)
@@ -2252,7 +2384,7 @@ async function showInventory(interaction, user, page = 0, notice = '') {
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Primary)
   );
 
-  await updateInteractionMessage(interaction, { embeds: [embed], components: [rowPage, rowFusion, rowMain] });
+  await updateInteractionMessage(interaction, { embeds: [embed], components: [rowTabs, rowPage, rowFusion, rowMain] });
 }
 
 function getCodexLabels(uiLang = 'zh-TW') {

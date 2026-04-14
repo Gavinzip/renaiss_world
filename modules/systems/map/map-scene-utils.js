@@ -36,6 +36,42 @@ function createMapSceneUtils(deps = {}) {
     ButtonStyle
   } = deps;
 
+  function isComponentInteraction(interaction) {
+    return Boolean(
+      (interaction?.isButton && interaction.isButton()) ||
+      (interaction?.isStringSelectMenu && interaction.isStringSelectMenu())
+    );
+  }
+
+  async function deferComponentIfNeeded(interaction, context = 'map') {
+    if (!isComponentInteraction(interaction)) return;
+    if (interaction.deferred || interaction.replied) return;
+    try {
+      await interaction.deferUpdate();
+    } catch (err) {
+      console.error(`[MapScene] ${context} deferUpdate failed:`, err?.message || err);
+    }
+  }
+
+  async function safeUpdateComponent(interaction, payload, context = 'map') {
+    try {
+      await updateInteractionMessage(interaction, payload);
+      return { ok: true, msg: null };
+    } catch (err) {
+      console.error(`[MapScene] ${context} update failed:`, err?.message || err);
+    }
+
+    try {
+      const msg = (interaction.deferred || interaction.replied)
+        ? await interaction.followUp(payload)
+        : await interaction.reply(payload);
+      return { ok: true, msg };
+    } catch (fallbackErr) {
+      console.error(`[MapScene] ${context} fallback send failed:`, fallbackErr?.message || fallbackErr);
+      return { ok: false, msg: null };
+    }
+  }
+
 async function showIslandMap(interaction, user, page = 0, notice = '') {
   const player = CORE.loadPlayer(user.id);
   const uiLang = getPlayerUILang(player);
@@ -50,6 +86,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   }
   ensurePlayerIslandState(player);
   CORE.savePlayer(player);
+  await deferComponentIfNeeded(interaction, 'showIslandMap');
   const currentIslandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
     ? ISLAND_STORY.getIslandStoryState(player, player.location)
     : null;
@@ -210,10 +247,11 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     : [];
   const payload = { embeds: [embed], components: rows, files };
 
-  if ((interaction.isButton && interaction.isButton()) || (interaction.isStringSelectMenu && interaction.isStringSelectMenu())) {
-    await interaction.update(payload).catch(() => {});
-    if (interaction.message?.id) {
-      trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+  if (isComponentInteraction(interaction)) {
+    const result = await safeUpdateComponent(interaction, payload, 'showIslandMap');
+    const messageId = result.msg?.id || interaction.message?.id;
+    if (messageId) {
+      trackActiveGameMessage(player, interaction.channel?.id, messageId);
     }
     return;
   }
@@ -288,9 +326,11 @@ async function showPortalSelection(interaction, user) {
       destinations.map((loc, idx) => `${idx + 1}. ${formatPortalDestinationDisplay(loc, uiLang)}`).join('\n')
     );
 
-  await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
-  if (interaction.message?.id) {
-    trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+  await deferComponentIfNeeded(interaction, 'showPortalSelection');
+  const result = await safeUpdateComponent(interaction, { embeds: [embed], components: rows }, 'showPortalSelection');
+  const messageId = result.msg?.id || interaction.message?.id;
+  if (messageId) {
+    trackActiveGameMessage(player, interaction.channel?.id, messageId);
   }
 }
 
@@ -349,9 +389,11 @@ async function showTeleportDeviceSelection(interaction, user) {
       destinations.map((loc, idx) => `${idx + 1}. ${loc}`).join('\n')
     );
 
-  await interaction.update({ embeds: [embed], components: rows }).catch(() => {});
-  if (interaction.message?.id) {
-    trackActiveGameMessage(player, interaction.channel?.id, interaction.message.id);
+  await deferComponentIfNeeded(interaction, 'showTeleportDeviceSelection');
+  const result = await safeUpdateComponent(interaction, { embeds: [embed], components: rows }, 'showTeleportDeviceSelection');
+  const messageId = result.msg?.id || interaction.message?.id;
+  if (messageId) {
+    trackActiveGameMessage(player, interaction.channel?.id, messageId);
   }
 }
 

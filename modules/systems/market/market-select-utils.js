@@ -10,18 +10,39 @@ function createMarketSelectUtils(deps = {}) {
     showWorldShopHaggleAllOffer = async () => {}
   } = deps;
 
+  async function replyOrFollowUp(interaction, payload = {}) {
+    if (!interaction) return false;
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp(payload);
+      } else {
+        await interaction.reply(payload);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function deferSelectIfNeeded(interaction) {
+    if (!interaction?.isStringSelectMenu?.()) return;
+    if (interaction.deferred || interaction.replied) return;
+    await interaction.deferUpdate().catch(() => {});
+  }
+
   async function handleMarketSelectMenu(interaction, user, customId) {
     if (customId.startsWith('pmkt_buy_select_')) {
+      await deferSelectIfNeeded(interaction);
       const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
       const raw = String(interaction.values?.[0] || '').trim();
       const listingId = raw.startsWith('pmktbuy_') ? raw.slice('pmktbuy_'.length) : raw;
       if (!listingId) {
-        await interaction.reply({ content: '⚠️ 請先選擇要購買的商品。', ephemeral: true }).catch(() => {});
+        await replyOrFollowUp(interaction, { content: '⚠️ 請先選擇要購買的商品。', ephemeral: true });
         return true;
       }
       const buyer = CORE.loadPlayer(user.id);
       if (!buyer) {
-        await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+        await replyOrFollowUp(interaction, { content: '❌ 找不到角色！', ephemeral: true });
         return true;
       }
       ECON.ensurePlayerEconomy(buyer);
@@ -30,7 +51,7 @@ function createMarketSelectUtils(deps = {}) {
         savePlayerById: (p) => CORE.savePlayer(p)
       });
       if (!outcome?.success) {
-        await interaction.reply({ content: `❌ 成交失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+        await replyOrFollowUp(interaction, { content: `❌ 成交失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true });
         return true;
       }
       CORE.savePlayer(buyer);
@@ -48,16 +69,17 @@ function createMarketSelectUtils(deps = {}) {
     }
 
     if (customId.startsWith('shop_buy_select_')) {
+      await deferSelectIfNeeded(interaction);
       const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
       const raw = String(interaction.values?.[0] || '').trim();
       const listingId = raw.startsWith('shopbuy_') ? raw.slice('shopbuy_'.length) : raw;
       if (!listingId) {
-        await interaction.reply({ content: '⚠️ 請先選擇要購買的商品。', ephemeral: true }).catch(() => {});
+        await replyOrFollowUp(interaction, { content: '⚠️ 請先選擇要購買的商品。', ephemeral: true });
         return true;
       }
       const buyer = CORE.loadPlayer(user.id);
       if (!buyer) {
-        await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+        await replyOrFollowUp(interaction, { content: '❌ 找不到角色！', ephemeral: true });
         return true;
       }
       ECON.ensurePlayerEconomy(buyer);
@@ -66,7 +88,7 @@ function createMarketSelectUtils(deps = {}) {
         savePlayerById: (p) => CORE.savePlayer(p)
       });
       if (!outcome?.success) {
-        await interaction.reply({ content: `❌ 購買失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true }).catch(() => {});
+        await replyOrFollowUp(interaction, { content: `❌ 購買失敗：${outcome?.reason || '未知錯誤'}`, ephemeral: true });
         return true;
       }
       CORE.savePlayer(buyer);
