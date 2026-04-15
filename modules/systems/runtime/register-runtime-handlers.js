@@ -11,6 +11,7 @@ function registerRuntimeHandlers(client, deps = {}) {
     handleBackupWorld,
     handleBackupCheck,
     handlePullWorldData = async () => {},
+    handleInteractionCoverage = async () => {},
     interactionDeps
   } = deps;
 
@@ -27,7 +28,8 @@ function registerRuntimeHandlers(client, deps = {}) {
       handleResetWorld: (...args) => handleResetWorld(...args),
       handleBackupWorld: (...args) => handleBackupWorld(...args),
       handleBackupCheck: (...args) => handleBackupCheck(...args),
-      handlePullWorldData: (...args) => handlePullWorldData(...args)
+      handlePullWorldData: (...args) => handlePullWorldData(...args),
+      handleInteractionCoverage: (...args) => handleInteractionCoverage(...args)
     });
   }
 

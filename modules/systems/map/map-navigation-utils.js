@@ -4,6 +4,7 @@ function createMapNavigationUtils(deps = {}) {
     normalizeLangCode = (lang = 'zh-TW') => String(lang || 'zh-TW'),
     getPlayerUILang = () => 'zh-TW',
     getLocationProfile = () => null,
+    getLocationPortalHub = (location = '') => String(location || '').trim(),
     getPortalDestinations = () => [],
     getRegionLocationsByLocation = () => [],
     isMainPortalHubLocation = () => false,
@@ -55,6 +56,45 @@ function createMapNavigationUtils(deps = {}) {
     return uiLang === 'en' ? `${name} (${region})` : `${name}（${region}）`;
   }
 
+  function getRegionNameByLocation(location = '') {
+    const profile = typeof getLocationProfile === 'function' ? getLocationProfile(location) : null;
+    return String(profile?.region || '').trim();
+  }
+
+  function isDestinationCompleted(player, destination = '') {
+    const loc = String(destination || '').trim();
+    if (!loc || !player) return false;
+
+    const islandState = ISLAND_STORY && typeof ISLAND_STORY.getIslandStoryState === 'function'
+      ? ISLAND_STORY.getIslandStoryState(player, loc)
+      : null;
+    if (Boolean(islandState?.completed)) return true;
+
+    const completedLocations = player?.locationArcState?.completedLocations;
+    if (completedLocations && typeof completedLocations === 'object' && !Array.isArray(completedLocations)) {
+      if (Number(completedLocations[loc] || 0) > 0) return true;
+    }
+
+    const regionName = getRegionNameByLocation(loc);
+    const regionState = player?.regionFreeRoam;
+    if (regionName && regionState && typeof regionState === 'object' && !Array.isArray(regionState)) {
+      if (Boolean(regionState[regionName])) return true;
+    }
+
+    return false;
+  }
+
+  function resolveNextPortalHub(player, from = '') {
+    const nextPrimary = ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
+      ? String(ISLAND_STORY.getNextPrimaryLocation(from) || '').trim()
+      : '';
+    if (!nextPrimary) return '';
+    const hub = typeof getLocationPortalHub === 'function'
+      ? String(getLocationPortalHub(nextPrimary) || '').trim()
+      : '';
+    return hub || nextPrimary;
+  }
+
   function getPortalAccessContext(player) {
     const from = String(player?.location || '').trim();
     const atPortalHub = isMainPortalHubLocation(from);
@@ -72,13 +112,28 @@ function createMapNavigationUtils(deps = {}) {
     const islandCompleted = Boolean(islandState?.completed);
     const regionUnlocked = canFreeRoamCurrentRegion(player);
     const crossRegionUnlocked = Boolean(islandCompleted || regionUnlocked);
+    const nextPortalHub = resolveNextPortalHub(player, from);
+    const destinationEntries = cleaned.map((loc) => {
+      const completed = isDestinationCompleted(player, loc);
+      const isNext = Boolean(nextPortalHub) && loc === nextPortalHub;
+      const enabled = Boolean(crossRegionUnlocked && (isNext || completed));
+      const state = isNext ? 'next' : (completed ? 'completed' : 'locked');
+      return {
+        location: loc,
+        enabled,
+        state
+      };
+    });
+    const destinations = destinationEntries.filter((row) => row.enabled).map((row) => row.location);
     return {
       from,
       atPortalHub,
       islandCompleted,
       regionUnlocked,
       crossRegionUnlocked,
-      destinations: atPortalHub && crossRegionUnlocked ? cleaned : []
+      nextPortalHub,
+      destinationEntries: atPortalHub ? destinationEntries : [],
+      destinations: atPortalHub && crossRegionUnlocked ? destinations : []
     };
   }
 

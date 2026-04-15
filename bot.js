@@ -44,6 +44,7 @@ const PLAYERS_DIR = path.join(DATA_DIR, 'players');
 const PETS_FILE = path.join(DATA_DIR, 'pets.json');
 const USER_WALLETS_FILE = path.join(DATA_DIR, 'user_wallets.json');
 const SCRATCH_LOTTERY_FILE = path.join(DATA_DIR, 'scratch_lottery.json');
+const INTERACTION_COVERAGE_FILE = path.join(DATA_DIR, 'interaction_coverage.json');
 const {
   RESETDATA_PASSWORD,
   TELEPORT_DEVICE_COST,
@@ -175,6 +176,7 @@ const {
 const { createInteractionMessageUtils } = require('./modules/systems/runtime/utils/interaction-message-utils');
 const { initStoryRuntimeUtils } = require('./modules/systems/runtime/init-story-runtime-utils');
 const { createThreadStorageUtils } = require('./modules/systems/runtime/utils/thread-storage-utils');
+const { createInteractionCoverageUtils } = require('./modules/systems/runtime/utils/interaction-coverage-utils');
 const { createThreadGuardUtils } = require('./modules/systems/runtime/utils/thread-guard-utils');
 const { createUiLanguageUtils } = require('./modules/systems/runtime/utils/ui-language-utils');
 const { createLoadingUtils } = require('./modules/systems/runtime/utils/loading-utils');
@@ -245,6 +247,17 @@ const {
   getPlayerThread,
   getThreadOwnerUserId
 } = THREAD_STORAGE_UTILS;
+const INTERACTION_COVERAGE_UTILS = createInteractionCoverageUtils({
+  coverageFile: INTERACTION_COVERAGE_FILE,
+  loadJsonObject: (...args) => loadJsonObject(...args),
+  saveJsonObject: (...args) => saveJsonObject(...args)
+});
+const {
+  recordInteractionCoverage,
+  getInteractionCoverageReport,
+  clearInteractionCoverage,
+  flushInteractionCoverageNow
+} = INTERACTION_COVERAGE_UTILS;
 const THREAD_LIFECYCLE_UTILS = createThreadLifecycleUtils({
   CLIENT,
   ChannelType,
@@ -1090,6 +1103,9 @@ const ADMIN_RUNTIME_SYSTEMS = initAdminRuntimeSystems({
   runWorldBackup: (...args) => runWorldBackup(...args),
   runWorldDataPull: (...args) => runWorldDataPull(...args),
   getBackupDebugStatus: (...args) => getBackupDebugStatus(...args),
+  getInteractionCoverageReport: (...args) => getInteractionCoverageReport(...args),
+  clearInteractionCoverage: (...args) => clearInteractionCoverage(...args),
+  flushInteractionCoverageNow: (...args) => flushInteractionCoverageNow(...args),
   getMarketTypeLabel,
   rememberPlayer,
   recordCashflow,
@@ -1145,6 +1161,7 @@ const {
   handleBackupWorld,
   handleBackupCheck,
   handlePullWorldData,
+  handleInteractionCoverage,
   handleWarStatus,
   registerSlashCommandListener
 } = ADMIN_RUNTIME_SYSTEMS;
@@ -1507,6 +1524,7 @@ const INTERACTION_DISPATCHER_DEPS = initInteractionDispatcherDeps({
   consumeMapReturnSnapshot,
   snapshotHasUsableComponents,
   restoreButtonTemplateSnapshot,
+  recordInteractionCoverage,
   startManualBattle,
   startManualBattleOnline,
   startAutoBattle,
@@ -1535,6 +1553,7 @@ registerRuntimeHandlers(CLIENT, {
   handleBackupWorld,
   handleBackupCheck,
   handlePullWorldData,
+  handleInteractionCoverage,
   interactionDeps: INTERACTION_DISPATCHER_DEPS
 });
 

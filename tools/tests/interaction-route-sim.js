@@ -201,6 +201,7 @@ function createNoopDeps() {
     queuePendingStoryTrigger: () => {},
     rememberPlayer: () => {},
     publishBattleWorldEvent: () => {},
+    recordInteractionCoverage: () => {},
     recordCashflow: () => {},
     applyChoicePolicy: (_p, c) => c,
     startTypingIndicator: () => {},

@@ -57,6 +57,36 @@ function createMainMenuFlowUtils(deps = {}) {
     releaseStoryLock
   } = deps;
 
+function sanitizeStoryTurnMarkerLine(storyText = '') {
+  const source = String(storyText || '');
+  if (!source) return '';
+  return source.replace(/^(\s*🧾\s*回合標記[:：]\s*)(.+)$/m, (full, prefix, markerBody) => {
+    let marker = String(markerBody || '').trim();
+    if (!marker) return '';
+    marker = marker.replace(
+      /\s*🧰\s*(?:無|无|none|null|n\/a|沒有|没有|暂无|無掉落|无掉落|空)\s*(?:\([^)]*\)|（[^）]*）)?/giu,
+      ''
+    );
+    marker = marker
+      .replace(/\s*\|\s*/g, ' | ')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^\s*\|\s*/u, '')
+      .replace(/\s*\|\s*$/u, '')
+      .trim();
+    if (!marker) return '';
+    return `${prefix}${marker}`;
+  });
+}
+
+function getWantedLevelForPlayer(CORE, player) {
+  if (!player) return 0;
+  const byCore = typeof CORE?.getPlayerWantedLevel === 'function'
+    ? Number(CORE.getPlayerWantedLevel(player.id) || 0)
+    : 0;
+  const byPlayer = Number(player?.wanted || 0);
+  return Math.max(0, byCore, byPlayer);
+}
+
 const MENU_RENDER_GUARD = new Set();
 
 async function sendMainMenuToThread(thread, player, pet, interaction = null) {
@@ -89,6 +119,11 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   syncLocationArcLocation(player);
   if (restoreStoryFromGenerationState(player)) stateMutated = true;
   if (restoreChoicesFromGenerationState(player)) stateMutated = true;
+  const sanitizedPersistedStory = sanitizeStoryTurnMarkerLine(player.currentStory);
+  if (sanitizedPersistedStory !== String(player.currentStory || '')) {
+    player.currentStory = sanitizedPersistedStory;
+    stateMutated = true;
+  }
   if (
     (player.generationState?.status === 'pending' || player.generationState?.status === 'failed') &&
     String(player.currentStory || '').trim() &&
@@ -178,6 +213,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     const optionsText = buildChoiceOptionsText(choices, { player, pet });
     
     const mainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
+    const wantedLevel = getWantedLevelForPlayer(CORE, player);
     const description = `${financeNoticeBlock}${worldIntroBlock}**${uiText.statusLabel}：【${statusBar}】**${mainlineLine ? `\n${mainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n**${uiText.sectionChoices}：**${optionsText}\n\n_${uiText.chooseNumber(CHOICE_DISPLAY_COUNT)}_`;
     
     const embed = new EmbedBuilder()
@@ -192,7 +228,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       .addFields(
         { name: '📍 位置', value: player.location, inline: true },
         { name: '🌟 幸運', value: String(player.stats.運氣), inline: true },
-        { name: '📊 等級', value: String(player.level), inline: true }
+        { name: '🚨 通緝級', value: String(wantedLevel), inline: true }
       );
     
     const buttons = buildEventChoiceButtons(choices, player.id);
@@ -394,10 +430,12 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       }
       const pendingStoryTrigger = forceFreshStory ? getPendingStoryTrigger(player) : null;
       let storyText = hasRecoverableStoryOnly ? String(player.currentStory || '').trim() : '';
+      storyText = sanitizeStoryTurnMarkerLine(storyText);
       if (!hasRecoverableStoryOnly) {
         updateGenerationState(player, { phase: 'generating_story' });
         CORE.savePlayer(player);
         storyText = await STORY.generateStory(null, player, pet, pendingStoryTrigger, memoryContext);
+        storyText = sanitizeStoryTurnMarkerLine(storyText);
         if (!storyText) {
           stopLoadingAnimation();
           finishGenerationState(player, 'failed', {

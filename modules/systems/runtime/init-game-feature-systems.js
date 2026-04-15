@@ -445,6 +445,7 @@ function initGameFeatureSystems(deps = {}) {
     getMoveTierMeta,
     getPetElementDisplayName,
     getPetElementColor,
+    recordCashflow,
     resumeExistingOnboardingOrGame,
     t,
     format1,

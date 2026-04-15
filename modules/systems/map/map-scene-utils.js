@@ -290,8 +290,8 @@ async function showPortalSelection(interaction, user) {
     }).catch(() => {});
     return;
   }
-  const destinations = Array.isArray(access.destinations) ? access.destinations : [];
-  if (destinations.length === 0) {
+  const destinationEntries = Array.isArray(access.destinationEntries) ? access.destinationEntries : [];
+  if (destinationEntries.length === 0) {
     await interaction.reply({
       content: tx.portalNoDestination,
       ephemeral: true
@@ -299,13 +299,21 @@ async function showPortalSelection(interaction, user) {
     return;
   }
   const rows = [];
-  for (let i = 0; i < destinations.length; i += 4) {
-    const buttons = destinations.slice(i, i + 4).map((loc, idx) => {
+  for (let i = 0; i < destinationEntries.length; i += 4) {
+    const buttons = destinationEntries.slice(i, i + 4).map((row, idx) => {
       const absoluteIdx = i + idx;
+      const loc = String(row?.location || '');
+      const enabled = Boolean(row?.enabled);
+      const state = String(row?.state || '');
+      const statePrefix = enabled ? '' : '🔒';
+      const stateStyle = enabled
+        ? (state === 'next' ? ButtonStyle.Success : ButtonStyle.Primary)
+        : ButtonStyle.Secondary;
       return new ButtonBuilder()
         .setCustomId(`portal_jump_${absoluteIdx}`)
-        .setLabel(loc.substring(0, 12))
-        .setStyle(ButtonStyle.Primary);
+        .setLabel(`${statePrefix}${loc}`.substring(0, 12))
+        .setStyle(stateStyle)
+        .setDisabled(!enabled);
     });
     rows.push(new ActionRowBuilder().addComponents(buttons));
   }
@@ -322,8 +330,19 @@ async function showPortalSelection(interaction, user) {
     .setDescription(
       `${tx.portalDesc1} ${player.location} ${tx.portalDesc2}\n` +
       `${tx.portalDesc3Open}\n` +
+      `${tx.portalDescRule || ''}\n` +
       `${tx.portalDesc4}\n\n` +
-      destinations.map((loc, idx) => `${idx + 1}. ${formatPortalDestinationDisplay(loc, uiLang)}`).join('\n')
+      destinationEntries.map((row, idx) => {
+        const loc = String(row?.location || '');
+        const state = String(row?.state || '');
+        const enabled = Boolean(row?.enabled);
+        const stateLabel = state === 'next'
+          ? (tx.portalStateNext || '下一關')
+          : (state === 'completed'
+            ? (tx.portalStateCompleted || '已完成')
+            : (tx.portalStateLocked || '未解鎖'));
+        return `${idx + 1}. ${formatPortalDestinationDisplay(loc, uiLang)} ${enabled ? '✅' : '🔒'} ${stateLabel}`;
+      }).join('\n')
     );
 
   await deferComponentIfNeeded(interaction, 'showPortalSelection');

@@ -96,13 +96,15 @@ try {
 const AI_MAX_RETRIES = 3;
 const AI_TIMEOUT_MS = 90000;
 const AI_MAX_RESPONSE_TOKENS = Math.max(512, Number(process.env.AI_MAX_RESPONSE_TOKENS || 4096));
-const AI_UNLIMITED_TIMEOUT = !/^(0|false|off|no)$/i.test(String(process.env.AI_UNLIMITED_TIMEOUT || '1').trim());
+const AI_UNLIMITED_TIMEOUT = !/^(0|false|off|no)$/i.test(String(process.env.AI_UNLIMITED_TIMEOUT || '0').trim());
 const AI_UNLIMITED_MAX_TOKENS = !/^(0|false|off|no)$/i.test(String(process.env.AI_UNLIMITED_MAX_TOKENS || '1').trim());
 const STORY_TIMEOUT_MS = Math.max(12000, Number(process.env.STORY_TIMEOUT_MS || 22000));
 const STORY_GEN_RETRIES = Math.max(1, Math.min(2, Number(process.env.STORY_GEN_RETRIES || 1)));
-const CHOICE_TIMEOUT_MS = Math.max(12000, Number(process.env.CHOICE_TIMEOUT_MS || 26000) * 2);
-const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(10000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 20000) * 2);
-const CHOICE_MAX_TOKENS = Math.max(700, Number(process.env.CHOICE_MAX_TOKENS || 3000));
+const CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.CHOICE_TIMEOUT_MS || 180000));
+const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 180000));
+const CHOICE_GEN_RETRIES = Math.max(1, Math.min(2, Number(process.env.CHOICE_GEN_RETRIES || 1)));
+const CHOICE_VALIDATION_PASSES = Math.max(1, Math.min(3, Number(process.env.CHOICE_VALIDATION_PASSES || 1)));
+const CHOICE_MAX_TOKENS = Math.max(500, Number(process.env.CHOICE_MAX_TOKENS || 1200));
 const CHOICE_OUTPUT_COUNT = 5;
 const BATTLE_CADENCE_TURNS = Math.max(3, Math.min(10, Number(process.env.BATTLE_CADENCE_TURNS || 5)));
 const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 1)));
@@ -149,6 +151,30 @@ const NARRATIVE_TERM_REPLACEMENTS = [
   [/收益率|回報率/g, '收穫幅度'],
   [/套利/g, '轉手調度']
 ];
+
+const DIGITAL_KING_CODENAMES = Object.freeze(['NemoX', 'WolfX', 'AdalocX', 'HomX']);
+const DIGITAL_KING_CODENAME_REGEX = /\b(?:NemoX|WolfX|AdalocX|HomX)\b/u;
+
+function canonicalizeKingCodenamesText(text = '') {
+  let out = String(text || '');
+  if (!out) return '';
+  out = out
+    .replace(/\bNemo(?!X)\b/giu, 'NemoX')
+    .replace(/\bWolf(?!X)\b/giu, 'WolfX')
+    .replace(/\bAdaloc(?!X)\b/giu, 'AdalocX')
+    .replace(/\bHom(?!X)\b/giu, 'HomX');
+  return out;
+}
+
+function canonicalizeKingCodenamesChoice(choice = null) {
+  if (!choice || typeof choice !== 'object') return choice;
+  return {
+    ...choice,
+    name: canonicalizeKingCodenamesText(choice.name || ''),
+    choice: canonicalizeKingCodenamesText(choice.choice || ''),
+    desc: canonicalizeKingCodenamesText(choice.desc || '')
+  };
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -240,7 +266,7 @@ function formatRoamingDigitalPresence(location = '', limit = 2) {
   const list = getRoamingDigitalPresence(location, limit);
   if (!Array.isArray(list) || list.length <= 0) return '暫無明顯無名滲透者活動';
   return list
-    .map((entry, idx) => `無名滲透者${idx + 1}(第${String(entry.group || 'Nemo')}組)`)
+    .map((entry, idx) => `無名滲透者${idx + 1}(第${String(entry.group || 'NemoX')}組)`)
     .join('、');
 }
 
@@ -346,6 +372,28 @@ function sanitizeNarrativeText(text = '') {
     output = output.replace(pattern, replacement);
   }
   return output;
+}
+
+function sanitizeStoryTurnMarker(text = '') {
+  const source = String(text || '');
+  if (!source) return '';
+  return source.replace(/^(\s*🧾\s*回合標記[:：]\s*)(.+)$/m, (full, prefix, markerBody) => {
+    let marker = String(markerBody || '').trim();
+    if (!marker) return '';
+    // 移除「無掉落」片段，避免顯示成「🧰 無」
+    marker = marker.replace(
+      /\s*🧰\s*(?:無|无|none|null|n\/a|沒有|没有|暂无|無掉落|无掉落|空)\s*(?:\([^)]*\)|（[^）]*）)?/giu,
+      ''
+    );
+    marker = marker
+      .replace(/\s*\|\s*/g, ' | ')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^\s*\|\s*/u, '')
+      .replace(/\s*\|\s*$/u, '')
+      .trim();
+    if (!marker) return '';
+    return `${prefix}${marker}`;
+  });
 }
 
 function stripNarrativeDraftLeak(text = '') {
@@ -573,7 +621,9 @@ async function generatePlayerMemoryRecap(player = {}, payload = {}) {
       model: MINIMAX_MODEL,
       maxTokens: 680,
       timeoutMs: 30000,
-      retries: 1
+      retries: 1,
+      unlimitedTimeout: false,
+      unlimitedMaxTokens: false
     });
     const normalized = normalizeOutputByLanguage(raw, playerLang);
     const cleaned = sanitizeAIContent(normalized);
@@ -643,7 +693,9 @@ ${actionSpec}
     model: MINIMAX_MODEL,
     maxTokens: 260,
     timeoutMs: SYSTEM_CHOICE_TIMEOUT_MS,
-    retries: 2
+    retries: 1,
+    unlimitedTimeout: false,
+    unlimitedMaxTokens: true
   });
   const parsed = parseJsonOrThrow(response, 'object');
   if (!parsed.name || !parsed.choice || !parsed.desc || !parsed.tag) {
@@ -697,7 +749,9 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', 
     model: MINIMAX_MODEL,
     maxTokens: 420,
     timeoutMs: SYSTEM_CHOICE_TIMEOUT_MS,
-    retries: 2
+    retries: 1,
+    unlimitedTimeout: false,
+    unlimitedMaxTokens: true
   });
   const parsed = parseJsonOrThrow(response, 'array');
   const actionOrder = ['market_renaiss', 'market_digital'];
@@ -2071,10 +2125,12 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     player?.generationState?.sourceChoice ||
     '開始探索';
   const previousActionCode = String(previousChoice?.action || '').trim();
-  const previousOutcome = summarizeContext(
-    previousChoice?.outcome || previousChoice?.desc || '',
-    360,
-    4
+  const previousOutcome = canonicalizeKingCodenamesText(
+    summarizeContext(
+      previousChoice?.outcome || previousChoice?.desc || '',
+      360,
+      4
+    )
   );
   const pendingLoot = previousChoice?.pendingLoot && typeof previousChoice.pendingLoot === 'object'
     ? previousChoice.pendingLoot
@@ -2105,7 +2161,9 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
   
   // 上一段故事摘要（提升連貫性）
-  const previousStorySummary = summarizeContext(player.currentStory || '', 520, 8);
+  const previousStorySummary = canonicalizeKingCodenamesText(
+    summarizeContext(player.currentStory || '', 520, 8)
+  );
   const previousStorySection = previousStorySummary
     ? `\n【前一段故事（重點）】\n${previousStorySummary}`
     : '';
@@ -2116,7 +2174,9 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   );
 
   // 記憶上下文
-  const focusedMemory = summarizeContext(memoryContext, 980, 12);
+  const focusedMemory = canonicalizeKingCodenamesText(
+    summarizeContext(memoryContext, 980, 12)
+  );
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
   const inventorySection =
     `\n【玩家背包與可用物件（唯一合法來源）】\n` +
@@ -2270,9 +2330,13 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
         maxTokens: 1600,
         timeoutMs: STORY_TIMEOUT_MS,
         retries: STORY_GEN_RETRIES,
-        strictFinalOnly: true
+        strictFinalOnly: true,
+        unlimitedTimeout: false,
+        unlimitedMaxTokens: false
       });
-      const normalizedStory = normalizeOutputByLanguage(stripNarrativeDraftLeak(story), playerLang);
+      let normalizedStory = normalizeOutputByLanguage(stripNarrativeDraftLeak(story), playerLang);
+      normalizedStory = canonicalizeKingCodenamesText(normalizedStory);
+      normalizedStory = sanitizeStoryTurnMarker(normalizedStory);
       if (!normalizedStory || normalizedStory.length < 120) {
         throw new Error('Story too short');
       }
@@ -2301,9 +2365,11 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
     }),
     playerLang
   );
+  let safeFallbackStory = canonicalizeKingCodenamesText(fallbackStory);
+  safeFallbackStory = sanitizeStoryTurnMarker(safeFallbackStory);
   recordAIPerf('story', Date.now() - startedAt);
   console.warn('[Storyteller] generateStory 使用本地保底故事，避免中斷流程');
-  return fallbackStory;
+  return safeFallbackStory;
 }
 
 // ========== AI 生成選項（帶風險標籤+更具體）============
@@ -2398,10 +2464,14 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     ? missionApproachRule
     : '';
   
-  const focusedMemory = summarizeContext(memoryContext, 560, 8);
+  const focusedMemory = canonicalizeKingCodenamesText(summarizeContext(memoryContext, 560, 8));
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
-  const storyFocus = buildStoryFocusForChoices(previousStory || '');
-  const fullStoryText = String(previousStory || '').trim();
+  const fullStoryText = canonicalizeKingCodenamesText(String(previousStory || '').trim());
+  const storyFocus = buildStoryFocusForChoices(fullStoryText || '');
+  const kingCodenameMentioned = DIGITAL_KING_CODENAME_REGEX.test(fullStoryText);
+  const kingSpreadRule = kingCodenameMentioned
+    ? `若本段已提到高層代號（${DIGITAL_KING_CODENAMES.join('/')}），最多 1 個選項可直接追該代號；至少 3 個選項要維持當前地點可立即執行的行動。`
+    : '';
   const sourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
   const directedDestination = extractDirectedDestinationFromStoryTail(fullStoryText, sourceChoiceText);
   const destinationContinuityRule = directedDestination
@@ -2547,6 +2617,7 @@ ${anchorText}
 16. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可直接當成已知真相寫進選項
 16a. 若【跨島真相邊界】指定「唯一來源 NPC + 城市」，禁止產生「在其他人/其他城市直接拿到關鍵證據」的選項
 16b. 若有【關鍵任務選項規則】，必須完整遵守
+${kingSpreadRule ? `16c. ${kingSpreadRule}` : ''}
 17. ${cadenceRequirement}
 18. ${wantedRequirement}
 19. 若通緝熱度偏高，5 個選項中最多只允許 1 個「敵對主動逼近/立即戰鬥」類，其餘需維持調查、移動、社交或交易分散度
@@ -2588,7 +2659,7 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
     let feedbackText = '';
     let choicePool = [];
 
-    for (let pass = 0; pass < 3; pass++) {
+    for (let pass = 0; pass < CHOICE_VALIDATION_PASSES; pass++) {
       const passPrompt = feedbackText
         ? `${prompt}\n\n【上一輪違規問題】\n${feedbackText}\n\n請完全重寫 5 個選項，不可沿用上一輪句子。`
         : prompt;
@@ -2597,7 +2668,9 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
         model: MINIMAX_MODEL,
         maxTokens: CHOICE_MAX_TOKENS,
         timeoutMs: CHOICE_TIMEOUT_MS,
-        retries: 3
+        retries: CHOICE_GEN_RETRIES,
+        unlimitedTimeout: false,
+        unlimitedMaxTokens: true
       });
       const normalizedResult = normalizeOutputByLanguage(result, playerLang);
       const parsedChoices = parseChoicesFromAIResult(normalizedResult, playerLang);
@@ -2638,9 +2711,11 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       }
     }
 
+    const safeChoices = (Array.isArray(validatedChoices) ? validatedChoices : [])
+      .map((choice) => canonicalizeKingCodenamesChoice(choice));
     recordAIPerf('choices', Date.now() - startedAt);
     console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms`);
-    return validatedChoices;
+    return safeChoices;
   } catch (e) {
     console.error('[AI] 生成選項失敗（無本地模板補位）:', e.message);
     recordAIPerf('choices', Date.now() - startedAt);
@@ -2681,7 +2756,9 @@ async function analyzeMainlineForeshadowCandidates(payload = {}) {
       model: MINIMAX_MODEL,
       maxTokens: 260,
       timeoutMs: 30000,
-      retries: 1
+      retries: 1,
+      unlimitedTimeout: false,
+      unlimitedMaxTokens: false
     });
     const normalized = normalizeOutputByLanguage(raw, playerLang);
     const parsed = parseJsonOrThrow(normalized, 'array');

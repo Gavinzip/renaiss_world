@@ -104,6 +104,28 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
+  },
+  {
+    name: 'interactioncoverage',
+    description: '查看或重置互動按鈕覆蓋報表（需密碼）',
+    options: [
+      {
+        type: 3,
+        name: 'mode',
+        description: 'view 查看報表｜reset 清空報表',
+        required: true,
+        choices: [
+          { name: '查看報表', value: 'view' },
+          { name: '重置報表', value: 'reset' }
+        ]
+      },
+      {
+        type: 3,
+        name: 'password',
+        description: '安全密碼',
+        required: true
+      }
+    ]
   }
 ];
 

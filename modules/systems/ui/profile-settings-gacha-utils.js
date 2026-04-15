@@ -367,6 +367,11 @@ function createProfileSettingsGachaUtils(deps = {}) {
       .map((row) => String(row?.mentorName || row?.mentorId || '未知導師'))
       .filter(Boolean)
       .join('、') || '尚未完成';
+    const wantedLevel = Math.max(
+      0,
+      Number(typeof CORE.getPlayerWantedLevel === 'function' ? CORE.getPlayerWantedLevel(user.id) : 0),
+      Number(player?.wanted || 0)
+    );
 
     const embed = new EmbedBuilder()
       .setTitle(`👤 ${player.name}`)
@@ -378,7 +383,7 @@ function createProfileSettingsGachaUtils(deps = {}) {
         { name: '📍 位置', value: player.location, inline: true }
       )
       .addFields(
-        { name: '📊 等級', value: String(player.level), inline: true },
+        { name: '🚨 通緝級', value: String(wantedLevel), inline: true },
         { name: '🍀 幸運值', value: String(player.stats.運氣), inline: true },
         { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
         { name: t('gold', uiLang), value: String(player.stats.財富), inline: true },

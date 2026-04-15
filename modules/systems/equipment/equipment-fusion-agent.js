@@ -4,7 +4,6 @@ const MINIMAX_MODEL = String(process.env.EQUIPMENT_FUSION_MODEL || 'MiniMax-M2.5
 const FUSION_TIMEOUT_RAW = Number(process.env.EQUIPMENT_FUSION_TIMEOUT_MS || 0);
 const FUSION_TIMEOUT_MS = Number.isFinite(FUSION_TIMEOUT_RAW) ? Math.max(0, Math.floor(FUSION_TIMEOUT_RAW)) : 0;
 const FUSION_MAX_RETRIES = Math.max(1, Number(process.env.EQUIPMENT_FUSION_MAX_RETRIES || 2));
-const FUSION_STRICT_AI = String(process.env.EQUIPMENT_FUSION_STRICT_AI || '0').trim() === '1';
 const FUSION_AI_MAX_TOKENS_RAW = Number(process.env.EQUIPMENT_FUSION_MAX_TOKENS || 0);
 const FUSION_AI_MAX_TOKENS = Number.isFinite(FUSION_AI_MAX_TOKENS_RAW) ? Math.max(0, Math.floor(FUSION_AI_MAX_TOKENS_RAW)) : 0;
 
@@ -542,17 +541,6 @@ async function fuseTreasuresToEquipment(items = [], options = {}) {
         lastError = err;
       }
     }
-  }
-
-  if (!FUSION_STRICT_AI) {
-    const equipment = buildFallbackFusionEquipment(materials, options);
-    return {
-      equipment,
-      usedAI: false,
-      raw: '',
-      attempts: FUSION_MAX_RETRIES,
-      fallbackReason: String(lastError?.message || lastError || 'unknown error')
-    };
   }
 
   throw new Error(`fusion generation failed after ${FUSION_MAX_RETRIES} attempts: ${String(lastError?.message || lastError || 'unknown error')}`);

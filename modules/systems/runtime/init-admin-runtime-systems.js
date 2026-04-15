@@ -41,6 +41,9 @@ function initAdminRuntimeSystems(deps = {}) {
     runWorldBackup,
     runWorldDataPull,
     getBackupDebugStatus,
+    getInteractionCoverageReport = () => ({}),
+    clearInteractionCoverage = () => false,
+    flushInteractionCoverageNow = () => false,
     getMarketTypeLabel,
     rememberPlayer,
     recordCashflow,
@@ -169,6 +172,9 @@ function initAdminRuntimeSystems(deps = {}) {
     runWorldBackup,
     runWorldDataPull,
     getBackupDebugStatus,
+    getInteractionCoverageReport,
+    clearInteractionCoverage,
+    flushInteractionCoverageNow,
     STORAGE,
     EmbedBuilder
   });
@@ -179,6 +185,7 @@ function initAdminRuntimeSystems(deps = {}) {
     handleBackupWorld,
     handleBackupCheck,
     handlePullWorldData,
+    handleInteractionCoverage,
     handleWarStatus
   } = SLASH_ADMIN_UTILS;
 
@@ -229,6 +236,7 @@ function initAdminRuntimeSystems(deps = {}) {
     handleBackupWorld,
     handleBackupCheck,
     handlePullWorldData,
+    handleInteractionCoverage,
     handleWarStatus,
     registerSlashCommandListener
   };

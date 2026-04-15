@@ -160,6 +160,7 @@ function createNoopDeps() {
     queuePendingStoryTrigger: () => {},
     rememberPlayer: () => {},
     publishBattleWorldEvent: () => {},
+    recordInteractionCoverage: () => {},
     applyChoicePolicy: (_p, c) => c
   };
 
@@ -308,7 +309,9 @@ function buildTestCases() {
     'choose_element_草','draw_move_1','select_lang_zh-TW','friend_accept_u2','friend_cancel_u2','friend_view_u2',
     'friend_duel_u2','map_view_text_0','map_page_1','portal_jump_0','device_jump_0','map_goto_襄陽城',
     'event_0','fight_0','use_move_0','fdonline_submit_1','flee_0','moves_page_prev_0','moves_page_next_1',
-    'set_main_pet_pet1','inv_page_prev_0','inv_page_next_1','quick_shop_renaiss','pmkt_view_sell_0',
+    'set_main_pet_pet1','inv_tab_items_0','inv_tab_goods_0','inv_tab_equipment_0',
+    'inv_page_prev_0','inv_page_next_1','inv_page_prev_items_0','inv_page_next_goods_1','inv_page_prev_equipment_2',
+    'quick_shop_renaiss','pmkt_view_sell_0',
     'pmkt_my_0','pmkt_post_sell_renaiss','pmkt_post_buy_renaiss','pmkt_buy_1','pmkt_fill_1','pmkt_cancel_1',
     'shop_open_renaiss','shop_post_sell_renaiss','shop_npc_haggle_renaiss','shop_haggle_all_renaiss',
     'shop_haggle_cancel_renaiss','shop_haggle_confirm_renaiss','shop_buy_item_1','shop_scratch_renaiss',

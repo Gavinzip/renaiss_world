@@ -23,6 +23,10 @@ function createPlayerPanelUtils(deps = {}) {
     SHOP_SELL_SELECT_LIMIT,
     SHOP_HAGGLE_SELECT_LIMIT,
     SHOP_HAGGLE_BULK_SELECT_LIMIT,
+    SHOP_HEAL_CRYSTAL_COST = 200,
+    SHOP_ENERGY_CRYSTAL_COST = 2000,
+    TELEPORT_DEVICE_COST = 200,
+    TELEPORT_DEVICE_DURATION_HOURS = 6,
     t,
     getPlayerUILang,
     resolvePlayerMainPet,
@@ -75,8 +79,8 @@ function createPlayerPanelUtils(deps = {}) {
     generatePlayerMemoryRecap,
     ensurePlayerGenerationSchema,
     recordNearbyNpcEncounters,
-    getAllPetSkillMoves,
-    extractSkillChipMoveName,
+    getAllPetSkillMoves = () => [],
+    extractSkillChipMoveName = () => '',
     getLanguageSection = null,
     showMainMenu
   } = deps;
@@ -1800,16 +1804,9 @@ function normalizeInventoryViewMode(raw = '') {
 
 function getInventoryViewLabel(view = 'items') {
   const safeView = normalizeInventoryViewMode(view);
-  if (safeView === 'goods') return '🧰 可售藏品';
+  if (safeView === 'goods') return '🧰 藏品';
   if (safeView === 'equipment') return '🛡️ 裝備';
   return '📦 物品';
-}
-
-function getEquipmentGeneratedTag(item = null) {
-  const source = String(item?.generatedBy || '').trim().toLowerCase();
-  if (source === 'fallback') return '🧱保底';
-  if (source === 'ai' || source === 'ai_guided') return '🤖AI';
-  return '❔未知';
 }
 
 function buildEquipmentBagLine(item = null, index = 0) {
@@ -1825,8 +1822,7 @@ function buildEquipmentBagLine(item = null, index = 0) {
       ? `HP +${Math.max(0, Number(stats.hp || 0))}`
       : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
   const value = Math.max(0, Number(item.value || 0));
-  const generatedTag = getEquipmentGeneratedTag(item);
-  return `${index + 1}. 【${getFusionSlotLabel(slot)}】${rarity} ${name}｜${statText}｜估值 ${value}｜${generatedTag}`;
+  return `${index + 1}. 【${getFusionSlotLabel(slot)}】${rarity} ${name}｜${statText}｜估值 ${value}`;
 }
 
 function getFusionCandidates(player = null) {
@@ -2248,14 +2244,11 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
   const replaceNotice = equipResult?.replaced
     ? `｜替換：${String(equipResult.replaced?.name || '舊裝備')}`
     : '';
-  const aiTag = fused?.usedAI ? 'AI鍛造' : '保底鍛造';
-  const fallbackHint = fused?.usedAI ? '' : '\n（AI 回應逾時，已自動啟用保底鍛造）';
-
   await showInventory(
     interaction,
     user,
     0,
-    `${aiTag}完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n藏品：${sourceText}\n${equipNotice}${replaceNotice}${fallbackHint}`,
+    `鍛造完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n藏品：${sourceText}\n${equipNotice}${replaceNotice}`,
     'equipment'
   );
 }
@@ -2320,14 +2313,13 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
 
   if (safeView === 'goods') {
     embed
-      .addFields({ name: `🧰 可售藏品（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
+      .addFields({ name: `🧰 藏品（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
       .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
   } else if (safeView === 'equipment') {
     embed
       .addFields({ name: `🛡️ 目前穿戴（背包 ${equipmentInfo.bagCount} 件）`, value: equipmentInfo.slotText, inline: false })
       .addFields({ name: '📈 裝備總加成', value: equipmentInfo.totalText, inline: false })
       .addFields({ name: `🎒 裝備背包（第 ${safePage + 1}/${totalPages} 頁）`, value: equipmentBagList, inline: false })
-      .addFields({ name: '🏷️ 來源標記', value: '🤖AI＝AI鍛造｜🧱保底＝fallback 鍛造', inline: false })
       .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
   } else {
     embed
@@ -2346,7 +2338,7 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
       .setDisabled(safeView === 'items'),
     new ButtonBuilder()
       .setCustomId('inv_tab_goods_0')
-      .setLabel('🧰 可售藏品')
+      .setLabel('🧰 藏品')
       .setStyle(safeView === 'goods' ? ButtonStyle.Primary : ButtonStyle.Secondary)
       .setDisabled(safeView === 'goods'),
     new ButtonBuilder()
@@ -2392,6 +2384,21 @@ function getCodexLabels(uiLang = 'zh-TW') {
   const codex = panelText?.codex || {};
   if (codex && Object.keys(codex).length > 0) return codex;
   return getPlayerPanelText('zh-TW').codex || {};
+}
+
+function formatCodexLines(lines = [], maxLen = 1000, emptyText = '（尚無）') {
+  const list = Array.isArray(lines)
+    ? lines.map((line) => String(line || '').trim()).filter(Boolean)
+    : [];
+  if (list.length <= 0) return String(emptyText || '（尚無）');
+  const limit = Math.max(80, Number(maxLen || 1000));
+  let out = '';
+  for (const line of list) {
+    const next = out ? `${out}\n${line}` : line;
+    if (next.length > limit) break;
+    out = next;
+  }
+  return out || String(emptyText || '（尚無）');
 }
 
 function collectPlayerCodexData(player) {

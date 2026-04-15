@@ -12,7 +12,10 @@ function createPetCapacityUtils(deps = {}) {
     const walletData = WALLET?.getWalletData?.(ownerId) || {};
     const cardFMV = Math.max(0, Number(walletData.cardFMV || 0));
     const cardCount = Math.max(0, Number(walletData.cardCount || 0));
-    const maxPets = Math.max(1, Number(WALLET?.getMaxPetsByFMV?.(cardFMV) || 1));
+    const maxPets = Math.max(
+      1,
+      Number(WALLET?.getMaxPetsForUser?.(ownerId) || WALLET?.getMaxPetsByFMV?.(cardFMV) || 1)
+    );
     const ownedPets = typeof getPlayerOwnedPets === 'function' ? getPlayerOwnedPets(ownerId) : [];
     const currentPets = Array.isArray(ownedPets) ? ownedPets.length : 0;
     return {

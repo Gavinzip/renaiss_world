@@ -33,6 +33,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     getMoveTierMeta,
     getPetElementDisplayName,
     getPetElementColor,
+    recordCashflow = () => {},
     resumeExistingOnboardingOrGame,
     t,
     format1,
@@ -43,6 +44,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     sendMainMenuToThread,
     getSettingsHubText
   } = deps;
+  const walletSyncInFlight = new Set();
 
   async function showWalletBindModal(interaction) {
     const modal = new ModalBuilder()
@@ -67,11 +69,30 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     }
 
     const player = CORE.loadPlayer(discordUserId);
-    const ledger = WALLET.applyWalletRnsDelta(discordUserId, assets.rns, {
-      assumeClaimedIfMissing: Boolean(player)
-    });
-    if (!ledger?.success) {
-      throw new Error(ledger?.reason || '錢包入帳同步失敗');
+    const walletDataBefore = WALLET.getWalletData(discordUserId) || {};
+    let ledger = null;
+    if (player) {
+      ledger = WALLET.applyWalletRnsDelta(discordUserId, assets.rns, {
+        assumeClaimedIfMissing: true,
+        forceResetClaimedBaseline: false
+      });
+      if (!ledger?.success) {
+        throw new Error(ledger?.reason || '錢包入帳同步失敗');
+      }
+    } else {
+      const walletTotalRns = Math.max(0, Math.floor(Number(assets.rns || 0)));
+      const claimedBefore = Math.max(0, Math.floor(Number(walletDataBefore.walletRnsClaimed || 0)));
+      const delta = Math.max(0, walletTotalRns - claimedBefore);
+      // 尚未有角色時只做預估，不寫入基準，避免先同步後建角導致可領額被吃掉。
+      ledger = {
+        success: true,
+        walletTotalRns,
+        claimedBefore,
+        claimedAfter: claimedBefore,
+        delta,
+        pendingBefore: 0,
+        pendingAfter: 0
+      };
     }
 
     WALLET.updateWalletData(discordUserId, {
@@ -83,18 +104,44 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       totalSpentUSDT: assets.assets.totalSpentUSDT
     });
 
+    let creditedNow = 0;
+    let pendingRnsAfterSync = Math.max(0, Number(ledger.pendingAfter || 0));
+    let creditedTotal = 0;
+    let lastCredited = 0;
     if (player) {
       const currentGold = Math.max(0, Number(player?.stats?.財富 || 0));
-      player.stats.財富 = currentGold + Math.max(0, Number(ledger.delta || 0));
+      // 既有角色：同步後把待入帳池一次入帳，避免看到「可入帳」但實際沒加錢。
+      creditedNow = pendingRnsAfterSync;
+      if (creditedNow > 0) {
+        player.stats.財富 = currentGold + creditedNow;
+        pendingRnsAfterSync = 0;
+        WALLET.updatePendingRNS(discordUserId, 0);
+        recordCashflow(player, {
+          amount: creditedNow,
+          category: 'wallet_sync_credit',
+          source: '錢包同步入帳',
+          marketType: 'renaiss'
+        });
+      }
       CORE.savePlayer(player);
     }
+    const creditMeta = (typeof WALLET.recordWalletCredit === 'function')
+      ? WALLET.recordWalletCredit(discordUserId, creditedNow)
+      : null;
+    creditedTotal = Math.max(0, Math.floor(Number(creditMeta?.creditedTotal || 0)));
+    lastCredited = Math.max(0, Math.floor(Number(creditMeta?.lastCredited || creditedNow || 0)));
 
     return {
       ...assets,
       walletTotalRns: ledger.walletTotalRns,
       syncDeltaRns: ledger.delta,
-      pendingRns: ledger.pendingAfter,
-      claimedBefore: ledger.claimedBefore
+      pendingRns: pendingRnsAfterSync,
+      pendingBefore: ledger.pendingBefore,
+      claimedBefore: ledger.claimedBefore,
+      claimedAfter: ledger.claimedAfter,
+      creditedNow,
+      creditedTotal,
+      lastCredited
     };
   }
 
@@ -133,14 +180,17 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
           maxAttempts: 3,
           retryDelayMs
         });
-        const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
+        const maxPets = Math.max(
+          1,
+          Number(WALLET.getMaxPetsForUser?.(userId) || WALLET.getMaxPetsByFMV(assets.assets.cardFMV))
+        );
         const retryHint = attempt > 1 ? `（已重試 ${attempt - 1} 次）\n` : '';
         const notice =
           `✅ 錢包資料背景同步完成\n` +
           `錢包：\`${bindAddress || WALLET.getWalletAddress(userId) || 'unknown'}\`\n` +
           retryHint +
-          `🎁 錢包可領總額：${assets.walletTotalRns}\n` +
-          `➕ 本次新增入帳：${assets.syncDeltaRns}\n` +
+          `🧾 上次實際入帳：${assets.lastCredited || 0}\n` +
+          `✅ 這次可領（已入帳）：${assets.creditedNow || 0}\n` +
           `🐾 可擁有寵物：${maxPets} 隻`;
         if (interaction && typeof interaction.followUp === 'function') {
           await interaction.followUp({ content: notice, ephemeral: true }).catch(() => {});
@@ -191,52 +241,60 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
   }
 
   async function handleWalletSyncNow(interaction, user) {
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferUpdate().catch(() => {});
-    }
-    try {
-      const assets = await syncWalletAndApplyNow(user.id);
-      const maxPets = WALLET.getMaxPetsByFMV(assets.assets.cardFMV);
-      const cardInfo = assets.assets.cardCount > 0
-        ? `📦 卡片 FMV: $${assets.assets.cardFMV.toFixed(2)} USD (${assets.assets.cardCount} 張)\n`
-        : '📦 卡片 FMV: $0.00 USD (0 張)\n';
-
-      const embed = new EmbedBuilder()
-        .setTitle('🔄 錢包資產已同步')
-        .setColor(0x00c853)
-        .setDescription(
-          `${cardInfo}` +
-            `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
-            `💸 總花費(開包+市場買入): $${Number(assets.assets.totalSpentUSDT || 0).toFixed(2)} USDT\n` +
-            `🎁 錢包可領總額: ${assets.walletTotalRns}\n` +
-            `➕ 本次新增入帳: ${assets.syncDeltaRns}\n` +
-            `🐾 可擁有寵物: ${maxPets} 隻`
-        );
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('open_settings').setLabel('⚙️ 設定').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success)
+    const userId = String(user?.id || '').trim();
+    const alreadyRunning = walletSyncInFlight.has(userId);
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('open_settings').setLabel('⚙️ 設定').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Success)
+    );
+    const queuedEmbed = new EmbedBuilder()
+      .setTitle(alreadyRunning ? '⏳ 背景同步進行中' : '✅ 已送出同步請求')
+      .setColor(0x00c853)
+      .setDescription(
+        alreadyRunning
+          ? '同一帳號已有同步任務在背景執行，請先繼續遊戲，完成後會收到通知。'
+          : '錢包同步已在背景執行中。\n你現在可以直接回到遊戲，不需要停在這裡等待。'
       );
+    await updateInteractionMessage(interaction, { embeds: [queuedEmbed], components: [row] });
+    if (alreadyRunning || !userId) return;
 
-      await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
-    } catch (e) {
-      await updateInteractionMessage(interaction, {
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('⚠️ 同步失敗')
-            .setColor(0xffa500)
-            .setDescription(`錯誤：${e.message}\n請稍後再試。`)
-        ],
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId('open_settings').setLabel('⚙️ 設定').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('main_menu').setLabel('🎮 回到冒險').setStyle(ButtonStyle.Secondary)
-          )
-        ]
+    walletSyncInFlight.add(userId);
+    Promise.resolve()
+      .then(async () => {
+        const retryDelayMs = Math.max(0, Math.floor(Number(process.env.WALLET_SYNC_RETRY_DELAY_MS || 900)));
+        const { assets, attempt } = await syncWalletAndApplyWithRetry(userId, {
+          maxAttempts: 3,
+          retryDelayMs
+        });
+        const maxPets = Math.max(
+          1,
+          Number(WALLET.getMaxPetsForUser?.(userId) || WALLET.getMaxPetsByFMV(assets.assets.cardFMV))
+        );
+        const retryHint = attempt > 1 ? `（已重試 ${attempt - 1} 次）\n` : '';
+        const cardInfo = assets.assets.cardCount > 0
+          ? `📦 卡片 FMV: $${assets.assets.cardFMV.toFixed(2)} USD (${assets.assets.cardCount} 張)\n`
+          : '📦 卡片 FMV: $0.00 USD (0 張)\n';
+        const notice =
+          `🔄 錢包資產已同步\n` +
+          retryHint +
+          `${cardInfo}` +
+          `📊 開包數量: ${assets.assets.packTxCount} 次\n` +
+          `💸 總花費(開包+市場買入): $${Number(assets.assets.totalSpentUSDT || 0).toFixed(2)} USDT\n` +
+          `🧾 上次實際入帳: ${assets.lastCredited || 0}\n` +
+          `✅ 這次可領(已入帳): ${assets.creditedNow || 0}\n` +
+          `🐾 可擁有寵物: ${maxPets} 隻`;
+        await interaction.followUp({ content: notice, ephemeral: true }).catch(() => {});
+      })
+      .catch(async (e) => {
+        await interaction.followUp({
+          content: `⚠️ 錢包背景同步失敗：${e?.message || e}\n請稍後再試一次。`,
+          ephemeral: true
+        }).catch(() => {});
+      })
+      .finally(() => {
+        walletSyncInFlight.delete(userId);
       });
-    }
   }
 
   async function sendOnboardingLanguageSelection(interaction, user, options = {}) {
@@ -283,10 +341,9 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     await interaction.deferUpdate().catch(() => {});
 
     try {
-      const initialRns = WALLET.getPendingRNS(user.id);
       const selectedLang = getPlayerTempData(user.id, 'language') || 'zh-TW';
       const payload = buildGenderSelectionPayload(selectedLang, user.username);
-      payload.embed.addFields({ name: '💰 初始 Rns', value: String(initialRns), inline: true });
+      payload.embed.addFields({ name: '💳 錢包同步', value: '角色建立後自動同步並立即入帳', inline: true });
 
       await threadChannel.send({
         embeds: [payload.embed],
@@ -371,7 +428,6 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       return;
     }
 
-    const pendingRNS = WALLET.getPendingRNS(user.id);
     const selectedGender = normalizeCharacterGender(profile?.gender || getPlayerTempData(user.id, 'gender') || '男');
     const selectedElement = normalizePetElementCode(profile?.element || getPlayerTempData(user.id, 'petElement') || '水');
     const alignment = normalizePlayerAlignment(profile?.alignment || '正派');
@@ -385,7 +441,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     player.alignment = alignment;
     player.petElement = selectedElement;
     player.wanted = 0;
-    player.stats.財富 = pendingRNS;
+    player.stats.財富 = 0;
     ECON.ensurePlayerEconomy(player);
 
     const selectedLang = getPlayerTempData(user.id, 'language') || 'zh-TW';
@@ -394,7 +450,15 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     player.currentStory = '';
     player.eventChoices = [];
     CORE.savePlayer(player);
-    WALLET.updatePendingRNS(user.id, 0);
+    let startupWalletCredit = 0;
+    if (WALLET.isWalletBound(user.id)) {
+      try {
+        const walletSync = await syncWalletAndApplyNow(user.id);
+        startupWalletCredit = Math.max(0, Number(walletSync?.creditedNow || 0));
+      } catch (walletSyncErr) {
+        console.error('[錢包] 建角後首次同步失敗:', walletSyncErr?.message || walletSyncErr);
+      }
+    }
 
     clearPlayerTempData(user.id);
 
@@ -460,6 +524,9 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
         { name: '🐾 寵物', value: `${pet.name}（${getPetElementDisplayName(selectedElement)}）`, inline: true },
         { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
         { name: t('gold', uiLang), value: String(player.stats.財富), inline: true }
+      )
+      .addFields(
+        { name: '💳 錢包入帳', value: startupWalletCredit > 0 ? `本次已入帳 ${startupWalletCredit} Rns` : '本次無新增可領', inline: false }
       )
       .addFields(
         { name: '✨ 開局天賦', value: `${tierMeta.emoji} ${selectedMove.name}｜${tierMeta.name}（機率 ${tierMeta.rate}）`, inline: false },

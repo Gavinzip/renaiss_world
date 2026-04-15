@@ -116,24 +116,34 @@ let world = buildDefaultWorldState();
 const MAX_WORLD_EVENTS = 5;
 
 const DIGITAL_ROAMER_TOTAL = 20;
-const DIGITAL_ROAMER_GROUPS = Object.freeze(['Nemo', 'Wolf', 'Adaloc', 'Hom']);
+const DIGITAL_ROAMER_GROUPS = Object.freeze(['NemoX', 'WolfX', 'AdalocX', 'HomX']);
+const DIGITAL_ROAMER_GROUP_ALIAS = Object.freeze({
+  Nemo: 'NemoX',
+  Wolf: 'WolfX',
+  Adaloc: 'AdalocX',
+  Hom: 'HomX',
+  NemoX: 'NemoX',
+  WolfX: 'WolfX',
+  AdalocX: 'AdalocX',
+  HomX: 'HomX'
+});
 const DIGITAL_ROAMER_GROUP_MOVES = Object.freeze({
-  Nemo: ['golden_needle', 'ice_palm', 'flood_torrent', 'silver_snake'],
-  Wolf: ['blaze_sky', 'hell_fire', 'thunder_crash', 'explosive_pill'],
-  Adaloc: ['spider_silk', 'plague_cloud', 'bone_dissolver', 'rejuvenation'],
-  Hom: ['ultimate_dark', 'hot_sand_hell', 'ghost_fire', 'shadow_lock']
+  NemoX: ['golden_needle', 'ice_palm', 'flood_torrent', 'silver_snake'],
+  WolfX: ['blaze_sky', 'hell_fire', 'thunder_crash', 'explosive_pill'],
+  AdalocX: ['spider_silk', 'plague_cloud', 'bone_dissolver', 'rejuvenation'],
+  HomX: ['ultimate_dark', 'hot_sand_hell', 'ghost_fire', 'shadow_lock']
 });
 const DIGITAL_ROAMER_GROUP_ELEMENT = Object.freeze({
-  Nemo: '水',
-  Wolf: '火',
-  Adaloc: '草',
-  Hom: '火'
+  NemoX: '水',
+  WolfX: '火',
+  AdalocX: '草',
+  HomX: '火'
 });
 const DIGITAL_ROAMER_GROUP_BASE = Object.freeze({
-  Nemo: { battle: 34, hp: 160, attack: 28, defense: 16, petAttack: 22, petHp: 84 },
-  Wolf: { battle: 36, hp: 168, attack: 30, defense: 16, petAttack: 24, petHp: 88 },
-  Adaloc: { battle: 38, hp: 176, attack: 31, defense: 18, petAttack: 25, petHp: 92 },
-  Hom: { battle: 40, hp: 184, attack: 33, defense: 18, petAttack: 26, petHp: 96 }
+  NemoX: { battle: 34, hp: 160, attack: 28, defense: 16, petAttack: 22, petHp: 84 },
+  WolfX: { battle: 36, hp: 168, attack: 30, defense: 16, petAttack: 24, petHp: 88 },
+  AdalocX: { battle: 38, hp: 176, attack: 31, defense: 18, petAttack: 25, petHp: 92 },
+  HomX: { battle: 40, hp: 184, attack: 33, defense: 18, petAttack: 26, petHp: 96 }
 });
 const LOCATION_NPC_MIN_COUNT = Math.max(1, Math.min(3, Number(process.env.LOCATION_NPC_MIN_COUNT || 2)));
 const MENTOR_MASTER_MOVE_IDS = Object.freeze(['ultimate_dark', 'blaze_sky', 'thunder_crash', 'flood_torrent', 'ghost_fire']);
@@ -802,10 +812,19 @@ function pickDigitalRoamerSpawnLocation() {
   return pool[pool.length - 1]?.loc || '襄陽城';
 }
 
-function createDigitalRoamerBlueprint(index = 0, group = 'Nemo') {
-  const safeGroup = DIGITAL_ROAMER_GROUPS.includes(group) ? group : DIGITAL_ROAMER_GROUPS[0];
-  const base = DIGITAL_ROAMER_GROUP_BASE[safeGroup] || DIGITAL_ROAMER_GROUP_BASE.Nemo;
-  const moveIds = DIGITAL_ROAMER_GROUP_MOVES[safeGroup] || DIGITAL_ROAMER_GROUP_MOVES.Nemo;
+function normalizeDigitalRoamerGroup(group = '') {
+  const text = String(group || '').trim();
+  if (!text) return DIGITAL_ROAMER_GROUPS[0];
+  if (DIGITAL_ROAMER_GROUP_ALIAS[text]) return DIGITAL_ROAMER_GROUP_ALIAS[text];
+  const lower = text.toLowerCase();
+  const matched = Object.keys(DIGITAL_ROAMER_GROUP_ALIAS).find((alias) => alias.toLowerCase() === lower);
+  return matched ? DIGITAL_ROAMER_GROUP_ALIAS[matched] : DIGITAL_ROAMER_GROUPS[0];
+}
+
+function createDigitalRoamerBlueprint(index = 0, group = 'NemoX') {
+  const safeGroup = normalizeDigitalRoamerGroup(group);
+  const base = DIGITAL_ROAMER_GROUP_BASE[safeGroup] || DIGITAL_ROAMER_GROUP_BASE.NemoX;
+  const moveIds = DIGITAL_ROAMER_GROUP_MOVES[safeGroup] || DIGITAL_ROAMER_GROUP_MOVES.NemoX;
   const petElement = normalizePetElement(DIGITAL_ROAMER_GROUP_ELEMENT[safeGroup] || '水');
   const serial = String(index + 1).padStart(2, '0');
   const loc = pickDigitalRoamerSpawnLocation();
@@ -965,7 +984,7 @@ function getRoamingDigitalVillainsAtLocation(location, limit = 2) {
     .filter((agent) => agent?.roaming && agent?.alive !== false && String(agent.loc || '').trim() === loc)
     .map((agent) => ({
       id: String(agent.id || ''),
-      group: String(agent.digitalGroup || 'Nemo'),
+      group: normalizeDigitalRoamerGroup(agent.digitalGroup || 'NemoX'),
       location: String(agent.loc || loc),
       title: String(agent.title || 'Digital 滲透者'),
       petTemplate: deepClone(agent.petTemplate || {})
@@ -987,7 +1006,7 @@ function buildRoamingDigitalEncounterEnemy(location, options = {}) {
       fallback.status = '滲透中';
       list = [{
         id: String(fallback.id || ''),
-        group: String(fallback.digitalGroup || 'Nemo'),
+        group: normalizeDigitalRoamerGroup(fallback.digitalGroup || 'NemoX'),
         location: String(fallback.loc || location || '襄陽城'),
         title: String(fallback.title || 'Digital 滲透者'),
         petTemplate: deepClone(fallback.petTemplate || {})
@@ -1012,7 +1031,7 @@ function buildRoamingDigitalEncounterEnemy(location, options = {}) {
 
   return {
     npcId: String(source.id || picked.id || ''),
-    group: String(source.digitalGroup || picked.group || 'Nemo'),
+    group: normalizeDigitalRoamerGroup(source.digitalGroup || picked.group || 'NemoX'),
     enemy: {
       id: String(source.id || picked.id || ''),
       name: '匿名滲透者',

@@ -153,6 +153,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     restoreButtonTemplateSnapshot,
     tryRecoverEventButtonsAfterFailure,
     tryRecoverMainMenuAfterFailure,
+    recordInteractionCoverage = () => {},
     normalizeEventChoices,
     applyChoicePolicy
   } = deps;
@@ -163,6 +164,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   const { customId, user } = interaction;
   const perfStartedAt = Date.now();
   let perfFailed = false;
+  let perfErrorText = '';
   let buttonTemplateContext = null;
   try {
     if (String(customId || '').startsWith('event_')) {
@@ -628,10 +630,18 @@ CLIENT.on('interactionCreate', async (interaction) => {
       await interaction.reply({ content: tx.portalStoryLocked, ephemeral: true }).catch(() => {});
       return;
     }
-    const destinations = Array.isArray(access.destinations) ? access.destinations : [];
-    const targetLocation = destinations[Number.isNaN(idx) ? -1 : idx];
+    const destinationEntries = Array.isArray(access.destinationEntries) ? access.destinationEntries : [];
+    const targetEntry = destinationEntries[Number.isNaN(idx) ? -1 : idx];
+    const targetLocation = String(targetEntry?.location || '').trim();
     if (!targetLocation) {
       await interaction.reply({ content: tx.portalInvalidDestination, ephemeral: true }).catch(() => {});
+      return;
+    }
+    if (!targetEntry?.enabled) {
+      const denyText = typeof tx.portalDestinationDisabled === 'function'
+        ? tx.portalDestinationDisabled(targetLocation)
+        : (tx.portalStoryLocked || tx.portalInvalidDestination);
+      await interaction.reply({ content: denyText, ephemeral: true }).catch(() => {});
       return;
     }
 
@@ -1738,6 +1748,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
   } catch (err) {
     perfFailed = true;
+    perfErrorText = String(err?.message || err || '').trim();
     console.error(
       `[Interaction] handler failed cid=${String(customId || '')} user=${String(user?.id || '')}:`,
       err?.stack || err?.message || err
@@ -1766,11 +1777,23 @@ CLIENT.on('interactionCreate', async (interaction) => {
       }
     } catch (_) {}
   } finally {
+    const kind = interaction?.isButton?.()
+      ? 'button'
+      : (interaction?.isStringSelectMenu?.() ? 'select' : 'modal');
+    try {
+      recordInteractionCoverage({
+        customId: String(customId || '').trim(),
+        userId: String(user?.id || '').trim(),
+        ok: !perfFailed,
+        kind,
+        error: perfErrorText
+      });
+    } catch (coverageErr) {
+      console.error('[InteractionCoverage] record failed:', coverageErr?.message || coverageErr);
+    }
+
     const elapsedMs = Date.now() - perfStartedAt;
     if (elapsedMs >= 1200) {
-      const kind = interaction?.isButton?.()
-        ? 'button'
-        : (interaction?.isStringSelectMenu?.() ? 'select' : 'modal');
       console.log(
         `[Perf][interaction] type=${kind} cid=${String(customId || '')} ` +
         `user=${String(user?.id || '')} status=${perfFailed ? 'failed' : 'ok'} ${elapsedMs}ms`

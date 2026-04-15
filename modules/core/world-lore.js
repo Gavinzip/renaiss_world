@@ -25,7 +25,7 @@ const WORLD_LORE = {
         '偽造「已鑑定」標章與來源欄位',
         '以過低開價回收玩家物件再二次包裝'
       ],
-      kings: ['Nemo', 'Wolf', 'Adaloc', 'Hom'],
+      kings: ['NemoX', 'WolfX', 'AdalocX', 'HomX'],
       signature: '變異寵物與不確定性武器'
     }
   },

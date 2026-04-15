@@ -134,13 +134,27 @@ function createEventFlowUtils(deps = {}) {
       resultType: actionResultType
     });
     const locationDifficulty = Math.max(1, Number(getLocationDifficulty(location) || 1));
-    const globalDropNudge = 1.05;
+    const globalDropNudge = 0.92;
     const difficultyDropMultiplier = Math.max(
       1,
-      Math.min(1.12, 1 + (Math.max(0, locationDifficulty - 1) * 0.03))
+      Math.min(1.06, 1 + (Math.max(0, locationDifficulty - 1) * 0.015))
     );
-    const locationDropMultiplier = Math.max(0.75, Math.min(1.35, Number(locationFlavor?.dropChanceMultiplier || 1)));
-    const dropRateBoost = (highRewardHint ? 1.22 : 1.0) * locationDropMultiplier * difficultyDropMultiplier * globalDropNudge;
+    const locationDropMultiplier = Math.max(0.85, Math.min(1.15, Number(locationFlavor?.dropChanceMultiplier || 1)));
+    const dropRateBoost = (highRewardHint ? 1.08 : 1.0) * locationDropMultiplier * difficultyDropMultiplier * globalDropNudge;
+    const boostChance = (base) => Math.max(0, Math.min(0.78, Number(base || 0) * dropRateBoost));
+    const contextHasLootIntent = (
+      herbHint ||
+      huntHint ||
+      treasureHint ||
+      investigateHint ||
+      appraisalHint ||
+      plunderHint ||
+      storageHeistHint ||
+      highRewardHint
+    );
+    if (!contextHasLootIntent && !['forage', 'hunt', 'treasure', 'fight', 'location_story_battle'].includes(action)) {
+      return null;
+    }
     const finalizeLoot = (loot) => applyLocationFlavorToTradeGood(
       loot,
       location,
@@ -148,32 +162,30 @@ function createEventFlowUtils(deps = {}) {
     );
 
     if (action === 'forage' || herbHint) {
-      const chance = (action === 'forage' ? 0.96 : 0.82) * dropRateBoost;
+      const chance = boostChance(action === 'forage' ? 0.48 : 0.22);
       if (rollByChance(chance)) {
         return finalizeLoot(await ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' }));
       }
     }
     if (action === 'hunt' || huntHint) {
-      const chance = (action === 'hunt' ? 0.95 : 0.82) * dropRateBoost;
+      const chance = boostChance(action === 'hunt' ? 0.45 : 0.22);
       if (rollByChance(chance)) {
         const animalName = result?.item || event?.animal?.name || '獵物';
         return finalizeLoot(await ECON.createHuntLoot(animalName, location, luck, { lang: player?.language || 'zh-TW' }));
       }
     }
     if (action === 'treasure' || treasureHint) {
-      const chance = (action === 'treasure' ? 0.88 : 0.62) * dropRateBoost;
+      const chance = boostChance(action === 'treasure' ? 0.42 : 0.20);
       if (rollByChance(chance)) {
         return finalizeLoot(await ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' }));
       }
     }
     if ((action === 'fight' || action === 'location_story_battle' || plunderHint) && storageHeistHint) {
-      // 封存艙強奪線：幾乎必掉「可交易戰利品」，讓高風險行動有明顯收益感。
-      if (rollByChance(0.95)) {
-        return finalizeLoot(await ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' }));
-      }
+      // 封存艙強奪線：必定掉落。
+      return finalizeLoot(await ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' }));
     }
     if (action === 'fight' || action === 'location_story_battle' || plunderHint) {
-      const chance = 0.82 * dropRateBoost;
+      const chance = boostChance(0.28);
       if (rollByChance(chance)) {
         if (Math.random() < 0.68) {
           return finalizeLoot(await ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' }));
@@ -187,19 +199,20 @@ function createEventFlowUtils(deps = {}) {
       }
     }
     if (action === 'main_story' || action === 'social' || action === 'trade' || investigateHint || appraisalHint) {
-      const baseChance = appraisalHint ? 0.72 : 0.62;
-      const chance = baseChance * dropRateBoost;
+      // 主線/社交/交易只有在「調查或鑑價」語境才容易掉落，避免突兀噴寶。
+      const baseChance = appraisalHint ? 0.22 : (investigateHint ? 0.18 : 0.1);
+      const chance = boostChance(baseChance);
       if (rollByChance(chance)) {
-        if (Math.random() < 0.62) {
+        if (appraisalHint && Math.random() < 0.55) {
           return finalizeLoot(await ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' }));
         }
         return finalizeLoot(await ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' }));
       }
     }
     if (action === 'explore') {
-      const chance = 0.52 * dropRateBoost;
+      const chance = boostChance((treasureHint || herbHint || huntHint) ? 0.16 : 0.06);
       if (rollByChance(chance)) {
-        if (Math.random() < 0.72) {
+        if (Math.random() < 0.5) {
           return finalizeLoot(await ECON.createTreasureLoot(location, luck, { lang: player?.language || 'zh-TW' }));
         }
         return finalizeLoot(await ECON.createForageLoot(location, luck, { lang: player?.language || 'zh-TW' }));

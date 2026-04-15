@@ -816,7 +816,7 @@ function createBattleCoreUtils(deps = {}) {
   function isApexEnemyName(name = '') {
     const text = String(name || '').trim();
     if (!text) return false;
-    return /^(Nemo|Wolf|Adaloc|Hom)$/i.test(text) || /(四大天王|君主|裂體|風凰|巨蜥)/u.test(text);
+    return /^(NemoX|WolfX|AdalocX|HomX|Nemo|Wolf|Adaloc|Hom)$/i.test(text) || /(四大天王|君主|裂體|風凰|巨蜥)/u.test(text);
   }
 
   function applyApexEnemyEscalation(enemy = null) {

@@ -9,6 +9,9 @@ function createSlashAdminUtils(deps = {}) {
     runWorldBackup = async () => ({ ok: false, error: 'disabled' }),
     runWorldDataPull = async () => ({ ok: false, error: 'disabled' }),
     getBackupDebugStatus = () => ({}),
+    getInteractionCoverageReport = () => ({}),
+    clearInteractionCoverage = () => false,
+    flushInteractionCoverageNow = () => false,
     STORAGE = {},
     EmbedBuilder
   } = deps;
@@ -232,6 +235,97 @@ function createSlashAdminUtils(deps = {}) {
     });
   }
 
+  function truncateJoined(lines = [], maxLen = 950) {
+    const safe = Array.isArray(lines) ? lines.filter(Boolean).map((v) => String(v)) : [];
+    if (safe.length <= 0) return '（無）';
+    let out = '';
+    for (const line of safe) {
+      const next = out ? `${out}\n${line}` : line;
+      if (next.length > maxLen) break;
+      out = next;
+    }
+    return out || '（無）';
+  }
+
+  async function handleInteractionCoverage(interaction) {
+    const mode = String(interaction.options.getString('mode') || 'view').trim().toLowerCase();
+    const password = String(interaction.options.getString('password') || '').trim();
+    if (password !== RESETDATA_PASSWORD) {
+      await interaction.reply({ content: '❌ 密碼錯誤，無法查看互動覆蓋報表。', ephemeral: true });
+      return;
+    }
+
+    if (mode === 'reset') {
+      const ok = Boolean(clearInteractionCoverage());
+      await interaction.reply({
+        content: ok
+          ? '✅ 已清空互動覆蓋報表。'
+          : '⚠️ 嘗試清空覆蓋報表，但寫檔失敗，請稍後再試。',
+        ephemeral: true
+      });
+      return;
+    }
+
+    flushInteractionCoverageNow();
+    const report = getInteractionCoverageReport({ top: 30 }) || {};
+    const exact = report.exact || {};
+    const prefix = report.prefix || {};
+    const totals = report.totals || {};
+    const failedTop = Array.isArray(report.failedTop) ? report.failedTop : [];
+    const untestedExact = Array.isArray(exact.untested) ? exact.untested : [];
+    const untestedPrefix = Array.isArray(prefix.untested) ? prefix.untested : [];
+    const updatedAt = Number(report.updatedAt || 0);
+    const updatedText = updatedAt > 0 ? `<t:${Math.floor(updatedAt / 1000)}:F>` : '尚未記錄';
+
+    const failedLines = failedTop.slice(0, 12).map((row) => {
+      const key = String(row.scope || 'route') === 'prefix'
+        ? `prefix:${row.key}`
+        : String(row.key || '');
+      return `• ${key}｜failed ${Number(row.failed || 0)}｜ok ${Number(row.ok || 0)}`;
+    });
+    const missingExactLines = untestedExact.slice(0, 18).map((id) => `• ${id}`);
+    const missingPrefixLines = untestedPrefix.slice(0, 12).map((id) => `• ${id}`);
+
+    const embed = new EmbedBuilder()
+      .setTitle('🧪 互動覆蓋報表 /interactioncoverage')
+      .setColor(0x14b8a6)
+      .setDescription(
+        `最後更新：${updatedText}\n` +
+        `總互動：ok ${Number(totals.ok || 0)}｜failed ${Number(totals.failed || 0)}\n` +
+        `觀測到 customId：${Number(report.observedCustomIdCount || 0)}`
+      )
+      .addFields(
+        {
+          name: 'Exact 路由覆蓋',
+          value:
+            `已測 ${Number(exact.covered || 0)} / ${Number(exact.total || 0)} ` +
+            `（${Number(exact.coverageRate || 0)}%）\n` +
+            `ok ${Number(exact.okCount || 0)}｜failed ${Number(exact.failedCount || 0)}`
+        },
+        {
+          name: 'Prefix 路由覆蓋',
+          value:
+            `已測 ${Number(prefix.covered || 0)} / ${Number(prefix.total || 0)} ` +
+            `（${Number(prefix.coverageRate || 0)}%）\n` +
+            `ok ${Number(prefix.okCount || 0)}｜failed ${Number(prefix.failedCount || 0)}`
+        },
+        {
+          name: `失敗清單（Top ${failedLines.length || 0}）`,
+          value: truncateJoined(failedLines, 950)
+        },
+        {
+          name: `未測 Exact（${untestedExact.length}）`,
+          value: truncateJoined(missingExactLines, 950)
+        },
+        {
+          name: `未測 Prefix（${untestedPrefix.length}）`,
+          value: truncateJoined(missingPrefixLines, 950)
+        }
+      );
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
   function formatFactionWinnerLabel(winner) {
     if (winner === 'order') return '正派';
     if (winner === 'chaos') return 'Digital';
@@ -301,6 +395,7 @@ function createSlashAdminUtils(deps = {}) {
     handleBackupWorld,
     handleBackupCheck,
     handlePullWorldData,
+    handleInteractionCoverage,
     handleWarStatus
   };
 }

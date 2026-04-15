@@ -8,7 +8,8 @@ function createSlashCommandListenerUtils() {
       handleResetWorld = async () => {},
       handleBackupWorld = async () => {},
       handleBackupCheck = async () => {},
-      handlePullWorldData = async () => {}
+      handlePullWorldData = async () => {},
+      handleInteractionCoverage = async () => {}
     } = deps;
 
     CLIENT.on('interactionCreate', async (interaction) => {
@@ -25,6 +26,7 @@ function createSlashCommandListenerUtils() {
         if (commandName === 'backupworld') await handleBackupWorld(interaction, user);
         if (commandName === 'backupcheck') await handleBackupCheck(interaction);
         if (commandName === 'pullworlddata') await handlePullWorldData(interaction, user);
+        if (commandName === 'interactioncoverage') await handleInteractionCoverage(interaction, user);
       } catch (err) {
         console.error(`[Slash] 指令處理失敗 ${commandName}:`, err?.message || err);
         if (err?.stack) {

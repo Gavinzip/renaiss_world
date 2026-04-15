@@ -66,18 +66,28 @@ function attemptFlee(player, pet, enemy, attemptNumber = 1, combatant = null) {
 }
 
 // ============== 敵方怪物（學習玩家的招式）==============
-const DIGITAL_KINGS = ['Nemo', 'Wolf', 'Adaloc', 'Hom'];
+const DIGITAL_KINGS = ['NemoX', 'WolfX', 'AdalocX', 'HomX'];
+const DIGITAL_KING_ALIAS = Object.freeze({
+  Nemo: 'NemoX',
+  Wolf: 'WolfX',
+  Adaloc: 'AdalocX',
+  Hom: 'HomX',
+  NemoX: 'NemoX',
+  WolfX: 'WolfX',
+  AdalocX: 'AdalocX',
+  HomX: 'HomX'
+});
 const KING_MOVE_IDS = Object.freeze({
-  Nemo: ['silver_snake', 'ice_toxin', 'seven_step_poison', 'soul_drain', 'ultimate_dark'],
-  Wolf: ['hell_fire', 'explosive_pill', 'ghost_fire', 'bone_dissolver', 'thunder_crash'],
-  Adaloc: ['mud_fire_lotus', 'soul_scatter', 'hot_sand_hell', 'plague_cloud', 'wind_fire_blade'],
-  Hom: ['ultimate_dark', 'silver_snake', 'hell_fire', 'iron_thorn', 'arhat_kick']
+  NemoX: ['silver_snake', 'ice_toxin', 'seven_step_poison', 'soul_drain', 'ultimate_dark'],
+  WolfX: ['hell_fire', 'explosive_pill', 'ghost_fire', 'bone_dissolver', 'thunder_crash'],
+  AdalocX: ['mud_fire_lotus', 'soul_scatter', 'hot_sand_hell', 'plague_cloud', 'wind_fire_blade'],
+  HomX: ['ultimate_dark', 'silver_snake', 'hell_fire', 'iron_thorn', 'arhat_kick']
 });
 const KING_STATS = Object.freeze({
-  Nemo: { hp: 560, attack: 96, defense: 8, speed: 26, reward: { gold: [360, 560] } },
-  Wolf: { hp: 590, attack: 102, defense: 9, speed: 31, reward: { gold: [420, 620] } },
-  Adaloc: { hp: 620, attack: 100, defense: 10, speed: 24, reward: { gold: [460, 680] } },
-  Hom: { hp: 680, attack: 108, defense: 11, speed: 22, reward: { gold: [520, 760] } }
+  NemoX: { hp: 560, attack: 96, defense: 8, speed: 26, reward: { gold: [360, 560] } },
+  WolfX: { hp: 590, attack: 102, defense: 9, speed: 31, reward: { gold: [420, 620] } },
+  AdalocX: { hp: 620, attack: 100, defense: 10, speed: 24, reward: { gold: [460, 680] } },
+  HomX: { hp: 680, attack: 108, defense: 11, speed: 22, reward: { gold: [520, 760] } }
 });
 const ENEMY_MOVE_MAX = 6;
 
@@ -265,8 +275,18 @@ function getElementAdvantageMultiplier(attackerElement = '', defenderElement = '
   return Number(ELEMENT_ADVANTAGE_MULTIPLIER_MAP[key] || ELEMENT_ADVANTAGE_MULTIPLIER_DEFAULT);
 }
 
+function normalizeDigitalKingName(name = '') {
+  const text = String(name || '').trim();
+  if (!text) return '';
+  if (DIGITAL_KING_ALIAS[text]) return DIGITAL_KING_ALIAS[text];
+  const lower = text.toLowerCase();
+  const alias = Object.keys(DIGITAL_KING_ALIAS).find((key) => key.toLowerCase() === lower);
+  return alias ? DIGITAL_KING_ALIAS[alias] : '';
+}
+
 function isDigitalKingName(name = '') {
-  return DIGITAL_KINGS.includes(String(name || '').trim());
+  const normalized = normalizeDigitalKingName(name);
+  return DIGITAL_KINGS.includes(normalized);
 }
 
 function isVillainEnemyName(name = '') {
@@ -359,7 +379,8 @@ function pickUniqueSkillTemplates(pool = [], count = 0) {
 }
 
 function buildKingMoveLoadout(kingName = '') {
-  const ids = KING_MOVE_IDS[String(kingName || '').trim()] || [];
+  const normalizedName = normalizeDigitalKingName(kingName);
+  const ids = KING_MOVE_IDS[normalizedName] || [];
   const picked = ids
     .map((id) => SKILL_BY_ID.get(id))
     .filter(Boolean);
@@ -470,8 +491,9 @@ function buildEnemyMoveLoadout(enemyName = '', level = 1, rawMoves = [], options
 }
 
 function createDigitalKingEnemy(king = '') {
-  const name = isDigitalKingName(king) ? String(king) : DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
-  const stats = KING_STATS[name] || KING_STATS.Nemo;
+  const normalized = normalizeDigitalKingName(king);
+  const name = isDigitalKingName(normalized) ? normalized : DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
+  const stats = KING_STATS[name] || KING_STATS.NemoX;
   return {
     id: name,
     name,

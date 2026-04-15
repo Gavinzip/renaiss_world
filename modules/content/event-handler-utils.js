@@ -160,11 +160,46 @@ function storyMentionsLoot(storyText = '', tradeGood = {}) {
   return /🧰/.test(marker);
 }
 
+function sanitizeStoryTurnMarkerLine(storyText = '') {
+  const source = String(storyText || '');
+  if (!source) return '';
+  return source.replace(/^(\s*🧾\s*回合標記[:：]\s*)(.+)$/m, (full, prefix, markerBody) => {
+    let marker = String(markerBody || '').trim();
+    if (!marker) return '';
+    marker = marker.replace(
+      /\s*🧰\s*(?:無|无|none|null|n\/a|沒有|没有|暂无|無掉落|无掉落|空)\s*(?:\([^)]*\)|（[^）]*）)?/giu,
+      ''
+    );
+    marker = marker
+      .replace(/\s*\|\s*/g, ' | ')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^\s*\|\s*/u, '')
+      .replace(/\s*\|\s*$/u, '')
+      .trim();
+    if (!marker) return '';
+    return `${prefix}${marker}`;
+  });
+}
+
 function extractStoryTurnMarker(storyText = '') {
-  const story = String(storyText || '');
+  const story = sanitizeStoryTurnMarkerLine(storyText);
   if (!story) return '';
   const m = story.match(/^🧾\s*回合標記[:：]\s*(.+)$/m);
   return m ? String(m[1] || '').trim() : '';
+}
+
+function isLootPityEligibleTurn(event = {}, selectedChoice = '', result = {}) {
+  const action = String(event?.action || '').trim();
+  if (['forage', 'hunt', 'treasure', 'fight', 'location_story_battle'].includes(action)) return true;
+  const text = [
+    selectedChoice,
+    event?.choice,
+    event?.name,
+    event?.desc,
+    event?.tag,
+    result?.message
+  ].filter(Boolean).join(' ');
+  return /(採集|採藥|採礦|尋寶|寶藏|狩獵|打獵|封存艙|撬開|搶奪|戰利品|高回報|鑑價|鑑定|真偽|來源|追查|線索|查驗)/u.test(text);
 }
 
 function escapeRegex(text = '') {
@@ -795,13 +830,27 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     }
 
     let tradeGood = await maybeGenerateTradeGoodFromChoice(event, player, result, selectedChoice);
-    if (!tradeGood && result?.success !== false && String(result?.type || '') !== 'combat') {
+    const eligibleForPity =
+      result?.success !== false &&
+      String(result?.type || '') !== 'combat' &&
+      isLootPityEligibleTurn(event, selectedChoice, result);
+    if (!tradeGood && eligibleForPity) {
       player.noLootStreak = Math.max(0, Number(player.noLootStreak || 0)) + 1;
-      if (player.noLootStreak >= 4) {
+      // 保底僅作緩衝，不再每幾回合強制噴寶。
+      if (player.noLootStreak >= 6 && Math.random() < 0.38) {
         const luck = Number(player?.stats?.運氣 || 50);
-        tradeGood = Math.random() < 0.6
-          ? ECON.createTreasureLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' })
-          : ECON.createForageLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' });
+        const pityText = [
+          selectedChoice,
+          event?.choice,
+          event?.name,
+          event?.desc,
+          event?.tag,
+          result?.message
+        ].filter(Boolean).join(' ');
+        const preferTreasure = /(尋寶|寶藏|封存艙|撬開|搶奪|戰利品|高回報)/u.test(pityText);
+        tradeGood = preferTreasure
+          ? await ECON.createTreasureLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' })
+          : await ECON.createForageLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' });
         player.noLootStreak = 0;
       }
     } else if (tradeGood) {
@@ -1403,6 +1452,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         },
         memoryContext
       );
+      storyText = sanitizeStoryTurnMarkerLine(storyText);
       if (!storyText) {
         stopLoadingAnimation();
         finishGenerationState(player, 'failed', {

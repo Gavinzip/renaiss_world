@@ -305,6 +305,7 @@ function getAdventureNarrative(choice) {
 function createPlayerEmbed(player, title = '🌟 Renaiss World RPG') {
   const hpPercent = (player.stats?.生命 || 100) / (player.maxStats?.生命 || 100);
   const hpBar = '█'.repeat(Math.floor(hpPercent * 10)) + '░'.repeat(10 - Math.floor(hpPercent * 10));
+  const wantedLevel = Math.max(0, Number(player?.wanted || 0));
   
   const embed = new EmbedBuilder()
     .setTitle(title)
@@ -313,7 +314,7 @@ function createPlayerEmbed(player, title = '🌟 Renaiss World RPG') {
     .addFields(
       { name: '📍 位置', value: player.location || '未知', inline: true },
       { name: '⚔️ 戰力', value: String(player.stats?.戰力 || 30), inline: true },
-      { name: '🏅 等級', value: String(player.level || 1), inline: true },
+      { name: '🚨 通緝級', value: String(wantedLevel), inline: true },
       { name: '🩸 生命', value: `${hpBar} ${player.stats?.生命 || 100}/${player.maxStats?.生命 || 100}`, inline: false }
     );
   

@@ -17,9 +17,41 @@ const STORY_ACTS = {
   6: 'Act 6 Winchman 抉擇（New Balance）'
 };
 
-const DIGITAL_KINGS = ['Nemo', 'Wolf', 'Adaloc', 'Hom'];
+const DIGITAL_KINGS = ['NemoX', 'WolfX', 'AdalocX', 'HomX'];
+const KING_ALIAS_TO_CANON = Object.freeze({
+  Nemo: 'NemoX',
+  Wolf: 'WolfX',
+  Adaloc: 'AdalocX',
+  Hom: 'HomX',
+  NemoX: 'NemoX',
+  WolfX: 'WolfX',
+  AdalocX: 'AdalocX',
+  HomX: 'HomX'
+});
 const KING_ENCOUNTER_GAP_EVENTS = Math.max(1, Number(process.env.KING_ENCOUNTER_GAP_EVENTS || 2));
 const ASSASSIN_PRESSURE_GAP_EVENTS = Math.max(2, Number(process.env.ASSASSIN_PRESSURE_GAP_EVENTS || 4));
+
+function normalizeKingName(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (KING_ALIAS_TO_CANON[text]) return KING_ALIAS_TO_CANON[text];
+  const lower = text.toLowerCase();
+  const matched = Object.keys(KING_ALIAS_TO_CANON).find((alias) => alias.toLowerCase() === lower);
+  return matched ? KING_ALIAS_TO_CANON[matched] : '';
+}
+
+function detectKingNameFromText(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const exact = normalizeKingName(text);
+  if (exact) return exact;
+  for (const alias of Object.keys(KING_ALIAS_TO_CANON)) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escaped, 'i');
+    if (regex.test(text)) return KING_ALIAS_TO_CANON[alias];
+  }
+  return '';
+}
 
 const ENDING_RULES = {
   order: { fakeRate: 0.12, ambushRate: 0.15, volatility: 0.08, rewardVariance: 0.2 },
@@ -659,13 +691,13 @@ function normalizeKingProgressState(state) {
   if (!state || typeof state !== 'object') return;
   if (!Array.isArray(state.defeatedKings)) state.defeatedKings = [];
   state.defeatedKings = state.defeatedKings
-    .map((name) => String(name || '').trim())
+    .map((name) => normalizeKingName(name))
     .filter((name, idx, arr) => DIGITAL_KINGS.includes(name) && arr.indexOf(name) === idx);
   if (!Number.isFinite(Number(state.lastKingEncounterEventCount))) {
     state.lastKingEncounterEventCount = -999;
   }
   if (state.pendingKing != null) {
-    const pending = String(state.pendingKing || '').trim();
+    const pending = normalizeKingName(state.pendingKing);
     state.pendingKing = DIGITAL_KINGS.includes(pending) ? pending : null;
   } else {
     state.pendingKing = null;
@@ -828,8 +860,9 @@ function buildMaskedAssassinEncounter() {
 }
 
 function buildKingEncounter(forcedKing = '') {
-  const king = DIGITAL_KINGS.includes(String(forcedKing || '').trim())
-    ? String(forcedKing || '').trim()
+  const normalizedForcedKing = normalizeKingName(forcedKing);
+  const king = DIGITAL_KINGS.includes(normalizedForcedKing)
+    ? normalizedForcedKing
     : DIGITAL_KINGS[Math.floor(Math.random() * DIGITAL_KINGS.length)];
   const kingEnemy = BATTLE.createDigitalKingEnemy(king);
   return sanitizeWorldObject({
@@ -1037,7 +1070,7 @@ function recordCombatOutcome(player, context = {}) {
     victory: true
   });
 
-  const defeatedKing = DIGITAL_KINGS.find((name) => enemyName === name || enemyName.includes(name));
+  const defeatedKing = detectKingNameFromText(enemyName);
   if (!defeatedKing) return missionTriggered || null;
   if (state.defeatedKings.includes(defeatedKing)) return null;
 
