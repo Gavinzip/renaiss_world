@@ -506,10 +506,12 @@ function suggestMissionAutoTravel(player = null, context = {}) {
   const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
   const minTurnsInLocation = Math.max(1, Number(spec?.minTurnsInLocation || 1));
   const leadShownCount = Math.max(0, Number(row?.leadShownCount || 0));
-  const cooldownTurns = Math.max(2, Number(context?.cooldownTurns || 2));
+  const cooldownTurns = Math.max(3, Number(context?.cooldownTurns || 3));
   const lastAutoTurn = Number(state?.lastMissionAutoTravelTurn || -999);
+  const autoTravelMinTurns = Math.max(minTurnsInLocation + 1, Number(context?.autoTravelMinTurns || 3));
   if (leadShownCount <= 0) return null;
-  if (turnsInLocation < minTurnsInLocation) return null;
+  if (leadShownCount < 2) return null;
+  if (turnsInLocation < autoTravelMinTurns) return null;
   if (storyTurns - lastAutoTurn < cooldownTurns) return null;
 
   state.lastMissionAutoTravelTurn = storyTurns;

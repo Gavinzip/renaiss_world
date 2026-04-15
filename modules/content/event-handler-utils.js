@@ -155,22 +155,55 @@ function isStorageLootContext(event = {}, result = {}, selectedChoice = '') {
   return hasStorageCue && hasOpenCue;
 }
 
-function storyMentionsLoot(storyText = '', tradeGood = {}) {
-  const story = sanitizeStoryTurnMarkerLine(storyText);
-  const itemName = String(tradeGood?.name || '').trim();
-  if (!story || !itemName) return false;
-  const escaped = escapeRegex(itemName);
-  if (!escaped) return false;
-  // 不再依賴「回合標記」，改為檢查故事正文是否真的出現該物件名稱。
-  return new RegExp(escaped, 'u').test(story);
+function extractLootGrantMarker(storyText = '') {
+  const source = String(storyText || '');
+  if (!source) return '';
+  const match = source.match(/^\s*🧰\s*掉寶標記[:：]\s*(.+)\s*$/mu);
+  return match ? String(match[1] || '').trim() : '';
+}
+
+function sanitizeLootMarkerName(text = '') {
+  return String(text || '')
+    .replace(/[「」『』【】（）()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40);
+}
+
+function normalizeLootName(text = '') {
+  return String(text || '')
+    .replace(/[「」『』【】（）()]/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function storyMentionsLoot(storyMarkerName = '', tradeGood = {}) {
+  const itemName = normalizeLootName(tradeGood?.name || '');
+  const markedName = normalizeLootName(storyMarkerName);
+  if (!itemName || !markedName) return false;
+  return markedName === itemName || markedName.includes(itemName) || itemName.includes(markedName);
+}
+
+function inferStoryLootSourceType(storyText = '', fallbackContext = '') {
+  const text = [String(storyText || ''), String(fallbackContext || '')]
+    .filter(Boolean)
+    .join('\n');
+  if (/(封存[艙舱倉藏函]|開艙|开舱|撬開|撬开|搶奪|抢夺|強奪|强夺|奪取|夺取|戰利品|战利品|寶藏|宝藏|遺跡|遗迹|高回報|高回报|鑑價|鉴价|鑑定|鉴定|稀有|密鑰|密钥|核心)/u.test(text)) {
+    return 'treasure';
+  }
+  if (/(草藥|草药|採集|采集|果實|果实|獵物|猎物|狩獵|狩猎|素材|蘑菇|藥材|药材)/u.test(text)) {
+    return 'forage';
+  }
+  return 'forage';
 }
 
 function sanitizeStoryTurnMarkerLine(storyText = '') {
   const source = String(storyText || '');
   if (!source) return '';
-  // 依需求：完全移除「🧾 回合標記」整行，不再對玩家顯示。
+  // 依需求：完全移除系統標記行（回合標記 / 掉寶標記），不對玩家顯示。
   return source
     .replace(/^\s*🧾\s*回合標記[:：].*$/gmu, '')
+    .replace(/^\s*🧰\s*掉寶標記[:：].*$/gmu, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -446,6 +479,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   let result = null;
   let selectedChoice = event.choice || event.name || '未知選擇';
   let pendingStoryLoot = null;
+  let lootEligibleForStreak = false;
   const eventMainlineGoal = String(event?.mainlineGoal || '').trim();
   const eventMainlineProgress = String(event?.mainlineProgress || '').trim();
   const eventMainlineStage = Math.max(1, Number(event?.mainlineStage || 1));
@@ -910,10 +944,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       result?.success !== false &&
       String(result?.type || '') !== 'combat' &&
       isLootPityEligibleTurn(event, selectedChoice, result);
+    lootEligibleForStreak = Boolean(eligibleForPity);
     if (!tradeGood && eligibleForPity) {
-      player.noLootStreak = Math.max(0, Number(player.noLootStreak || 0)) + 1;
-      // 保底僅作緩衝，不再每幾回合強制噴寶。
-      if (player.noLootStreak >= 6 && Math.random() < 0.38) {
+      // 保底緩衝：連續未掉落時提高候選掉落機會，最終仍需故事判定「已取得」才入包。
+      const currentStreak = Math.max(0, Number(player.noLootStreak || 0));
+      if (currentStreak >= 5 && Math.random() < 0.52) {
         const luck = Number(player?.stats?.運氣 || 50);
         const pityText = [
           selectedChoice,
@@ -927,10 +962,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         tradeGood = preferTreasure
           ? await ECON.createTreasureLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' })
           : await ECON.createForageLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' });
-        player.noLootStreak = 0;
       }
-    } else if (tradeGood) {
-      player.noLootStreak = 0;
     }
     if (tradeGood) {
       pendingStoryLoot = tradeGood;
@@ -1563,7 +1595,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         },
         memoryContext
       );
-      storyText = sanitizeStoryTurnMarkerLine(storyText);
+      const rawStoryText = String(storyText || '');
+      storyText = sanitizeStoryTurnMarkerLine(rawStoryText);
       if (!storyText) {
         stopLoadingAnimation();
         finishGenerationState(player, 'failed', {
@@ -1584,16 +1617,47 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         return;
       }
 
-      if (pendingStoryLoot && storyMentionsLoot(storyText, pendingStoryLoot)) {
-        ECON.addTradeGood(player, pendingStoryLoot);
-        result.loot = pendingStoryLoot;
-        rememberPlayer(player, {
-          type: '戰利品',
-          content: pendingStoryLoot.name,
-          outcome: `${pendingStoryLoot.rarity}｜估值 ${pendingStoryLoot.value} Rns 代幣`,
-          importance: 2,
-          tags: ['loot', String(pendingStoryLoot.category || 'goods')]
-        });
+      const declaredLootName = sanitizeLootMarkerName(extractLootGrantMarker(rawStoryText));
+      let lootGranted = false;
+      if (declaredLootName) {
+        let grantedLoot = null;
+        if (pendingStoryLoot && storyMentionsLoot(declaredLootName, pendingStoryLoot)) {
+          grantedLoot = { ...pendingStoryLoot };
+        } else {
+          const fallbackContext = [
+            selectedChoice,
+            event?.choice,
+            event?.name,
+            event?.desc,
+            result?.message
+          ].filter(Boolean).join('\n');
+          const inferredType = inferStoryLootSourceType(rawStoryText, fallbackContext);
+          const luck = Number(player?.stats?.運氣 || 50);
+          grantedLoot = inferredType === 'treasure'
+            ? await ECON.createTreasureLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' })
+            : await ECON.createForageLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' });
+          if (grantedLoot && typeof grantedLoot === 'object') {
+            grantedLoot.name = declaredLootName;
+          }
+        }
+
+        if (grantedLoot) {
+          ECON.addTradeGood(player, grantedLoot);
+          result.loot = grantedLoot;
+          lootGranted = true;
+          rememberPlayer(player, {
+            type: '戰利品',
+            content: grantedLoot.name,
+            outcome: `${grantedLoot.rarity || '普通'}｜估值 ${Math.max(1, Math.floor(Number(grantedLoot.value || 0)))} Rns 代幣`,
+            importance: 2,
+            tags: ['loot', String(grantedLoot.category || 'goods')]
+          });
+        }
+      }
+      if (lootGranted) {
+        player.noLootStreak = 0;
+      } else if (lootEligibleForStreak) {
+        player.noLootStreak = Math.max(0, Number(player.noLootStreak || 0)) + 1;
       }
 
       player.currentStory = storyText;

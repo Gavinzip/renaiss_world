@@ -378,9 +378,10 @@ function sanitizeNarrativeText(text = '') {
 function sanitizeStoryTurnMarker(text = '') {
   const source = String(text || '');
   if (!source) return '';
-  // 不對玩家顯示「🧾 回合標記」，統一由系統獎勵列輸出 🧭 / 🧰。
+  // 不對玩家顯示系統標記行（回合標記 / 掉寶標記）。
   return source
     .replace(/^\s*🧾\s*回合標記[:：].*$/gmu, '')
+    .replace(/^\s*🧰\s*掉寶標記[:：].*$/gmu, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -2231,7 +2232,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
       `名稱：${pendingLootName}\n` +
       `稀有度：${pendingLootRarity}\n` +
       `參考鑑價：${pendingLootValue} Rns 代幣\n` +
-      `${pendingLootCategory ? `類別：${pendingLootCategory}` : ''}`.trim()
+      `${pendingLootCategory ? `類別：${pendingLootCategory}\n` : ''}` +
+      `若本回合確實取得，請在故事最後一行加：🧰 掉寶標記: ${pendingLootName}`
     : '';
   const turnMoveSection = turnMoveSummary
     ? `\n【本回移動摘要（供敘事連貫參考）】\n${turnMoveSummary}`
@@ -2395,11 +2397,12 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 38. 若存在【主線橋接鎖定】，開場 1-2 段必須優先承接該目標，且給出「現在就能做」的行動落點
 39. 主線橋接鎖定只能當「本回合先落地」的方向，不可直接照抄成模板句或條列宣告
 40. 若「動作代碼」是 portal_jump_followup 或 device_jump_followup，開場必須採三段銜接：先交代原地點最後情勢（1-2句）→ 再寫啟動傳送與過程（1-2句）→ 最後落在新地點且立刻有可互動對象/環境回應（至少2句），禁止只寫「已抵達」空句
-41. 若有【本回候選戰利品】，你可以選擇讓它出現或不出現；由敘事自然判斷，禁止硬塞獎勵句
-42. 若選擇讓候選戰利品出現，必須在故事中交代取得動作，且明確寫出該物件名稱；若不出現則完全不提該物件
-43. 禁止輸出任何「🧾 回合標記」或同義的系統欄位行；只寫故事正文。
-44. 若有【本回移動摘要】，可在故事內容自然描述，不要輸出機械標記格式。
-45. 若你決定本回有寶物，必須在故事正文交代取得動作與物件名（同【本回候選戰利品】）；若沒取得就完全不提。
+41. 若有【本回候選戰利品】，請優先嘗試自然寫出取得過程；若當下情境真的不合理，可以不掉寶，禁止硬塞。
+42. 即使沒有候選戰利品，若你判斷本回合劇情自然會拿到寶物，也可以新增一個合理寶物；但必須符合地區與場景，不可突兀亂給。
+43. 只要本回合確實有拿到寶物（候選或你新增），必須同時滿足：故事正文有取得動作 + 明確出現該物件名稱 + 最後一行輸出「🧰 掉寶標記: 寶物名稱」。
+44. 若本回合沒有取得任何寶物，禁止輸出「🧰 掉寶標記」。
+45. 若有【本回移動摘要】，可在故事內容自然描述，不要輸出機械標記格式。
+46. 禁止輸出任何「🧾 回合標記」或同義的系統欄位行；僅允許第43條的「🧰 掉寶標記」作為隱藏結算標記。
 
 直接開始講：`;
 
@@ -2534,6 +2537,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     String(location || '').trim() === String(missionInfo.npcLocation || '').trim()
   );
   const missionCityTurns = missionInCity ? Math.max(1, Number(arcMeta?.turnsInLocation || 1)) : 0;
+  const localTurns = Math.max(1, Number(arcMeta?.turnsInLocation || 1));
   const missionApproachRule = (() => {
     if (!missionInfo || missionInfo.keyFound) return '';
     if (missionInfo.regionId === 'island_routes') {
@@ -2548,11 +2552,31 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
       }
       return `你已在任務城市（第${missionCityTurns}回合）：本回合至少 1 個選項可直接接觸「${missionInfo.npcName}」或其代理人；仍不可直接寫成已取得「${missionInfo.evidenceName}」。`;
     }
+    if (localTurns <= 2) {
+      return `你剛到當前城市（第${localTurns}回合）：本回合禁止直接輸出「前往${missionInfo.npcLocation}」或 move_to=${missionInfo.npcLocation}；至少 2 個選項要聚焦在地觀察/打聽/驗證（先理解城市局勢），僅可用「為前往做準備」方式間接推進。`;
+    }
+    if (localTurns === 3) {
+      return `你在當前城市第3回合：可有 1 個選項開始規劃前往「${missionInfo.npcLocation}」，但優先仍是本地收束線索；避免整組選項直接趕路。`;
+    }
     return `你尚未到任務城市：本回合至少 1 個選項要透過在地線索把路徑推向「${missionInfo.npcLocation}」，並讓玩家看得懂「下一步應往該城市移動」；不可在當地直接拿到「${missionInfo.evidenceName}」。`;
   })();
   const missionChoiceRule = missionInfo && !missionInfo.keyFound
     ? missionApproachRule
     : '';
+  const navigationPacingRule = (() => {
+    if (!navigationTarget) return '';
+    const target = String(navigationTarget || '').trim();
+    if (!target || target === String(location || '').trim()) {
+      return `玩家已在地圖設定導航目標「${target || location}」，至少 1 個選項要讓玩家感覺到正在接近目標。`;
+    }
+    if (localTurns <= 2) {
+      return `玩家已在地圖設定導航目標「${target}」，但你剛到新城市（第${localTurns}回合）：本回合禁止直接「前往${target}」與 move_to=${target}；至少 1 個選項改成前置準備（問路、補給、查路線、聯絡中介）。`;
+    }
+    if (localTurns === 3) {
+      return `玩家已在地圖設定導航目標「${target}」，第3回合可開始規劃移動；最多 1 個選項可直接前往，其餘維持本地推進。`;
+    }
+    return `玩家已在地圖設定導航目標「${target}」，至少 1 個選項必須是朝該地點推進的具體行動。`;
+  })();
   
   const focusedMemory = canonicalizeKingCodenamesText(summarizeContext(memoryContext, 560, 8));
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
@@ -2666,7 +2690,7 @@ ${truthGatePrompt ? `\n${truthGatePrompt}` : ''}
 ${missionChoiceRule ? `\n【關鍵任務選項規則】\n${missionChoiceRule}` : ''}
 ${pendingConflictRule ? `\n【衝突延續硬規則】\n${pendingConflictRule}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
-${navigationTarget ? `\n【導航約束】\n玩家已在地圖設定導航目標「${navigationTarget}」，至少 1 個選項必須是朝該地點推進的具體行動。` : ''}
+${navigationPacingRule ? `\n【導航約束】\n${navigationPacingRule}` : ''}
 
 【完整故事全文（必讀）】
 ${fullStoryText || '（無）'}
