@@ -15,6 +15,15 @@ function createMovesSelectUtils(deps = {}) {
     showMovesList = async () => {}
   } = deps;
 
+  async function replyEphemeral(interaction, content) {
+    const payload = { content: String(content || ''), ephemeral: true };
+    if (interaction?.deferred || interaction?.replied) {
+      await interaction.followUp(payload).catch(() => {});
+      return;
+    }
+    await interaction.reply(payload).catch(() => {});
+  }
+
   async function handleMovesSelectMenu(interaction, user, customId) {
     if (customId === 'moves_pet_select') {
       const petId = String(interaction.values?.[0] || '');
@@ -28,14 +37,14 @@ function createMovesSelectUtils(deps = {}) {
       const petId = idx >= 0 ? raw.slice(0, idx) : '';
       const moveId = idx >= 0 ? raw.slice(idx + 2) : '';
       if (!petId || !moveId) {
-        await interaction.reply({ content: '⚠️ 技能晶片資料錯誤，請重新選擇。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 技能晶片資料錯誤，請重新選擇。');
         return true;
       }
 
       const player = CORE.loadPlayer(user.id);
       const pet = PET.getPetById(petId);
       if (!player || !pet || pet.ownerId !== user.id) {
-        await interaction.reply({ content: '⚠️ 找不到要操作的寵物或角色。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 找不到要操作的寵物或角色。');
         return true;
       }
 
@@ -46,11 +55,11 @@ function createMovesSelectUtils(deps = {}) {
         moveTemplate = allMoves.find((m) => String(m?.id || '').trim() === moveId) || null;
       }
       if (!moveTemplate?.name) {
-        await interaction.reply({ content: '⚠️ 找不到該技能模板，可能與寵物類型不符。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 找不到該技能模板，可能與寵物類型不符。');
         return true;
       }
       if (!petMovePool.some((m) => String(m?.id || '').trim() === moveId)) {
-        await interaction.reply({ content: '⚠️ 這個技能不適用於目前寵物屬性，請改選同屬性技能晶片。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 這個技能不適用於目前寵物屬性，請改選同屬性技能晶片。');
         return true;
       }
       if ((Array.isArray(pet.moves) ? pet.moves : []).some((m) => String(m?.id || '').trim() === moveId)) {
@@ -64,10 +73,8 @@ function createMovesSelectUtils(deps = {}) {
         })
         .length;
       if (configurableAttackCount >= PET_MOVE_LOADOUT_LIMIT) {
-        await showMovesList(
+        await replyEphemeral(
           interaction,
-          user,
-          pet.id,
           `⚠️ 上陣招式已滿 ${PET_MOVE_LOADOUT_LIMIT} 招，請先取消學習一招再學新技能。`
         );
         return true;
@@ -82,11 +89,11 @@ function createMovesSelectUtils(deps = {}) {
           && (Array.isArray(latestPet.moves) ? latestPet.moves : []).some((m) => String(m?.id || '').trim() === moveId);
         if (alreadyLearned) {
           console.warn(`[Moves][learn_chip] consume_miss_but_already_learned user=${user.id} pet=${pet.id} moveId=${moveId} move=${moveTemplate.name}`);
-          await showMovesList(interaction, user, latestPet.id, `已學習並上陣：${moveTemplate.name}`);
+          await replyEphemeral(interaction, `ℹ️ ${moveTemplate.name} 已經學會，無需重複學習。`);
           return true;
         }
         console.warn(`[Moves][learn_chip] consume_failed user=${user.id} pet=${pet.id} moveId=${moveId} move=${moveTemplate.name}`);
-        await showMovesList(interaction, user, pet.id, `⚠️ 背包內找不到「${SKILL_CHIP_PREFIX}${moveTemplate.name}」，已為你刷新清單。`);
+        await replyEphemeral(interaction, `⚠️ 背包內找不到「${SKILL_CHIP_PREFIX}${moveTemplate.name}」。`);
         return true;
       }
 
@@ -95,7 +102,7 @@ function createMovesSelectUtils(deps = {}) {
         addSkillChipToInventory(player, moveTemplate.name);
         CORE.savePlayer(player);
         console.warn(`[Moves][learn_chip] learn_failed user=${user.id} pet=${pet.id} moveId=${moveId} move=${moveTemplate.name} reason=${learned?.reason || '學習失敗'}`);
-        await showMovesList(interaction, user, pet.id, `⚠️ ${learned?.reason || '學習失敗'}（已退回晶片）`);
+        await replyEphemeral(interaction, `⚠️ ${learned?.reason || '學習失敗'}（已退回晶片）`);
         return true;
       }
 
@@ -115,30 +122,30 @@ function createMovesSelectUtils(deps = {}) {
       const petId = idx >= 0 ? raw.slice(0, idx) : '';
       const moveId = idx >= 0 ? raw.slice(idx + 2) : '';
       if (!petId || !moveId) {
-        await interaction.reply({ content: '⚠️ 取消學習資料錯誤，請重新選擇。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 取消學習資料錯誤，請重新選擇。');
         return true;
       }
 
       const player = CORE.loadPlayer(user.id);
       const pet = PET.getPetById(petId);
       if (!player || !pet || pet.ownerId !== user.id) {
-        await interaction.reply({ content: '⚠️ 找不到要操作的寵物或角色。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 找不到要操作的寵物或角色。');
         return true;
       }
 
       const move = (Array.isArray(pet.moves) ? pet.moves : []).find((m) => String(m?.id || '').trim() === moveId) || null;
       if (!move) {
-        await interaction.reply({ content: '⚠️ 這招不存在或已被移除。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 這招不存在或已被移除。');
         return true;
       }
       if (PROTECTED_MOVE_IDS.has(String(move.id || '').trim())) {
-        await interaction.reply({ content: '⚠️ 基礎招式不能取消學習。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 基礎招式不能取消學習。');
         return true;
       }
 
       const forgotten = typeof PET.forgetMove === 'function' ? PET.forgetMove(pet, moveId) : null;
       if (!forgotten?.success) {
-        await interaction.reply({ content: `❌ ${forgotten?.reason || '取消學習失敗'}`, ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, `❌ ${forgotten?.reason || '取消學習失敗'}`);
         return true;
       }
 
@@ -159,7 +166,7 @@ function createMovesSelectUtils(deps = {}) {
       const petId = idx >= 0 ? raw.slice(0, idx) : '';
       const pet = PET.getPetById(petId);
       if (!pet || pet.ownerId !== user.id) {
-        await interaction.reply({ content: '⚠️ 找不到要設定的寵物。', ephemeral: true }).catch(() => {});
+        await replyEphemeral(interaction, '⚠️ 找不到要設定的寵物。');
         return true;
       }
       await showMovesList(interaction, user, pet.id, 'ℹ️ 已改為自動上陣模式：已學會攻擊招式會自動攜帶；不想用請取消學習。');
