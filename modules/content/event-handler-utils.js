@@ -155,30 +155,23 @@ function isStorageLootContext(event = {}, result = {}, selectedChoice = '') {
 }
 
 function storyMentionsLoot(storyText = '', tradeGood = {}) {
-  const marker = extractStoryTurnMarker(storyText);
-  if (!marker) return false;
-  return /🧰/.test(marker);
+  const story = sanitizeStoryTurnMarkerLine(storyText);
+  const itemName = String(tradeGood?.name || '').trim();
+  if (!story || !itemName) return false;
+  const escaped = escapeRegex(itemName);
+  if (!escaped) return false;
+  // 不再依賴「回合標記」，改為檢查故事正文是否真的出現該物件名稱。
+  return new RegExp(escaped, 'u').test(story);
 }
 
 function sanitizeStoryTurnMarkerLine(storyText = '') {
   const source = String(storyText || '');
   if (!source) return '';
-  return source.replace(/^(\s*🧾\s*回合標記[:：]\s*)(.+)$/m, (full, prefix, markerBody) => {
-    let marker = String(markerBody || '').trim();
-    if (!marker) return '';
-    marker = marker.replace(
-      /\s*🧰\s*(?:無|无|none|null|n\/a|沒有|没有|暂无|無掉落|无掉落|空)\s*(?:\([^)]*\)|（[^）]*）)?/giu,
-      ''
-    );
-    marker = marker
-      .replace(/\s*\|\s*/g, ' | ')
-      .replace(/\s{2,}/g, ' ')
-      .replace(/^\s*\|\s*/u, '')
-      .replace(/\s*\|\s*$/u, '')
-      .trim();
-    if (!marker) return '';
-    return `${prefix}${marker}`;
-  });
+  // 依需求：完全移除「🧾 回合標記」整行，不再對玩家顯示。
+  return source
+    .replace(/^\s*🧾\s*回合標記[:：].*$/gmu, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function extractStoryTurnMarker(storyText = '') {
@@ -1508,13 +1501,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const movedTo = String(result?.autoTravel?.targetLocation || '').trim();
       const hasMovedThisTurn = movedFrom && movedTo && !Boolean(result?.autoTravel?.blocked);
       if (hasMovedThisTurn) {
-        const moveLine = `🧭 本回合移動：${movedFrom} → ${movedTo}`;
-        if (result?.loot?.name) {
-          rewardText.push(`${moveLine} | 🧰 ${result.loot.name}（${result.loot.rarity || '普通'}）`);
-        } else {
-          rewardText.push(moveLine);
-        }
+        rewardText.push(`🧭 本回合移動：${movedFrom} → ${movedTo}`);
       }
+      if (result?.loot?.name) rewardText.push(`🧰 ${result.loot.name}（${result.loot.rarity || '普通'}）`);
       if (result.gold) rewardText.push(`💰 +${result.gold} Rns 代幣`);
       if (result.wantedLevel) rewardText.push(`⚠️ 通緝等级: ${result.wantedLevel}`);
       if (result.soldCount > 0) rewardText.push(`🏪 已售出 ${result.soldCount} 件`);

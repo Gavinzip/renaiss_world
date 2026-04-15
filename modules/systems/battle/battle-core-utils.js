@@ -145,6 +145,11 @@ function createBattleCoreUtils(deps = {}) {
           player.mainPetId = selectedId;
           changed = true;
         }
+        // 相容舊資料欄位（部分舊流程仍讀 petId）。
+        if (String(player.petId || '').trim() !== selectedId) {
+          player.petId = selectedId;
+          changed = true;
+        }
       }
       if (preferBattle && player.battleState && typeof player.battleState === 'object') {
         if (String(player.battleState.activePetId || '').trim() !== selectedId) {

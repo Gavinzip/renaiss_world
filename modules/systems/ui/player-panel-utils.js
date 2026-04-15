@@ -289,6 +289,12 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
 
   let selectedPet = ownedPets.find((p) => p.id === selectedPetId) || null;
   if (!selectedPet) {
+    const preferredId = String(player?.activePetId || player?.mainPetId || player?.petId || '').trim();
+    if (preferredId) {
+      selectedPet = ownedPets.find((p) => String(p?.id || '').trim() === preferredId) || null;
+    }
+  }
+  if (!selectedPet) {
     const defaultPet = PET.loadPet(user.id);
     selectedPet = ownedPets.find((p) => p.id === defaultPet?.id) || ownedPets[0];
   }

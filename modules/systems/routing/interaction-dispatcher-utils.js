@@ -1025,6 +1025,9 @@ CLIENT.on('interactionCreate', async (interaction) => {
       return;
     }
     player.activePetId = pet.id;
+    // 相容舊欄位：部分流程仍讀 mainPetId/petId，主寵切換時同步更新避免顯示錯位。
+    player.mainPetId = pet.id;
+    player.petId = pet.id;
     CORE.savePlayer(player);
     await showMovesList(interaction, user, pet.id, `已設定主上場寵物：${pet.name}`);
     return;
