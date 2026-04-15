@@ -30,6 +30,7 @@ const KING_ALIAS_TO_CANON = Object.freeze({
 });
 const KING_ENCOUNTER_GAP_EVENTS = Math.max(1, Number(process.env.KING_ENCOUNTER_GAP_EVENTS || 2));
 const ASSASSIN_PRESSURE_GAP_EVENTS = Math.max(2, Number(process.env.ASSASSIN_PRESSURE_GAP_EVENTS || 4));
+const KING_CHASE_REGION_ID = 'island_routes';
 
 function normalizeKingName(raw = '') {
   const text = String(raw || '').trim();
@@ -702,6 +703,13 @@ function normalizeKingProgressState(state) {
   } else {
     state.pendingKing = null;
   }
+  state.kingPursuitRegionId = String(state.kingPursuitRegionId || '').trim();
+  if (state.pendingKing && !state.kingPursuitRegionId) {
+    state.kingPursuitRegionId = KING_CHASE_REGION_ID;
+  }
+  if (!state.pendingKing) {
+    state.kingPursuitRegionId = '';
+  }
 }
 
 function getRemainingKings(state) {
@@ -728,6 +736,7 @@ function ensureMainStoryState(player) {
       defeatedKings: [],
       lastKingEncounterEventCount: -999,
       pendingKing: null,
+      kingPursuitRegionId: '',
       signals: {
         order: 0,
         chaos: 0,
@@ -1004,11 +1013,45 @@ function maybeTriggerPassiveStory(player, context = {}) {
     normalizeKingProgressState(state);
     const remainingKings = getRemainingKings(state);
     if (remainingKings.length === 0) {
+      state.pendingKing = null;
+      state.kingPursuitRegionId = '';
       markNode(state, 6, 'act6_winchman', 'Act6 前置 -> 四巨頭全滅');
       triggered.appendText = buildMainlineBeatText(player, state, 'act5_all_defeated');
       triggered.announcement = `🏁 ${player.name}已擊破四巨頭，最終章即將開啟。`;
       triggered.memory = '你已擊敗四巨頭，終章只差最後抉擇。';
       return triggered;
+    }
+    const currentLocation = String(player?.location || '').trim();
+    const currentRegionId = getRegionIdByLocation(currentLocation);
+    if (state.pendingKing && !remainingKings.includes(state.pendingKing)) {
+      if (remainingKings.length > 0) {
+        // 追擊狀態與任務擊破解耦：被擊退的目標可由其他仍存活目標接手追擊。
+        state.pendingKing = remainingKings[Math.floor(Math.random() * remainingKings.length)];
+        if (!state.kingPursuitRegionId) state.kingPursuitRegionId = KING_CHASE_REGION_ID;
+      } else {
+        state.pendingKing = null;
+        state.kingPursuitRegionId = '';
+      }
+    }
+    if (state.pendingKing) {
+      const pursuitRegionId = String(state.kingPursuitRegionId || KING_CHASE_REGION_ID).trim() || KING_CHASE_REGION_ID;
+      state.kingPursuitRegionId = pursuitRegionId;
+      if (!currentRegionId || currentRegionId !== pursuitRegionId) {
+        const escapedKing = String(state.pendingKing || '未知目標').trim();
+        const pursuitAnchor = REGION_KEY_MISSIONS[pursuitRegionId]?.npcLocation || '對方活動區';
+        state.pendingKing = null;
+        state.kingPursuitRegionId = '';
+        triggered.appendText = `📡 你已離開「${pursuitAnchor}」區域，暫時甩開四巨頭「${escapedKing}」的追擊。`;
+        triggered.memory = `你跨區移動甩開了四巨頭 ${escapedKing} 的追擊。`;
+        return triggered;
+      }
+    } else {
+      if (currentRegionId !== KING_CHASE_REGION_ID) {
+        return null;
+      }
+      const seededKing = remainingKings[Math.floor(Math.random() * remainingKings.length)];
+      state.pendingKing = seededKing;
+      state.kingPursuitRegionId = KING_CHASE_REGION_ID;
     }
     const sinceLastEncounter = count - Number(state.lastKingEncounterEventCount || -999);
     if (sinceLastEncounter < KING_ENCOUNTER_GAP_EVENTS) {
@@ -1018,15 +1061,18 @@ function maybeTriggerPassiveStory(player, context = {}) {
       ? state.pendingKing
       : remainingKings[Math.floor(Math.random() * remainingKings.length)];
     state.pendingKing = preferredKing;
+    state.kingPursuitRegionId = String(state.kingPursuitRegionId || KING_CHASE_REGION_ID).trim() || KING_CHASE_REGION_ID;
     state.lastKingEncounterEventCount = count;
     const kingData = buildKingEncounter(preferredKing);
     triggered.overrideResult = kingData.encounter;
-    triggered.appendText = buildMainlineBeatText(player, state, 'act5_king_hunt', {
+    const pursuitAnchor = REGION_KEY_MISSIONS[state.kingPursuitRegionId]?.npcLocation || currentLocation || '本區';
+    const huntLine = buildMainlineBeatText(player, state, 'act5_king_hunt', {
       king: kingData.king,
       cleared: (state.defeatedKings || []).length
     });
+    triggered.appendText = `${huntLine}\n📍 追擊範圍：${pursuitAnchor}（僅限本區）`.trim();
     triggered.announcement = `👑 ${player.name}遭遇四巨頭「${kingData.king}」的追擊。`;
-    triggered.memory = `你與四巨頭 ${kingData.king} 交手。`;
+    triggered.memory = `你在${pursuitAnchor}附近與四巨頭 ${kingData.king} 交手。`;
     return triggered;
   }
 
@@ -1075,10 +1121,16 @@ function recordCombatOutcome(player, context = {}) {
   if (state.defeatedKings.includes(defeatedKing)) return null;
 
   state.defeatedKings.push(defeatedKing);
-  state.pendingKing = state.pendingKing === defeatedKing ? null : state.pendingKing;
   updateIslandRoutesMissionFromKings(state);
   const cleared = state.defeatedKings.length;
   const remainingKings = getRemainingKings(state);
+  if (remainingKings.length === 0) {
+    state.pendingKing = null;
+    state.kingPursuitRegionId = '';
+  } else if (!state.pendingKing || !remainingKings.includes(state.pendingKing)) {
+    state.pendingKing = remainingKings[Math.floor(Math.random() * remainingKings.length)];
+    if (!state.kingPursuitRegionId) state.kingPursuitRegionId = KING_CHASE_REGION_ID;
+  }
 
   const progressLines = [
     `👑 **四巨頭進度更新**：你擊破了「${defeatedKing}」，戰線推進到 ${cleared}/${DIGITAL_KINGS.length}。`,
