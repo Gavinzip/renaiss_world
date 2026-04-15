@@ -2790,6 +2790,15 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const pendingConflictRule = pendingConflictActive
     ? `你在上一輪採取了激進行動，衝突必須延續：本回合 5 個選項中，至少 1 個要直接對上「${pendingConflictName || '剛才出現的人'}」並可立刻進入戰鬥；不可改寫成匿名敵人或系統詞。`
     : '';
+  const dynamicPlan = DYNAMIC_WORLD.chooseDynamicEventPlan(player, location, {
+    storyTurn: Math.max(0, Number(player?.storyTurns || 0)),
+    storyText: fullStoryText
+  });
+  const dynamicArchetypeHint = String(dynamicPlan?.archetype || '').trim();
+  const dynamicActionHint = dynamicArchetypeHint ? mapDynamicArchetypeToAction(dynamicArchetypeHint) : '';
+  const dynamicInjectRule = dynamicPlan?.inject
+    ? `20. 本回合必須在 5 個選項中內建 1 個「動態事件選項」，並在該筆 JSON 填上 dynamicEvent={"archetype":"${dynamicArchetypeHint || 'smuggling'}","phase":"offered","intensity":${Math.max(1, Math.min(5, Number(dynamicPlan?.intensity || 2) || 2))},"chainHint":"一句短提示"}；該選項必須與當前場景因果相連，不可模板句。建議 action=${dynamicActionHint || 'explore'}。`
+    : '20. 非必要時可不輸出 dynamicEvent；若輸出，最多 1 筆，且必須與當前場景因果相連。';
   const recentChoiceText = Array.isArray(player?.recentChoiceHistory)
     ? player.recentChoiceHistory
       .slice(-5)
@@ -2811,12 +2820,12 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const needsStorageHeistRule = Boolean(storageCarrierByOthers);
   const storageHeistPromptRule = needsStorageHeistRule
     ? [
-      '20. 僅當故事已明確寫出「他人正攜帶封存艙/貨樣」時：至少 1 個選項要提供高風險搶艙路線（可進入戰鬥）；行動語彙需隨場景變體（攔截/設局/調包/夜襲/脅迫擇一），避免固定三段同句',
-      '21. 封存艙一律視為便攜小型艙體（約小背包大小），不得描寫成人體尺寸或大型艙體',
-      '21a. 至少 1 個選項要明確帶出可獲得實體物件或可交易物（例如奪取、開艙、驗貨、帶走）'
+      '21. 僅當故事已明確寫出「他人正攜帶封存艙/貨樣」時：至少 1 個選項要提供高風險搶艙路線（可進入戰鬥）；行動語彙需隨場景變體（攔截/設局/調包/夜襲/脅迫擇一），避免固定三段同句',
+      '22. 封存艙一律視為便攜小型艙體（約小背包大小），不得描寫成人體尺寸或大型艙體',
+      '22a. 至少 1 個選項要明確帶出可獲得實體物件或可交易物（例如奪取、開艙、驗貨、帶走）'
     ].join('\n')
     : '';
-  const pendingConflictRuleNumber = needsStorageHeistRule ? 22 : 20;
+  const pendingConflictRuleNumber = needsStorageHeistRule ? 23 : 21;
   const bridgeTail = [storyFocus.closing, storyFocus.tail]
     .map((text) => String(text || '').trim())
     .filter(Boolean)
@@ -2887,7 +2896,7 @@ ${anchorText}
 1. 每個選項要有創意！拒絕無聊！
 2. 5 個選項都要符合故事劇情發展，且與本段故事有因果關聯，不可出現平行無關支線
 3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
-   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]","move_to":"目的城市或空字串","styleTag":"穩健|交涉|灰線|強奪|追獵|佈局","hiddenMeta":{"law":-2..2,"harm":-2..2,"trust":-2..2,"selfInterest":-2..2,"targetFaction":"beacon|gray|digital|civic|none","witnessRisk":0..1}}
+   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]","move_to":"目的城市或空字串","action":"explore|social|fight|trade","styleTag":"穩健|交涉|灰線|強奪|追獵|佈局","hiddenMeta":{"law":-2..2,"harm":-2..2,"trust":-2..2,"selfInterest":-2..2,"targetFaction":"beacon|gray|digital|civic|none","witnessRisk":0..1},"dynamicEvent":{"archetype":"","phase":"offered","intensity":1..5,"chainHint":"一句短提示"}}
 3a. 不得少於 5 筆、不得輸出 null/空物件；就算資訊不足也要輸出完整 5 筆且保持合理
 3b. move_to 規則：只有「真的會移動到另一座城市」才填城市名（例如「洛陽城」）；非移動選項必須填空字串 ""
 3c. move_to 只能填地圖中的城市名，且要與該選項文案一致
@@ -2922,6 +2931,7 @@ ${kingSpreadRule ? `16c. ${kingSpreadRule}` : ''}
 17. ${cadenceRequirement}
 18. ${wantedRequirement}
 19. 若通緝熱度偏高，5 個選項中最多只允許 1 個「敵對主動逼近/立即戰鬥」類，其餘需維持調查、移動、社交或交易分散度
+${dynamicInjectRule}
 ${storageHeistPromptRule ? `${storageHeistPromptRule}` : ''}
 ${pendingConflictRule ? `${pendingConflictRuleNumber}. ${pendingConflictRule}` : ''}
 
@@ -3014,15 +3024,41 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
 
     let safeChoices = (Array.isArray(validatedChoices) ? validatedChoices : [])
       .map((choice) => normalizeChoiceSemanticMeta(canonicalizeKingCodenamesChoice(choice), player, location));
-    safeChoices = await injectDynamicWorldEventChoice(safeChoices, {
-      player,
-      playerLang,
-      location,
-      storyText: fullStoryText,
-      storyTail: storyFocus.tail,
-      stageGoal,
-      storyTurn: Math.max(0, Number(player?.storyTurns || 0))
-    });
+    if (dynamicPlan?.inject) {
+      let eventIdx = safeChoices.findIndex((choice) => String(choice?.dynamicEvent?.archetype || '').trim());
+      if (eventIdx < 0 && safeChoices.length > 0) {
+        const protectedActions = new Set(['wish_pool', 'market_renaiss', 'market_digital', 'mentor_spar', 'location_story_battle']);
+        eventIdx = safeChoices.findIndex((choice) => !protectedActions.has(String(choice?.action || '').trim()));
+        if (eventIdx < 0) eventIdx = safeChoices.length - 1;
+        const chosen = { ...(safeChoices[eventIdx] || {}) };
+        chosen.dynamicEvent = {
+          archetype: dynamicArchetypeHint || 'smuggling',
+          phase: 'offered',
+          intensity: Math.max(1, Math.min(5, Number(dynamicPlan?.intensity || 2) || 2)),
+          chainHint: ''
+        };
+        const currentMeta = chosen.hiddenMeta && typeof chosen.hiddenMeta === 'object' ? { ...chosen.hiddenMeta } : {};
+        currentMeta.eventArchetype = chosen.dynamicEvent.archetype;
+        currentMeta.intensity = chosen.dynamicEvent.intensity;
+        chosen.hiddenMeta = DYNAMIC_WORLD.normalizeChoiceHiddenMeta(currentMeta, chosen, {
+          locationWanted: Number(dynamicWorldContext?.wanted || 0)
+        });
+        safeChoices[eventIdx] = normalizeChoiceSemanticMeta(chosen, player, location);
+      }
+      if (eventIdx >= 0) {
+        const eventChoice = safeChoices[eventIdx];
+        const eventArchetype = String(eventChoice?.dynamicEvent?.archetype || dynamicArchetypeHint || '').trim();
+        if (eventArchetype) {
+          DYNAMIC_WORLD.recordDynamicEventOffered(player, {
+            location,
+            archetype: eventArchetype,
+            intensity: Math.max(1, Math.min(5, Number(eventChoice?.dynamicEvent?.intensity || dynamicPlan?.intensity || 2) || 2)),
+            phase: 'offered',
+            storyTurn: Math.max(0, Number(player?.storyTurns || 0))
+          });
+        }
+      }
+    }
     recordAIPerf('choices', Date.now() - startedAt);
     console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms`);
     return safeChoices;
