@@ -110,6 +110,7 @@ function createBattleLayoutUtils(deps = {}) {
         : [new ButtonBuilder().setCustomId('no_attack_moves').setLabel('無可用攻擊招式').setStyle(ButtonStyle.Secondary).setDisabled(true)]
     );
     const fleeTry = battleState.fleeAttempts || 0;
+    const fleeMaxAttempts = Math.max(1, Number(BATTLE?.FLEE_CONFIG?.maxAttempts || 2));
     const swapBlocked = hasPetSwapBlockingStatus(combatant?.status || {});
     const canSwap = !disableAll && !combatant?.isHuman && !swapBlocked && getBattleSwitchCandidates(player, combatant?.id).length > 0;
     const layoutMode = getBattleLayoutMode(player);
@@ -119,9 +120,9 @@ function createBattleLayoutUtils(deps = {}) {
       new ButtonBuilder().setCustomId('battle_switch_pet').setLabel('🔁 換寵物').setStyle(ButtonStyle.Secondary).setDisabled(!canSwap),
       new ButtonBuilder()
         .setCustomId(`flee_${fleeTry}`)
-        .setLabel(`🏃 逃跑 70%（失敗 ${fleeTry}/2）`)
+        .setLabel(`🏃 逃跑 70%（失敗 ${fleeTry}/${fleeMaxAttempts}）`)
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(disableAll),
+        .setDisabled(disableAll || fleeTry >= fleeMaxAttempts),
       new ButtonBuilder()
         .setCustomId('battle_toggle_layout')
         .setLabel(toggleLabel)

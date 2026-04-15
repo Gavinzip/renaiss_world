@@ -59,8 +59,12 @@ function createEventFlowUtils(deps = {}) {
   function shouldTriggerBattle(event, result) {
     if (!event) return false;
     if (result?.type === 'combat') return true;
-    if (String(event?.action || '') === 'mentor_spar') return false;
-    return isImmediateBattleChoice(event);
+    const action = String(event?.action || '').trim();
+    if (action === 'mentor_spar') return false;
+    if (action === 'fight' || action === 'location_story_battle') return true;
+    // 僅在明確標記強制即時戰鬥時，才允許非標準 action 觸發開戰。
+    if (Boolean(event?.forceImmediateBattle)) return true;
+    return false;
   }
 
   function applyPassivePetRecovery(pet, amount = PET_PASSIVE_HEAL_PER_STORY_TURN) {

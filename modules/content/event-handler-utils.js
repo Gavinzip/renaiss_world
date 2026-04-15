@@ -345,6 +345,13 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     return;
   }
 
+  try {
+    const action = String(event?.action || '').trim() || 'unknown';
+    const preview = String(event?.choice || event?.name || '').replace(/\s+/g, ' ').slice(0, 80);
+    const battleFlag = shouldTriggerBattle(event, null) ? 'yes' : 'no';
+    console.info(`[Event][choice] user=${String(user?.id || '')} idx=${Number(eventIndex)} action=${action} battle=${battleFlag} preview=${preview}`);
+  } catch (_) {}
+
   // Modal 類事件先快速回應，避免先做重操作導致 3 秒超時
   if (event.action === 'wish_pool' && !wishTextFromModal) {
     const modal = new ModalBuilder()

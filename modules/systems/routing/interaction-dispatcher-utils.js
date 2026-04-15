@@ -838,7 +838,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
 
     if (
       player.activeMessageId &&
-      !player.activeMessageId.startsWith('instant_') &&
       interaction.message?.id !== player.activeMessageId
     ) {
       await interaction.reply({ content: '⚠️ 這個選項已過期，請點擊最新訊息中的選項。', ephemeral: true });

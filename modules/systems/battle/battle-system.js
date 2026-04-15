@@ -1,6 +1,6 @@
 /**
  * ⚔️ Renaiss World - 戰鬥系統 v3
- * 逃跑30%失敗 x2 = 死亡
+ * 逃跑70%成功；連續失敗會被迫續戰
  */
 
 const fs = require('fs');
@@ -12,7 +12,7 @@ const PET = require('../pet/pet-system');
 const FLEE_CONFIG = {
   successRate: 0.7,  // 70% 成功率
   maxAttempts: 2,     // 最多嘗試2次
-  deathOnFail: true   // 第2次失敗 = 死亡
+  deathOnFail: false  // 第2次失敗 = 不能再逃，需繼續作戰
 };
 
 // 嘗試逃跑
@@ -46,12 +46,13 @@ function attemptFlee(player, pet, enemy, attemptNumber = 1, combatant = null) {
   
   // 失敗了
   if (safeAttempt >= FLEE_CONFIG.maxAttempts) {
-    // 第2次也失敗 = 死亡
+    // 第2次也失敗：本戰鬥不再允許逃跑，但不會直接死亡
     return {
       success: false,
-      death: true,
+      death: false,
+      canRetry: false,
       consumeAttempt: true,
-      message: `💀 逃跑失敗！你已被敵人追上，無法逃脫！`
+      message: `🚫 連續逃跑失敗！敵人已封鎖退路，你必須繼續作戰。`
     };
   }
   

@@ -1466,6 +1466,29 @@ async function handleFlee(interaction, user, attemptNum) {
     return;
   }
 
+  if (!result.canRetry) {
+    player.battleState.fleeAttempts = Math.max(
+      Number(player.battleState.fleeAttempts || 0),
+      currentAttempt
+    );
+    rememberPlayer(player, {
+      type: '戰鬥',
+      content: `嘗試從 ${enemy.name} 逃跑失敗`,
+      outcome: `第 ${currentAttempt} 次失敗，已被迫續戰`,
+      importance: 1,
+      tags: ['battle', 'flee_fail', 'forced_continue']
+    });
+    publishBattleWorldEvent(
+      player,
+      enemy.name,
+      'battle_flee_fail',
+      `第${currentAttempt}次逃跑失敗（被迫續戰）`
+    );
+    CORE.savePlayer(player);
+    await renderManualBattle(interaction, player, pet, result.message);
+    return;
+  }
+
   if (result.death) {
     if (combatant?.isHuman) {
       player.battleState = null;
