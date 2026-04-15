@@ -169,12 +169,17 @@ function createMapNavigationUtils(deps = {}) {
       : null;
     const islandCompleted = Boolean(islandState?.completed);
     const regionUnlocked = canFreeRoamCurrentRegion(player);
-    const crossRegionUnlocked = Boolean(islandCompleted || regionUnlocked);
     const portalProgress = resolvePortalProgressState(player, cleaned);
     const nextPortalHub = String(portalProgress?.nextHub || '').trim();
     const unlockedHubs = portalProgress?.unlockedHubs instanceof Set
       ? portalProgress.unlockedHubs
       : new Set();
+    const hasAnyHistoricalPortalProgress = Boolean(
+      unlockedHubs.size > 0
+      || nextPortalHub
+      || cleaned.some((loc) => isDestinationCompleted(player, loc))
+    );
+    const crossRegionUnlocked = Boolean(islandCompleted || regionUnlocked || hasAnyHistoricalPortalProgress);
     const destinationEntries = cleaned.map((loc) => {
       const completed = isDestinationCompleted(player, loc);
       const isNext = Boolean(nextPortalHub) && loc === nextPortalHub;
