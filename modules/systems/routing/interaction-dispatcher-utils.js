@@ -1025,9 +1025,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
       return;
     }
     player.activePetId = pet.id;
-    // 相容舊欄位：部分流程仍讀 mainPetId/petId，主寵切換時同步更新避免顯示錯位。
+    // 保留 mainPetId 與 activePetId 同步，避免舊畫面引用到過期主寵。
     player.mainPetId = pet.id;
-    player.petId = pet.id;
     CORE.savePlayer(player);
     await showMovesList(interaction, user, pet.id, `已設定主上場寵物：${pet.name}`);
     return;
@@ -1724,6 +1723,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId.startsWith('alloc_hp_modal_')) {
+    await handleAllocateHpModalSubmit(interaction, user, customId);
+    return;
+  }
+
   if (customId.startsWith('alloc_hp_')) {
     const raw = String(customId || '').replace('alloc_hp_', '').trim();
     let petId = raw;
@@ -1758,10 +1762,6 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  if (customId.startsWith('alloc_hp_modal_')) {
-    await handleAllocateHpModalSubmit(interaction, user, customId);
-    return;
-  }
   } catch (err) {
     perfFailed = true;
     perfErrorText = String(err?.message || err || '').trim();

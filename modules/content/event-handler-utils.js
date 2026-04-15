@@ -181,6 +181,57 @@ function extractStoryTurnMarker(storyText = '') {
   return m ? String(m[1] || '').trim() : '';
 }
 
+function applyPassiveRecoveryToOwnedPets({
+  PET,
+  player,
+  currentPet = null,
+  healAmount = 0,
+  applyPassivePetRecovery
+} = {}) {
+  const ownerId = String(player?.id || '').trim();
+  const amount = Math.max(0, Math.floor(Number(healAmount || 0)));
+  if (!ownerId || amount <= 0 || typeof applyPassivePetRecovery !== 'function') {
+    return { total: 0, focusHeal: 0, entries: [] };
+  }
+
+  const candidatePets = [];
+  if (PET && typeof PET.getAllPetsByOwner === 'function') {
+    candidatePets.push(...(PET.getAllPetsByOwner(ownerId) || []));
+  }
+  if (currentPet && typeof currentPet === 'object') {
+    candidatePets.push(currentPet);
+  }
+
+  const seen = new Set();
+  const entries = [];
+  const currentPetId = String(currentPet?.id || '').trim();
+  let total = 0;
+
+  for (const pet of candidatePets) {
+    if (!pet || typeof pet !== 'object') continue;
+    const petId = String(pet?.id || '').trim();
+    const dedupeKey = petId || String(pet?.name || '').trim();
+    if (!dedupeKey || seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    const healed = Math.max(0, Number(applyPassivePetRecovery(pet, amount) || 0));
+    if (healed <= 0) continue;
+    total += healed;
+    entries.push({
+      petId,
+      name: String(pet?.name || '寵物').trim() || '寵物',
+      heal: healed,
+      isCurrent: Boolean(currentPetId && petId && currentPetId === petId)
+    });
+    if (PET && typeof PET.savePet === 'function') {
+      PET.savePet(pet);
+    }
+  }
+
+  const focusHeal = Number(entries.find((row) => row.isCurrent)?.heal || 0);
+  return { total, focusHeal, entries };
+}
+
 function isLootPityEligibleTurn(event = {}, selectedChoice = '', result = {}) {
   const action = String(event?.action || '').trim();
   if (['forage', 'hunt', 'treasure', 'fight', 'location_story_battle'].includes(action)) return true;
@@ -1194,17 +1245,27 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   await disableMessageComponents(interaction.channel, interaction.message?.id).catch(() => {});
   const enteringBattle = enteringBattleNow;
   if (!enteringBattle) {
-    const passiveHeal = applyPassivePetRecovery(pet, PET_PASSIVE_HEAL_PER_STORY_TURN);
-    if (passiveHeal > 0) {
-      result.passivePetHeal = passiveHeal;
+    const passiveRecovery = applyPassiveRecoveryToOwnedPets({
+      PET,
+      player,
+      currentPet: pet,
+      healAmount: PET_PASSIVE_HEAL_PER_STORY_TURN,
+      applyPassivePetRecovery
+    });
+    if (passiveRecovery.total > 0) {
+      result.passivePetHeal = Math.max(0, Number(passiveRecovery.focusHeal || 0));
+      result.passivePetHealTotal = Math.max(0, Number(passiveRecovery.total || 0));
+      result.passivePetHealByPet = Array.isArray(passiveRecovery.entries) ? passiveRecovery.entries : [];
+      const recoverSummary = result.passivePetHealByPet
+        .map((row) => `${row.name} +${Number(row.heal || 0)}`)
+        .join('、');
       queueMemory({
         type: '恢復',
-        content: `${pet.name} 在行進中恢復`,
-        outcome: `HP +${passiveHeal}`,
+        content: '隊伍在行進中恢復',
+        outcome: `合計 +${result.passivePetHealTotal} HP${recoverSummary ? `（${recoverSummary}）` : ''}`,
         importance: 1,
         tags: ['pet_heal', 'passive_regen']
       });
-      PET.savePet(pet);
     }
   }
   
@@ -1509,7 +1570,28 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       if (result.soldCount > 0) rewardText.push(`🏪 已售出 ${result.soldCount} 件`);
       if (result.item && result.success) rewardText.push(`📦 取得 ${result.item}`);
       if (result.petRevived) rewardText.push(`🐾 ${pet.name} 復活完成（2回合制）`);
-      if (Number(result?.passivePetHeal || 0) > 0) rewardText.push(`🩹 ${pet.name} 行進恢復 +${Number(result.passivePetHeal)} HP`);
+      const passiveHealEntries = Array.isArray(result?.passivePetHealByPet)
+        ? result.passivePetHealByPet
+          .map((row) => ({
+            name: String(row?.name || '寵物').trim() || '寵物',
+            heal: Math.max(0, Number(row?.heal || 0))
+          }))
+          .filter((row) => row.heal > 0)
+        : [];
+      if (passiveHealEntries.length > 0) {
+        if (passiveHealEntries.length === 1) {
+          const only = passiveHealEntries[0];
+          rewardText.push(`🩹 ${only.name} 行進恢復 +${only.heal} HP`);
+        } else {
+          const totalHeal = passiveHealEntries.reduce((sum, row) => sum + row.heal, 0);
+          const preview = passiveHealEntries
+            .slice(0, 4)
+            .map((row) => `${row.name} +${row.heal}`)
+            .join('、');
+          const remainCount = Math.max(0, passiveHealEntries.length - 4);
+          rewardText.push(`🩹 全隊行進恢復 合計 +${totalHeal} HP（${preview}${remainCount > 0 ? ` 等${passiveHealEntries.length}隻` : ''}）`);
+        }
+      }
       if (Number.isFinite(Number(result.digitalRiskScore))) {
         const score = Number(result.digitalRiskScore);
         const delta = Number(result.digitalRiskDelta || 0);

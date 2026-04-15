@@ -135,6 +135,10 @@ function createBattleCoreUtils(deps = {}) {
     let changed = false;
     const selectedId = String(selected?.id || '').trim();
     const lockMainPetByFriendDuel = Boolean(preferBattle && player?.battleState?.friendDuel);
+    if (player && typeof player === 'object' && Object.prototype.hasOwnProperty.call(player, 'petId')) {
+      delete player.petId;
+      changed = true;
+    }
     if (selectedId && player && typeof player === 'object') {
       if (!lockMainPetByFriendDuel) {
         if (String(player.activePetId || '').trim() !== selectedId) {
@@ -143,11 +147,6 @@ function createBattleCoreUtils(deps = {}) {
         }
         if (String(player.mainPetId || '').trim() !== selectedId) {
           player.mainPetId = selectedId;
-          changed = true;
-        }
-        // 相容舊資料欄位（部分舊流程仍讀 petId）。
-        if (String(player.petId || '').trim() !== selectedId) {
-          player.petId = selectedId;
           changed = true;
         }
       }
@@ -265,6 +264,15 @@ function createBattleCoreUtils(deps = {}) {
     return (pet?.moves || []).filter((m) => !isFleeLikeMove(m));
   }
 
+  function getSharedLearnableMoves() {
+    const initial = Array.isArray(PET?.INITIAL_MOVES) ? PET.INITIAL_MOVES : [];
+    return initial.filter((move) => {
+      const id = String(move?.id || '').trim();
+      if (!id) return false;
+      return id === 'head_butt';
+    });
+  }
+
   function getAllPetSkillMoves() {
     const merged = [];
     const seen = new Set();
@@ -279,18 +287,45 @@ function createBattleCoreUtils(deps = {}) {
         merged.push(move);
       }
     }
-    if (merged.length > 0) return merged;
+    if (merged.length > 0) {
+      for (const move of getSharedLearnableMoves()) {
+        const id = String(move?.id || '').trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        merged.push(move);
+      }
+      return merged;
+    }
 
-    return [
+    const fallback = [
       ...(Array.isArray(PET?.POSITIVE_MOVES) ? PET.POSITIVE_MOVES : []),
       ...(Array.isArray(PET?.NEGATIVE_MOVES) ? PET.NEGATIVE_MOVES : [])
     ];
+    const out = [];
+    const outSeen = new Set();
+    for (const move of [...fallback, ...getSharedLearnableMoves()]) {
+      const id = String(move?.id || '').trim();
+      if (!id || outSeen.has(id)) continue;
+      outSeen.add(id);
+      out.push(move);
+    }
+    return out;
   }
 
   function getPetMovePool(petType = '') {
     if (PET && typeof PET.getMovesByElement === 'function') {
       const pool = PET.getMovesByElement(petType);
-      if (Array.isArray(pool) && pool.length > 0) return pool;
+      if (Array.isArray(pool) && pool.length > 0) {
+        const merged = [...pool];
+        const seen = new Set(merged.map((m) => String(m?.id || '').trim()).filter(Boolean));
+        for (const move of getSharedLearnableMoves()) {
+          const id = String(move?.id || '').trim();
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          merged.push(move);
+        }
+        return merged;
+      }
     }
     const normalized = CORE?.normalizePetElementCode ? CORE.normalizePetElementCode(petType) : String(petType || '');
     if (normalized === '火') return getAllPetSkillMoves().filter((m) => /火|焰|雷|熱|爆|熾|灼|炎/.test(String(m?.name || '')));

@@ -1054,8 +1054,14 @@ function learnMove(pet, moveId) {
     return { success: false, reason: '招式已達上限！需要忘記一個招式才能學習新招' };
   }
 
-  const allMoves = getMovesByElement(pet?.type || pet?.element);
-  const move = allMoves.find(m => m.id === moveId);
+  const allowIds = new Set([
+    ...getMovesByElement(pet?.type || pet?.element).map((m) => String(m?.id || '').trim()),
+    'head_butt'
+  ]);
+  if (!allowIds.has(String(moveId || '').trim())) {
+    return { success: false, reason: '找不到這個招式' };
+  }
+  const move = ALL_MOVES.find((m) => String(m?.id || '').trim() === String(moveId || '').trim());
   
   if (!move) return { success: false, reason: '找不到這個招式' };
   if (pet.moves.find(m => m.id === moveId)) return { success: false, reason: '已經學過了' };

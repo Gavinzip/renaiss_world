@@ -21,6 +21,15 @@ function createPetChipUtils(deps = {}) {
     aliases.add('技能晶片:');
     aliases.add('技能晶片-');
     aliases.add('技能晶片－');
+    aliases.add('技能芯片：');
+    aliases.add('技能芯片:');
+    aliases.add('技能芯片-');
+    aliases.add('技能芯片－');
+    aliases.add('Skill Chip:');
+    aliases.add('Skill Chip: ');
+    aliases.add('Skill Chip -');
+    aliases.add('Skill Chip－');
+    aliases.add('SkillChip:');
     return Array.from(aliases);
   }
 
@@ -81,6 +90,8 @@ function createPetChipUtils(deps = {}) {
       if (!text.startsWith(prefix)) continue;
       return text.slice(prefix.length).trim();
     }
+    const regexMatch = text.match(/^(?:技能晶片|技能芯片|skill\s*chip)\s*[:：\-－]?\s*(.+)$/iu);
+    if (regexMatch?.[1]) return String(regexMatch[1] || '').trim();
     return '';
   }
 
@@ -193,6 +204,13 @@ function createPetChipUtils(deps = {}) {
     });
   }
 
+  function getConfigurableAttackMoves(pet) {
+    return getPetAttackMoves(pet).filter((m) => {
+      const moveId = String(m?.id || '').trim();
+      return moveId && !PROTECTED_MOVE_IDS.has(moveId);
+    });
+  }
+
   function learnMoveFromChipForPet(pet, moveTemplate) {
     if (!pet) return { success: false, reason: '找不到寵物資料。' };
     if (!moveTemplate || typeof moveTemplate !== 'object') {
@@ -202,7 +220,12 @@ function createPetChipUtils(deps = {}) {
     if (!moveId) return { success: false, reason: '技能缺少 ID。' };
     if (!Array.isArray(pet.moves)) pet.moves = [];
     if (pet.moves.some((m) => String(m?.id || '').trim() === moveId)) {
-      return { success: false, reason: '這招已經學過了，請直接到上陣欄勾選。' };
+      return { success: false, reason: '這招已經學過了。' };
+    }
+
+    const currentAttackMoves = getConfigurableAttackMoves(pet);
+    if (currentAttackMoves.length >= PET_MOVE_LOADOUT_LIMIT) {
+      return { success: false, reason: `上陣招式已滿 ${PET_MOVE_LOADOUT_LIMIT} 招，請先取消學習舊招。` };
     }
 
     const learned = typeof PET.learnMove === 'function' ? PET.learnMove(pet, moveId) : null;
@@ -210,7 +233,7 @@ function createPetChipUtils(deps = {}) {
       return { success: false, reason: learned?.reason || '學習失敗' };
     }
 
-    const attackMoves = getPetAttackMoves(pet);
+    const attackMoves = getConfigurableAttackMoves(pet);
     const attackIds = new Set(attackMoves.map((m) => String(m?.id || '').trim()).filter(Boolean));
     if (!attackIds.has(moveId)) {
       return {
@@ -222,33 +245,16 @@ function createPetChipUtils(deps = {}) {
       };
     }
 
-    const selected = [];
-    for (const rawId of Array.isArray(pet.activeMoveIds) ? pet.activeMoveIds : []) {
-      const id = String(rawId || '').trim();
-      if (!id || selected.includes(id) || !attackIds.has(id)) continue;
-      selected.push(id);
-      if (selected.length >= PET_MOVE_LOADOUT_LIMIT) break;
-    }
-
-    let replacedMoveName = '';
-    if (!selected.includes(moveId)) {
-      if (selected.length < PET_MOVE_LOADOUT_LIMIT) {
-        selected.push(moveId);
-      } else {
-        const replacedId = String(selected[0] || '').trim();
-        selected[0] = moveId;
-        const replacedMove = attackMoves.find((m) => String(m?.id || '').trim() === replacedId);
-        replacedMoveName = String(replacedMove?.name || '').trim();
-      }
-    }
-
-    pet.activeMoveIds = selected.slice(0, PET_MOVE_LOADOUT_LIMIT);
+    pet.activeMoveIds = attackMoves
+      .map((m) => String(m?.id || '').trim())
+      .filter(Boolean)
+      .slice(0, PET_MOVE_LOADOUT_LIMIT);
     return {
       success: true,
       move: learned.move || moveTemplate,
       equipped: true,
       newlyLearned: true,
-      replacedMoveName
+      replacedMoveName: ''
     };
   }
 

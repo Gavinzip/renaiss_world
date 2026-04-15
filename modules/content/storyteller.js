@@ -98,8 +98,8 @@ const AI_TIMEOUT_MS = 90000;
 const AI_MAX_RESPONSE_TOKENS = Math.max(512, Number(process.env.AI_MAX_RESPONSE_TOKENS || 4096));
 const AI_UNLIMITED_TIMEOUT = !/^(0|false|off|no)$/i.test(String(process.env.AI_UNLIMITED_TIMEOUT || '0').trim());
 const AI_UNLIMITED_MAX_TOKENS = !/^(0|false|off|no)$/i.test(String(process.env.AI_UNLIMITED_MAX_TOKENS || '1').trim());
-const STORY_TIMEOUT_MS = Math.max(12000, Number(process.env.STORY_TIMEOUT_MS || 22000));
-const STORY_GEN_RETRIES = Math.max(1, Math.min(2, Number(process.env.STORY_GEN_RETRIES || 1)));
+const STORY_TIMEOUT_MS = Math.max(12000, Number(process.env.STORY_TIMEOUT_MS || 40000));
+const STORY_GEN_RETRIES = Math.max(2, Math.min(3, Number(process.env.STORY_GEN_RETRIES || 2)));
 const CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.CHOICE_TIMEOUT_MS || 180000));
 const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 180000));
 const CHOICE_GEN_RETRIES = Math.max(1, Math.min(2, Number(process.env.CHOICE_GEN_RETRIES || 1)));
@@ -1962,8 +1962,26 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
   const model = String(options.model || MINIMAX_MODEL);
   const label = String(options.label || 'callAI');
   const strictFinalOnly = Boolean(options.strictFinalOnly);
+  const continueOnLength = Boolean(options.continueOnLength);
+  const maxContinuations = continueOnLength
+    ? Math.max(1, Math.min(2, Number(options.maxContinuations || 1)))
+    : 0;
   const hardRule = '\n\n【硬性輸出規則】只輸出最終答案，禁止輸出任何思考過程、XML標籤或系統說明。';
   let lastError = null;
+
+  const mergeContinuation = (baseText = '', continuationText = '') => {
+    const base = String(baseText || '');
+    const extra = String(continuationText || '');
+    if (!base) return extra;
+    if (!extra) return base;
+    const maxOverlap = Math.min(320, base.length, extra.length);
+    for (let len = maxOverlap; len >= 24; len--) {
+      if (base.slice(-len) === extra.slice(0, len)) {
+        return `${base}${extra.slice(len)}`;
+      }
+    }
+    return `${base}\n${extra}`;
+  };
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -1979,32 +1997,54 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
       const attemptMaxTokens = Number.isFinite(Number(maxTokens))
         ? (attempt > 1 ? Math.max(Number(maxTokens), Math.floor(Number(maxTokens) * 1.5)) : Number(maxTokens))
         : null;
-      const payload = {
-        model,
-        messages: [{ role: 'user', content: attemptPrompt }],
-        temperature: temperature
+      const invokeOnce = async (requestPrompt = '', requestTokens = null) => {
+        const payload = {
+          model,
+          messages: [{ role: 'user', content: requestPrompt }],
+          temperature: temperature
+        };
+        if (Number.isFinite(Number(requestTokens)) && Number(requestTokens) > 0) {
+          payload.max_tokens = Number(requestTokens);
+        }
+        const body = JSON.stringify(payload);
+        const { content, finishReason } = await requestAI(body, timeoutMs);
+        const cleaned = sanitizeAIContent(content);
+        if (!cleaned || cleaned.length < 30) {
+          throw new Error(`Empty cleaned content raw=${previewAIContent(content)}`);
+        }
+        return { cleaned, finishReason: String(finishReason || '').trim() };
       };
-      if (Number.isFinite(Number(attemptMaxTokens)) && Number(attemptMaxTokens) > 0) {
-        payload.max_tokens = Number(attemptMaxTokens);
-      }
-      const body = JSON.stringify(payload);
 
-      const { content, finishReason } = await requestAI(body, timeoutMs);
-      const cleaned = sanitizeAIContent(content);
-      const strictProbe = stripNarrativeDraftLeak(cleaned);
-
-      if (!cleaned || cleaned.length < 30) {
-        throw new Error(`Empty cleaned content raw=${previewAIContent(content)}`);
+      let { cleaned: mergedContent, finishReason } = await invokeOnce(attemptPrompt, attemptMaxTokens);
+      let continuationCount = 0;
+      while (continuationCount < maxContinuations && finishReason === 'length') {
+        const continuePrompt =
+          `${attemptPrompt}\n\n` +
+          `【你上一段已輸出的內容（前半）】\n${mergedContent}\n\n` +
+          '【續寫要求】上一段內容被截斷。請直接從中斷處續寫後半段，' +
+          '只輸出續寫內容，不要重複前半段，不要任何說明。';
+        const continuationTokens = Number.isFinite(Number(attemptMaxTokens))
+          ? Math.max(Number(attemptMaxTokens), Math.floor(Number(attemptMaxTokens) * 1.2))
+          : null;
+        const continuation = await invokeOnce(continuePrompt, continuationTokens);
+        mergedContent = mergeContinuation(mergedContent, continuation.cleaned);
+        finishReason = continuation.finishReason;
+        continuationCount += 1;
       }
+
+      const strictProbe = stripNarrativeDraftLeak(mergedContent);
       if (strictFinalOnly && (!strictProbe || strictProbe.length < 120)) {
         throw new Error('Detected draft/meta leakage in output');
       }
-      if (finishReason === 'length' && cleaned.length < 80) {
+      if (finishReason === 'length' && mergedContent.length < 120) {
         throw new Error('Truncated content');
       }
 
-      console.log(`[AI][${label}] model=${model} attempt ${attempt}/${retries} ok in ${Date.now() - startAt}ms`);
-      return cleaned;
+      console.log(
+        `[AI][${label}] model=${model} attempt ${attempt}/${retries} ok in ${Date.now() - startAt}ms` +
+        `${continuationCount > 0 ? ` (continued x${continuationCount})` : ''}`
+      );
+      return mergedContent;
     } catch (e) {
       lastError = e;
       console.log(`[AI][${label}] model=${model} attempt ${attempt}/${retries} failed: ${e.message}`);
@@ -2318,6 +2358,8 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
         timeoutMs: STORY_TIMEOUT_MS,
         retries: STORY_GEN_RETRIES,
         strictFinalOnly: true,
+        continueOnLength: true,
+        maxContinuations: 1,
         unlimitedTimeout: false,
         unlimitedMaxTokens: false
       });

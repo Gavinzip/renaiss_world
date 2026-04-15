@@ -144,6 +144,7 @@ function getPlayerPanelText(lang = 'zh-TW') {
 }
 
 const SKILL_CHIP_PREFIX = String(getPlayerPanelText('zh-TW').skillChipPrefix || '技能晶片：');
+const PROTECTED_MOVE_IDS = new Set(['flee']);
 const FUSION_BLOCKED_ITEMS = new Set(
   Array.isArray(getPlayerPanelText('zh-TW').fusionBlockedItems)
     ? getPlayerPanelText('zh-TW').fusionBlockedItems
@@ -164,6 +165,10 @@ function getFusionRarityLabel(rarity = '') {
 function isSkillChipItemName(name = '') {
   const text = String(name || '').trim();
   return text.startsWith(SKILL_CHIP_PREFIX) || Boolean(extractSkillChipMoveName(text));
+}
+
+function isProtectedMoveId(moveId = '') {
+  return PROTECTED_MOVE_IDS.has(String(moveId || '').trim());
 }
 
 function normalizeElementForDamageBalance(raw = '') {
@@ -289,7 +294,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
 
   let selectedPet = ownedPets.find((p) => p.id === selectedPetId) || null;
   if (!selectedPet) {
-    const preferredId = String(player?.activePetId || player?.mainPetId || player?.petId || '').trim();
+    const preferredId = String(player?.activePetId || player?.mainPetId || '').trim();
     if (preferredId) {
       selectedPet = ownedPets.find((p) => String(p?.id || '').trim() === preferredId) || null;
     }
@@ -300,23 +305,60 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   }
   if (!Array.isArray(selectedPet.moves)) selectedPet.moves = [];
 
+  let loadoutMutated = false;
   for (const pet of ownedPets) {
-    normalizePetMoveLoadout(pet, true);
+    const attackIds = getPetAttackMoves(pet)
+      .filter((m) => !isProtectedMoveId(m?.id))
+      .map((m) => String(m?.id || '').trim())
+      .filter(Boolean)
+      .slice(0, PET_MOVE_LOADOUT_LIMIT);
+    const beforeIds = Array.isArray(pet?.activeMoveIds)
+      ? pet.activeMoveIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : [];
+    if (JSON.stringify(beforeIds) !== JSON.stringify(attackIds)) {
+      pet.activeMoveIds = attackIds;
+      PET.savePet(pet);
+      loadoutMutated = true;
+    }
+    normalizePetMoveLoadout(pet, false);
   }
-  const selectedLoadout = normalizePetMoveLoadout(selectedPet, false);
-  const selectedSet = new Set(selectedLoadout.activeMoveIds);
   const activePetResolved = resolvePlayerMainPet(player, { fallbackPet: selectedPet });
   const activePetId = String(activePetResolved?.pet?.id || player?.activePetId || '').trim();
-  if (activePetResolved?.changed) CORE.savePlayer(player);
+  if (activePetResolved?.changed || loadoutMutated) CORE.savePlayer(player);
   const allChipEntries = getLearnableSkillChipEntries(player, selectedPet);
-  const learnableChips = allChipEntries.filter((entry) => Boolean(entry?.canLearn));
+  const learnableChips = allChipEntries
+    .filter((entry) => Boolean(entry?.canLearn))
+    .sort((a, b) => {
+      const tierDiff = Number(b?.move?.tier || 0) - Number(a?.move?.tier || 0);
+      if (tierDiff !== 0) return tierDiff;
+      const countDiff = Number(b?.count || 0) - Number(a?.count || 0);
+      if (countDiff !== 0) return countDiff;
+      return String(a?.move?.name || '').localeCompare(String(b?.move?.name || ''), 'zh-Hant');
+    });
   const allChipTotal = allChipEntries.reduce((sum, item) => sum + Number(item?.count || 0), 0);
   const learnableChipTotal = learnableChips.reduce((sum, item) => sum + Number(item?.count || 0), 0);
+  const blockedChipReasonSummary = allChipEntries
+    .filter((entry) => !entry?.canLearn)
+    .reduce((acc, entry) => {
+      const reason = String(entry?.reason || '不可學').trim() || '不可學';
+      const count = Number(entry?.count || 0);
+      acc[reason] = (acc[reason] || 0) + (count > 0 ? count : 1);
+      return acc;
+    }, {});
+  const blockedChipReasonText = Object.entries(blockedChipReasonSummary)
+    .sort((a, b) => Number(b?.[1] || 0) - Number(a?.[1] || 0))
+    .slice(0, 3)
+    .map(([reason, count]) => `${reason} x${count}`)
+    .join('｜');
   const forgettableMoves = getForgettablePetMoves(selectedPet);
 
   const currentPage = Math.max(0, Number(page || 0));
   const selectedAttack = Math.max(0, Number(selectedPet?.attack || 0));
   const selectedAtkBonus = Math.max(0, Math.floor(selectedAttack * 0.2));
+  const selectedConfiguredAttackCount = getPetAttackMoves(selectedPet)
+    .filter((m) => !isProtectedMoveId(m?.id))
+    .length;
+  const selectedSlotFull = selectedConfiguredAttackCount >= PET_MOVE_LOADOUT_LIMIT;
   const elementBalance = typeof BATTLE.getElementDamageBalance === 'function'
     ? BATTLE.getElementDamageBalance()
     : {};
@@ -325,8 +367,8 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
 
   const unlockedMoves = (selectedPet.moves || []).map((m, i) => {
     const isFlee = Boolean(m?.effect && m.effect.flee);
-    const isSelected = selectedSet.has(String(m.id || ''));
-    const statusMark = isFlee ? '🏃固定' : (isSelected ? '✅攜帶' : '▫️候補');
+    const isProtected = isProtectedMoveId(m?.id);
+    const statusMark = isFlee ? '🏃固定' : (isProtected ? '🛠️固有' : '✅攜帶');
     const dmg = buildMoveDamageBreakdown(m, selectedPet);
     const energyCost = isFlee ? '-' : BATTLE.getMoveEnergyCost(m);
     const moveSpeed = getMoveSpeedValue(m);
@@ -340,9 +382,11 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   });
 
   const petSummary = ownedPets.map((pet, i) => {
-    const loadout = normalizePetMoveLoadout(pet, false);
-    const activeNames = loadout.activeMoves.map((m) => m.name).join('、') || '（尚未設定）';
-    return `${i + 1}. **${pet.name}**（${pet.type}）\n攜帶：${loadout.activeMoves.length}/${PET_MOVE_LOADOUT_LIMIT}｜${activeNames}`;
+    const carriedMoves = getPetAttackMoves(pet)
+      .filter((m) => !isProtectedMoveId(m?.id))
+      .slice(0, PET_MOVE_LOADOUT_LIMIT);
+    const activeNames = carriedMoves.map((m) => m.name).join('、') || '（尚未學習攻擊招式）';
+    return `${i + 1}. **${pet.name}**（${pet.type}）\n攜帶：${carriedMoves.length}/${PET_MOVE_LOADOUT_LIMIT}｜${activeNames}`;
   }).join('\n\n');
 
   const chipOverview = allChipEntries.length > 0
@@ -352,11 +396,12 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
         const tierEmoji = move.tier === 3 ? '🔮' : move.tier === 2 ? '💠' : '⚪';
         const tierName = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
         const mark = entry.canLearn ? '✅可學' : (entry.reason === '已學會' ? '📘已學' : '🚫不可學');
+        const reasonText = entry.canLearn ? '' : `（${entry.reason || '不可學'}）`;
         const dmg = buildMoveDamageBreakdown(move, selectedPet);
         const energyCost = BATTLE.getMoveEnergyCost(move);
         const moveSpeed = getMoveSpeedValue(move);
         const effectStr = describeMoveEffects(move);
-        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | 直${format1(dmg.instant)} / 總${format1(dmg.total)} | ⚡${energyCost} | 🚀${format1(moveSpeed)} | ${effectStr || '無效果'}`;
+        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}${reasonText}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | 直${format1(dmg.instant)} / 總${format1(dmg.total)} | ⚡${energyCost} | 🚀${format1(moveSpeed)} | ${effectStr || '無效果'}`;
       })
     : ['（背包目前沒有技能晶片）'];
 
@@ -384,10 +429,13 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     `本寵 ATK ${format1(selectedAttack)} → 攻擊加成 +${format1(selectedAtkBonus)}${normalizedPetElement ? `｜屬性平衡 x${format1(elementScale)}` : ''}`,
     `持續傷害：列表顯示「第2跳」預估值（若效果不足2回合則不顯示）`,
     `學習入口：請用下拉選單「學習技能晶片」`,
+    `學習清單排序：史詩 > 稀有 > 普通`,
     `取消學習：會退回技能晶片到背包，可拿去賣`,
-    `可攜帶上陣招式：**${PET_MOVE_LOADOUT_LIMIT}**（逃跑技能固定，不占名額）`,
+    `上陣規則：已學會的攻擊招式會自動上陣；上限 **${PET_MOVE_LOADOUT_LIMIT}**（逃跑不占名額）`,
+    `目前上陣名額：${selectedConfiguredAttackCount}/${PET_MOVE_LOADOUT_LIMIT}${selectedSlotFull ? '（已滿；點選學習時會提示先取消一招）' : ''}`,
     `已解鎖招式：${selectedPet.moves.length}`,
     `背包晶片：${allChipTotal} 枚｜可學：${learnableChipTotal} 枚 / ${learnableChips.length} 種`,
+    (!learnableChipTotal && allChipTotal > 0 && blockedChipReasonText) ? `目前不可學原因：${blockedChipReasonText}` : '',
     `升級點數：${Number(player?.upgradePoints || 0)} 點（每點 +${Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 1)} HP，可批量）`,
     `主上場寵物：${activePetResolved?.pet?.name || selectedPet.name}`
   ].filter(Boolean).join('\n');
@@ -403,10 +451,13 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     );
 
   const petSelectOptions = ownedPets.slice(0, 25).map((pet) => {
-    const loadout = normalizePetMoveLoadout(pet, false);
+    const carriedCount = Math.min(
+      getPetAttackMoves(pet).filter((m) => !isProtectedMoveId(m?.id)).length,
+      PET_MOVE_LOADOUT_LIMIT
+    );
     return {
       label: `${pet.name}`.slice(0, 100),
-      description: `攜帶 ${loadout.activeMoves.length}/${PET_MOVE_LOADOUT_LIMIT} 招`,
+      description: `攜帶 ${carriedCount}/${PET_MOVE_LOADOUT_LIMIT} 招`,
       value: pet.id,
       default: pet.id === selectedPet.id
     };
@@ -427,7 +478,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       const moveSpeed = getMoveSpeedValue(move);
       const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
       return {
-        label: `${move.name}`.slice(0, 100),
+        label: `${move.tier === 3 ? '🔮史詩' : move.tier === 2 ? '💠稀有' : '⚪普通'}｜${move.name}`.slice(0, 100),
         description: `${move.element || '未知'}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
@@ -435,7 +486,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     rowLearnChip = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('moves_learn_chip')
-        .setPlaceholder(`學習技能晶片（${learnableChipTotal} 枚）`)
+        .setPlaceholder(`學習技能晶片（${learnableChipTotal} 枚，依稀有度）`)
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(learnOptions)
@@ -444,40 +495,31 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
 
   let rowUnlearnChip = null;
   if (forgettableMoves.length > 0) {
-    const unlearnOptions = forgettableMoves.slice(0, 25).map((move) => ({
-      label: `${move.name}`.slice(0, 100),
-      description: `取消後會退回技能晶片`.slice(0, 100),
-      value: `${selectedPet.id}::${move.id}`
-    }));
+    const sortedForgettableMoves = [...forgettableMoves].sort((a, b) => {
+      const tierDiff = Number(b?.tier || 0) - Number(a?.tier || 0);
+      if (tierDiff !== 0) return tierDiff;
+      return String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-Hant');
+    });
+    const unlearnOptions = sortedForgettableMoves.slice(0, 25).map((move) => {
+      const tierText = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
+      const dmg = buildMoveDamageBreakdown(move, selectedPet);
+      const energyCost = BATTLE.getMoveEnergyCost(move);
+      const moveSpeed = getMoveSpeedValue(move);
+      const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
+      return {
+        label: `${move.tier === 3 ? '🔮史詩' : move.tier === 2 ? '💠稀有' : '⚪普通'}｜${move.name}`.slice(0, 100),
+        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
+        value: `${selectedPet.id}::${move.id}`
+      };
+    });
     rowUnlearnChip = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('moves_unlearn_chip')
-        .setPlaceholder('取消學習（退回技能晶片）')
+        .setPlaceholder('取消學習（依稀有度，退回技能晶片）')
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(unlearnOptions)
     );
-  }
-
-  const attackMoves = getPetAttackMoves(selectedPet);
-  let rowMoveAssign = null;
-  if (attackMoves.length > 0) {
-    const moveOptions = attackMoves.slice(0, 25).map((m) => {
-      const dmg = buildMoveDamageBreakdown(m, selectedPet);
-      return {
-        label: `${m.name}`.slice(0, 100),
-        description: `${m.element}/${m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通'}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${BATTLE.getMoveEnergyCost(m)}🚀${format1(getMoveSpeedValue(m))}｜${String(describeMoveEffects(m) || '無效果').replace(/；/g, '/').slice(0, 34)}`.slice(0, 100),
-        value: `${selectedPet.id}::${m.id}`,
-        default: selectedSet.has(String(m.id || ''))
-      };
-    });
-    const moveSelect = new StringSelectMenuBuilder()
-      .setCustomId('moves_assign')
-      .setPlaceholder(`為 ${selectedPet.name} 選擇上陣招式（1~${PET_MOVE_LOADOUT_LIMIT}）`)
-      .setMinValues(1)
-      .setMaxValues(Math.min(PET_MOVE_LOADOUT_LIMIT, moveOptions.length))
-      .addOptions(moveOptions);
-    rowMoveAssign = new ActionRowBuilder().addComponents(moveSelect);
   }
 
   const remainPoints = Math.max(0, Number(player?.upgradePoints || 0));
@@ -529,9 +571,9 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   );
 
   // Discord 訊息元件最多 5 列；若超過會導致 update 失敗並看起來像「按鈕消失」。
-  // 保留優先順序：寵物切換 > 上陣招式 > 學習晶片 > HP加點 > 取消學習 > 返回按鈕。
+  // 保留優先順序：寵物切換 > 學習晶片 > HP加點 > 取消學習 > 返回按鈕。
   const components = [rowPetSelect];
-  const optionalRows = [rowMoveAssign, rowLearnChip, rowAllocate, rowUnlearnChip].filter(Boolean);
+  const optionalRows = [rowLearnChip, rowAllocate, rowUnlearnChip].filter(Boolean);
   for (const row of optionalRows) {
     if (components.length >= 4) break; // 保留最後一列 rowButtons（總列數 <= 5）
     components.push(row);
