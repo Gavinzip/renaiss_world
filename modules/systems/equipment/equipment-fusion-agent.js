@@ -7,10 +7,11 @@ const FUSION_MAX_RETRIES = Math.max(1, Number(process.env.EQUIPMENT_FUSION_MAX_R
 const FUSION_AI_MAX_TOKENS_RAW = Number(process.env.EQUIPMENT_FUSION_MAX_TOKENS || 0);
 const FUSION_AI_MAX_TOKENS = Number.isFinite(FUSION_AI_MAX_TOKENS_RAW) ? Math.max(0, Math.floor(FUSION_AI_MAX_TOKENS_RAW)) : 0;
 
-const EQUIPMENT_SLOTS = ['helmet', 'armor', 'shoes'];
+const EQUIPMENT_SLOTS = ['helmet', 'armor', 'belt', 'shoes'];
 const EQUIPMENT_SLOT_LABELS = Object.freeze({
   helmet: '頭盔',
   armor: '盔甲',
+  belt: '腰帶',
   shoes: '鞋子'
 });
 const EQUIPMENT_SLOT_ALIAS = Object.freeze({
@@ -21,13 +22,17 @@ const EQUIPMENT_SLOT_ALIAS = Object.freeze({
   盔甲: 'armor',
   護甲: 'armor',
   胸甲: 'armor',
+  belt: 'belt',
+  腰帶: 'belt',
+  腰带: 'belt',
   shoes: 'shoes',
   鞋子: 'shoes',
   靴子: 'shoes'
 });
 const EQUIPMENT_SLOT_STAT_KEY = Object.freeze({
   helmet: 'attack',
-  armor: 'hp',
+  armor: 'hp+defense',
+  belt: 'hp',
   shoes: 'speed'
 });
 
@@ -74,6 +79,13 @@ const EQUIPMENT_STAT_RANGES = Object.freeze({
     UR: [30, 40]
   },
   armor: {
+    N: [16, 40],
+    R: [40, 72],
+    SR: [72, 110],
+    SSR: [110, 150],
+    UR: [150, 190]
+  },
+  belt: {
     N: [20, 50],
     R: [50, 90],
     SR: [90, 130],
@@ -88,6 +100,15 @@ const EQUIPMENT_STAT_RANGES = Object.freeze({
     UR: [5, 6]
   }
 });
+
+const EQUIPMENT_ARMOR_DEFENSE_RANGES = Object.freeze({
+  N: [1, 2],
+  R: [2, 3],
+  SR: [3, 4],
+  SSR: [4, 5],
+  UR: [5, 6]
+});
+const HIGH_RARITY_DOWNGRADE_RATE = 0.5; // SSR/UR 額外下修 50%
 
 // 這段就是獨立的融合 Agent 提示詞，後續你可直接改這裡微調風格與決策。
 const EQUIPMENT_FUSION_SYSTEM_PROMPT = '你是 Renaiss 裝備融合 AI。任務：根據三件素材輸出一個裝備 JSON。';
@@ -268,6 +289,7 @@ function sanitizeEquipmentName(name = '', slot = 'helmet', rarity = 'N') {
   const fallback = {
     helmet: `${rarity} 星紋頭盔`,
     armor: `${rarity} 守脈盔甲`,
+    belt: `${rarity} 核環腰帶`,
     shoes: `${rarity} 風域靴`
   };
   return fallback[slot] || `${rarity} 鍛造裝備`;
@@ -279,6 +301,7 @@ function sanitizeLore(text = '', slot = 'helmet') {
   const fallback = {
     helmet: '以碎片訊號重編而成，能放大攻擊節奏。',
     armor: '多層結構吸收衝擊，穩定生命循環。',
+    belt: '環向核心分流衝擊，專注補強生命上限。',
     shoes: '相位底板減少拖滯，提升移動與出手節奏。'
   };
   return fallback[slot] || '由三件寶物重構出的未知裝備。';
@@ -298,9 +321,19 @@ function derivePrimaryStat(slot = 'helmet', rarity = 'N', suggested = 0, seed = 
 
 function buildEquipmentStats(slot = 'helmet', primaryStat = 0) {
   const attack = slot === 'helmet' ? Math.max(0, Math.floor(primaryStat)) : 0;
-  const hp = slot === 'armor' ? Math.max(0, Math.floor(primaryStat)) : 0;
+  const hp = (slot === 'armor' || slot === 'belt') ? Math.max(0, Math.floor(primaryStat)) : 0;
+  const armorDefenseRange = EQUIPMENT_ARMOR_DEFENSE_RANGES?.N || [0, 0];
+  const defense = slot === 'armor'
+    ? Math.max(
+      Number(armorDefenseRange[0] || 0),
+      Math.min(
+        Number(armorDefenseRange[1] || 2),
+        Math.floor(Math.max(0, Number(primaryStat || 0)) / 20)
+      )
+    )
+    : 0;
   const speed = slot === 'shoes' ? Math.max(0, Math.floor(primaryStat)) : 0;
-  return { attack, hp, speed };
+  return { attack, hp, defense, speed };
 }
 
 function buildFusionPrompt(items = [], options = {}) {
@@ -321,8 +354,8 @@ function buildFusionPrompt(items = [], options = {}) {
     `玩家=${playerName} 地點=${location}`,
     `素材:\n${materialsText}`,
     '只輸出 JSON（一行或多行都可），禁止任何解釋、前後綴、markdown。',
-    'JSON schema: {"equipmentName":"名稱","slot":"helmet|armor|shoes","rarity":"N|R|SR|SSR|UR","value":123,"primaryStat":10,"lore":"敘述"}',
-    '規則: slot=helmet=>attack; slot=armor=>hp; slot=shoes=>speed; rarity/value 需與素材估值相稱；名稱需有科技藏品感且不與素材名完全相同。',
+    'JSON schema: {"equipmentName":"名稱","slot":"helmet|armor|belt|shoes","rarity":"N|R|SR|SSR|UR","value":123,"primaryStat":10,"secondaryStat":0,"lore":"敘述"}',
+    '規則: slot=helmet=>attack; slot=armor=>hp+defense; slot=belt=>hp; slot=shoes=>speed; rarity/value 需與素材估值相稱；名稱需有科技藏品感且不與素材名完全相同。',
     languageRule
   ].join('\n');
 }
@@ -352,9 +385,22 @@ function pickFallbackRarity(materials = []) {
         : [['N', 200], ['R', 520], ['SR', 820], ['SSR', 960], ['UR', 1000]];
 
   for (const [rarity, threshold] of table) {
-    if (roll < threshold) return rarity;
+    if (roll < threshold) {
+      const nerfSeed = calcHash(`${seed}|fallback|${rarity}`);
+      return applyHighRarityDowngrade(rarity, nerfSeed);
+    }
   }
   return 'N';
+}
+
+function applyHighRarityDowngrade(rarity = 'N', seed = 0) {
+  const safeRarity = normalizeRarity(rarity || '') || 'N';
+  if (safeRarity !== 'SSR' && safeRarity !== 'UR') return safeRarity;
+  const rate = Math.max(0, Math.min(1, Number(HIGH_RARITY_DOWNGRADE_RATE || 0)));
+  if (rate <= 0) return safeRarity;
+  const roll = (Math.abs(Number(seed) || 0) % 1000) / 1000;
+  if (roll >= rate) return safeRarity;
+  return safeRarity === 'UR' ? 'SSR' : 'SR';
 }
 
 function buildFallbackName(materials = [], slot = 'helmet', rarity = 'N') {
@@ -363,7 +409,11 @@ function buildFallbackName(materials = [], slot = 'helmet', rarity = 'N') {
     .filter(Boolean);
   const a = cores[0] ? cores[0].slice(0, 2) : '星紋';
   const b = cores[1] ? cores[1].slice(-1) : '核';
-  const slotSuffix = slot === 'helmet' ? '冠' : (slot === 'armor' ? '甲' : '靴');
+  const slotSuffix = slot === 'helmet'
+    ? '冠'
+    : (slot === 'armor'
+      ? '甲'
+      : (slot === 'belt' ? '環' : '靴'));
   return sanitizeEquipmentName(`${rarity}${a}${b}${slotSuffix}`, slot, rarity);
 }
 
@@ -371,7 +421,8 @@ function buildFallbackLore(slot = 'helmet', materials = []) {
   const source = materials.map((row) => normalizeText(row?.name || '', 12)).filter(Boolean).join('、') || '三件藏品';
   const map = {
     helmet: `由${source}重構出的攻擊型護具，會在出手瞬間放大衝擊節奏。`,
-    armor: `由${source}重構出的防護型裝備，能穩定承受高壓傷害。`,
+    armor: `由${source}重構出的防護型裝備，兼具生命支撐與護甲強化。`,
+    belt: `由${source}重構出的續航型腰帶，專注提升生命儲備。`,
     shoes: `由${source}重構出的機動型裝備，能縮短行動間隔並提升先手。`
   };
   return sanitizeLore(map[slot] || `由${source}重構出的未知裝備。`, slot);
@@ -395,8 +446,8 @@ function extractFusionHintsFromText(raw = '') {
     || text.match(/equipmentName[^:\n]{0,12}[:：]\s*"([^"\n]{1,60})"/i)?.[1]
     || '';
   const slot =
-    text.match(/"slot"\s*:\s*"(helmet|armor|shoes)"/i)?.[1]
-    || text.match(/\bslot\b[^a-z]{0,16}(helmet|armor|shoes)\b/i)?.[1]
+    text.match(/"slot"\s*:\s*"(helmet|armor|belt|shoes)"/i)?.[1]
+    || text.match(/\bslot\b[^a-z]{0,16}(helmet|armor|belt|shoes)\b/i)?.[1]
     || '';
   const rarity =
     text.match(new RegExp(`"rarity"\\s*:\\s*"${rarityToken}"`, 'i'))?.[1]
@@ -405,6 +456,7 @@ function extractFusionHintsFromText(raw = '') {
     || '';
   const value = Number(text.match(/"value"\s*:\s*(\d{2,6})/i)?.[1] || 0);
   const primaryStat = Number(text.match(/"primaryStat"\s*:\s*(\d{1,5})/i)?.[1] || 0);
+  const secondaryStat = Number(text.match(/"secondaryStat"\s*:\s*(\d{1,5})/i)?.[1] || 0);
   const lore =
     text.match(/"lore"\s*:\s*"([^"\n]{3,160})"/i)?.[1]
     || '';
@@ -415,6 +467,7 @@ function extractFusionHintsFromText(raw = '') {
     rarity: String(rarity || '').trim().toUpperCase(),
     value: Number.isFinite(value) ? value : 0,
     primaryStat: Number.isFinite(primaryStat) ? primaryStat : 0,
+    secondaryStat: Number.isFinite(secondaryStat) ? secondaryStat : 0,
     lore: String(lore || '').trim()
   };
 }
@@ -434,7 +487,9 @@ function buildGuidedEquipment(materials = [], options = {}, hints = {}, parsed =
   const hintedSlot = normalizeSlot(parsed?.slot || hints?.slot || '');
   const hintedRarity = normalizeRarity(parsed?.rarity || hints?.rarity || '');
   const slot = hintedSlot || pickFallbackSlot(materials, options);
-  const rarity = hintedRarity || pickFallbackRarity(materials);
+  const rarity = hintedRarity
+    ? applyHighRarityDowngrade(hintedRarity, calcHash(`${seed}|guided|hinted|${hintedRarity}`))
+    : pickFallbackRarity(materials);
 
   const parsedValue = Number(parsed?.value || 0);
   const hintValue = Number(hints?.value || 0);
@@ -447,12 +502,26 @@ function buildGuidedEquipment(materials = [], options = {}, hints = {}, parsed =
 
   const parsedPrimary = Number(parsed?.primaryStat || 0);
   const hintPrimary = Number(hints?.primaryStat || 0);
+  const parsedSecondary = Number(parsed?.secondaryStat || 0);
   const primaryStat = derivePrimaryStat(
     slot,
     rarity,
     (Number.isFinite(parsedPrimary) && parsedPrimary > 0) ? parsedPrimary : hintPrimary,
     seed + value
   );
+  const armorDefenseRange = EQUIPMENT_ARMOR_DEFENSE_RANGES[rarity] || EQUIPMENT_ARMOR_DEFENSE_RANGES.N;
+  const secondaryDefense = slot === 'armor'
+    ? clampInt(
+      (Number.isFinite(parsedSecondary) && parsedSecondary > 0)
+        ? parsedSecondary
+        : Math.round(primaryStat / 22),
+      Number(armorDefenseRange[0] || 1),
+      Number(armorDefenseRange[1] || 2),
+      Number(armorDefenseRange[0] || 1)
+    )
+    : 0;
+  const stats = buildEquipmentStats(slot, primaryStat);
+  if (slot === 'armor') stats.defense = secondaryDefense;
 
   const rawName = String(parsed?.equipmentName || parsed?.name || hints?.equipmentName || '').trim();
   const rawLore = String(parsed?.lore || parsed?.desc || hints?.lore || '').trim();
@@ -462,7 +531,7 @@ function buildGuidedEquipment(materials = [], options = {}, hints = {}, parsed =
     slot,
     rarity,
     value,
-    stats: buildEquipmentStats(slot, primaryStat),
+    stats,
     lore: rawLore ? sanitizeLore(rawLore, slot) : buildFallbackLore(slot, materials),
     sourceMaterials: materials.map((row) => ({
       name: normalizeText(row?.name || '未知素材', 80),
@@ -480,6 +549,16 @@ function buildFallbackFusionEquipment(materials = [], options = {}) {
   const seed = calcHash(`${slot}|${rarity}|${materials.map((m) => m?.name || '').join('|')}`);
   const value = computeValueFromMaterials(materials, rarity, seed);
   const primaryStat = derivePrimaryStat(slot, rarity, 0, seed + value);
+  const armorDefenseRange = EQUIPMENT_ARMOR_DEFENSE_RANGES[rarity] || EQUIPMENT_ARMOR_DEFENSE_RANGES.N;
+  const stats = buildEquipmentStats(slot, primaryStat);
+  if (slot === 'armor') {
+    stats.defense = clampInt(
+      Math.round(primaryStat / 22),
+      Number(armorDefenseRange[0] || 1),
+      Number(armorDefenseRange[1] || 2),
+      Number(armorDefenseRange[0] || 1)
+    );
+  }
 
   return {
     id: `eq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
@@ -487,7 +566,7 @@ function buildFallbackFusionEquipment(materials = [], options = {}) {
     slot,
     rarity,
     value,
-    stats: buildEquipmentStats(slot, primaryStat),
+    stats,
     lore: buildFallbackLore(slot, materials),
     sourceMaterials: materials.map((row) => ({
       name: normalizeText(row?.name || '未知素材', 80),
@@ -553,12 +632,13 @@ function getEquipmentPowerScore(item = null) {
   const rarityIndex = Math.max(0, EQUIPMENT_RARITY_ORDER.indexOf(rarity));
   const attack = Math.max(0, Number(stats.attack || 0));
   const hp = Math.max(0, Number(stats.hp || 0));
+  const defense = Math.max(0, Number(stats.defense || 0));
   const speed = Math.max(0, Number(stats.speed || 0));
-  return attack * 3 + hp * 0.18 + speed * 8 + rarityIndex * 5;
+  return attack * 3 + hp * 0.18 + defense * 6 + speed * 8 + rarityIndex * 5;
 }
 
 function buildEmptyEquipmentSlots() {
-  return { helmet: null, armor: null, shoes: null };
+  return { helmet: null, armor: null, belt: null, shoes: null };
 }
 
 function cloneEquipmentItem(item = null) {
@@ -567,7 +647,7 @@ function cloneEquipmentItem(item = null) {
     ...item,
     stats: item.stats && typeof item.stats === 'object'
       ? { ...item.stats }
-      : { attack: 0, hp: 0, speed: 0 }
+      : { attack: 0, hp: 0, defense: 0, speed: 0 }
   };
 }
 
@@ -580,6 +660,7 @@ function normalizeEquipmentItem(item = null) {
     ? {
       attack: Math.max(0, Math.floor(Number(item.stats.attack || 0))),
       hp: Math.max(0, Math.floor(Number(item.stats.hp || 0))),
+      defense: Math.max(0, Math.floor(Number(item.stats.defense || 0))),
       speed: Math.max(0, Math.floor(Number(item.stats.speed || 0)))
     }
     : buildEquipmentStats(slot, Math.max(0, Number(item.primaryStat || 0)));
@@ -772,7 +853,7 @@ function unequipPetSlotToBag(player, petId = '', rawSlot = '') {
 }
 
 function getEquippedBonuses(player = null, petId = '') {
-  const out = { attack: 0, hp: 0, speed: 0 };
+  const out = { attack: 0, hp: 0, defense: 0, speed: 0 };
   if (!player || typeof player !== 'object') return out;
   ensurePlayerEquipmentState(player);
   const safePetId = String(petId || '').trim();
@@ -785,10 +866,12 @@ function getEquippedBonuses(player = null, petId = '') {
     const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
     out.attack += Math.max(0, Number(stats.attack || 0));
     out.hp += Math.max(0, Number(stats.hp || 0));
+    out.defense += Math.max(0, Number(stats.defense || 0));
     out.speed += Math.max(0, Number(stats.speed || 0));
   }
   out.attack = Math.floor(out.attack);
   out.hp = Math.floor(out.hp);
+  out.defense = Math.floor(out.defense);
   out.speed = Math.floor(out.speed);
   return out;
 }

@@ -97,7 +97,8 @@ function getPlayerPanelText(lang = 'zh-TW') {
     fusionBlockedItems: ['乾糧一包', '水囊'],
     fusionSlots: {
       helmet: '頭盔（攻擊）',
-      armor: '盔甲（生命）',
+      armor: '盔甲（生命+防禦）',
+      belt: '腰帶（生命）',
       shoes: '鞋子（速度）',
       unknown: '未知槽位'
     },
@@ -601,13 +602,21 @@ function buildEquipmentSlotDetailLine(item = null, slot = 'helmet') {
   const rarity = getFusionRarityLabel(item.rarity);
   const name = String(item.name || '未命名裝備');
   const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
-  const statText = slot === 'helmet'
-    ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
-    : slot === 'armor'
-      ? `HP +${Math.max(0, Number(stats.hp || 0))}`
-      : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+  const statText = formatEquipmentStatText(slot, stats);
   const value = Math.max(0, Number(item.value || 0));
   return `• ${getFusionSlotLabel(slot)}：${rarity} ${name}｜${statText}｜估值 ${value}`;
+}
+
+function formatEquipmentStatText(slot = '', stats = {}) {
+  const safeSlot = String(slot || '').trim();
+  const attack = Math.max(0, Number(stats?.attack || 0));
+  const hp = Math.max(0, Number(stats?.hp || 0));
+  const defense = Math.max(0, Number(stats?.defense || 0));
+  const speed = Math.max(0, Number(stats?.speed || 0));
+  if (safeSlot === 'helmet') return `ATK +${attack}`;
+  if (safeSlot === 'armor') return `HP +${hp}｜DEF +${defense}`;
+  if (safeSlot === 'belt') return `HP +${hp}`;
+  return `SPD +${speed}`;
 }
 
 function parsePetIdFromEquipmentCustomId(customId = '', prefix = '') {
@@ -699,8 +708,8 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
     .setDescription(
       `${selectedPet ? `目前寵物：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）\n` : ''}` +
       `${notice ? `${notice}\n` : ''}` +
-      `每隻寵物可獨立穿戴頭盔/盔甲/鞋子。\n` +
-      `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`
+      `每隻寵物可獨立穿戴頭盔/盔甲/腰帶/鞋子。\n` +
+      `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜DEF +${Math.floor(Number(bonus.defense || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`
     )
     .addFields(
       { name: '🎯 裝備欄位', value: slotLines.join('\n').slice(0, 1024), inline: false },
@@ -1829,17 +1838,13 @@ function getPlayerEquipmentSummary(player = null) {
       return `• ${getFusionSlotLabel(slot)}：未裝備`;
     }
     const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
-    const statText = slot === 'helmet'
-      ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
-      : slot === 'armor'
-        ? `HP +${Math.max(0, Number(stats.hp || 0))}`
-        : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+    const statText = formatEquipmentStatText(slot, stats);
     return `• ${getFusionSlotLabel(slot)}：${getFusionRarityLabel(item.rarity)} ${String(item.name || '未命名裝備')}｜${statText}`;
   });
   const bonus = FUSION.getEquippedBonuses(player, activePetId);
   return {
     slotText: slotLines.join('\n'),
-    totalText: `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`,
+    totalText: `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜DEF +${Math.floor(Number(bonus.defense || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`,
     bagCount
   };
 }
@@ -1865,11 +1870,7 @@ function buildEquipmentBagLine(item = null, index = 0) {
   const rarity = getFusionRarityLabel(item.rarity);
   const name = String(item.name || '未命名裝備').trim() || '未命名裝備';
   const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
-  const statText = slot === 'helmet'
-    ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
-    : slot === 'armor'
-      ? `HP +${Math.max(0, Number(stats.hp || 0))}`
-      : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+  const statText = formatEquipmentStatText(slot, stats);
   const value = Math.max(0, Number(item.value || 0));
   return `${index + 1}. 【${getFusionSlotLabel(slot)}】${rarity} ${name}｜${statText}｜估值 ${value}`;
 }
@@ -2102,7 +2103,7 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
       `請一次選擇 **3 件藏品** 進行融合。\n` +
-      `融合結果會生成裝備（頭盔/盔甲/鞋子），並由 AI 決定名稱、稀有度與價值。\n` +
+      `融合結果會生成裝備（頭盔/盔甲/腰帶/鞋子），並由 AI 決定名稱、稀有度與價值。\n` +
       `目前候選：${candidates.length} 件（技能晶片已自動排除）\n\n` +
       `已選擇：**${draftRows.length}/3**\n${draftSummary}`
     );
@@ -2281,11 +2282,7 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
   CORE.savePlayer(player);
 
   const stats = equipment.stats && typeof equipment.stats === 'object' ? equipment.stats : {};
-  const statText = equipment.slot === 'helmet'
-    ? `ATK +${Math.max(0, Number(stats.attack || 0))}`
-    : equipment.slot === 'armor'
-      ? `HP +${Math.max(0, Number(stats.hp || 0))}`
-      : `SPD +${Math.max(0, Number(stats.speed || 0))}`;
+  const statText = formatEquipmentStatText(equipment.slot, stats);
   const sourceText = consumed.map((row) => String(row?.name || '未知藏品')).join(' + ');
   const equipNotice = equipResult?.equipped
     ? `已自動裝備到 ${getFusionSlotLabel(equipment.slot)}`

@@ -448,7 +448,8 @@ function createGlobalLanguageResources(deps = {}) {
         fusionBlockedItems: ['乾糧一包', '水囊'],
         fusionSlots: {
           helmet: '頭盔（攻擊）',
-          armor: '盔甲（生命）',
+          armor: '盔甲（生命+防禦）',
+          belt: '腰帶（生命）',
           shoes: '鞋子（速度）',
           unknown: '未知槽位'
         },
@@ -497,7 +498,8 @@ function createGlobalLanguageResources(deps = {}) {
         fusionBlockedItems: ['乾糧一包', '水囊'],
         fusionSlots: {
           helmet: '头盔（攻击）',
-          armor: '盔甲（生命）',
+          armor: '盔甲（生命+防御）',
+          belt: '腰带（生命）',
           shoes: '鞋子（速度）',
           unknown: '未知槽位'
         },
@@ -546,7 +548,8 @@ function createGlobalLanguageResources(deps = {}) {
         fusionBlockedItems: ['Ration Pack', 'Water Flask'],
         fusionSlots: {
           helmet: 'Helmet (ATK)',
-          armor: 'Armor (HP)',
+          armor: 'Armor (HP+DEF)',
+          belt: 'Belt (HP)',
           shoes: 'Shoes (SPD)',
           unknown: 'Unknown Slot'
         },

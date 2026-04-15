@@ -61,7 +61,7 @@ function createBattleCoreUtils(deps = {}) {
       hp,
       maxHp,
       attack: Math.max(1, 10 + Math.floor(Number(equipBonus.attack || 0))),
-      defense: Math.max(0, Number(player?.stats?.防禦 || player?.maxStats?.防禦 || 0)),
+      defense: Math.max(0, Number(player?.stats?.防禦 || player?.maxStats?.防禦 || 0) + Math.floor(Number(equipBonus.defense || 0))),
       speed: Math.max(1, 20 + Math.floor(Number(equipBonus.speed || 0))),
       isHuman: true,
       status: cloneStatusState(humanState?.status)
@@ -236,7 +236,7 @@ function createBattleCoreUtils(deps = {}) {
       hp: Math.max(0, Math.min(maxHp, hpWithBonus)),
       maxHp,
       attack: Math.max(1, Number(pet.attack || 0) + Math.floor(Number(equipBonus.attack || 0))),
-      defense: Math.max(0, Number(pet.defense || 0)),
+      defense: Math.max(0, Number(pet.defense || 0) + Math.floor(Number(equipBonus.defense || 0))),
       speed: Math.max(1, Number(pet.speed || 20) + Math.floor(Number(equipBonus.speed || 0))),
       status: snapshot ? cloneStatusState(snapshot.status) : cloneStatusState(pet.status)
     };
