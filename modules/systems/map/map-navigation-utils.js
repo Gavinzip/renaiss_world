@@ -27,6 +27,15 @@ function createMapNavigationUtils(deps = {}) {
     ROAM_MOVE_WANDER_BONUS = 0.2
   } = deps;
 
+  const MISSION_REGION_PORTAL_HUB_ORDER = Object.freeze([
+    ['central_core', '襄陽城'],
+    ['west_desert', '敦煌'],
+    ['southern_delta', '廣州'],
+    ['northern_highland', '草原部落'],
+    ['island_routes', '星潮港'],
+    ['hidden_deeps', '光明頂']
+  ]);
+
   function joinByLang(items = [], lang = 'zh-TW') {
     const list = Array.isArray(items) ? items.filter(Boolean).map((item) => String(item).trim()).filter(Boolean) : [];
     if (list.length === 0) return '';
@@ -84,15 +93,64 @@ function createMapNavigationUtils(deps = {}) {
     return false;
   }
 
-  function resolveNextPortalHub(player, from = '') {
-    const nextPrimary = ISLAND_STORY && typeof ISLAND_STORY.getNextPrimaryLocation === 'function'
-      ? String(ISLAND_STORY.getNextPrimaryLocation(from) || '').trim()
-      : '';
-    if (!nextPrimary) return '';
-    const hub = typeof getLocationPortalHub === 'function'
-      ? String(getLocationPortalHub(nextPrimary) || '').trim()
-      : '';
-    return hub || nextPrimary;
+  function isRegionProgressCompleted(player, regionId = '', hub = '') {
+    const rid = String(regionId || '').trim();
+    const hubLoc = String(hub || '').trim();
+    if (!rid) return false;
+
+    const missionRegions = player?.mainStory?.mission?.regions;
+    if (missionRegions && typeof missionRegions === 'object' && !Array.isArray(missionRegions)) {
+      const row = missionRegions[rid];
+      if (row && typeof row === 'object' && Object.prototype.hasOwnProperty.call(row, 'keyFound')) {
+        return Boolean(row.keyFound);
+      }
+    }
+
+    const islandRow = hubLoc
+      ? player?.islandStoryState?.[hubLoc]
+      : null;
+    if (islandRow && typeof islandRow === 'object') {
+      return Boolean(islandRow.completed);
+    }
+    return false;
+  }
+
+  function resolvePortalProgressState(player, candidateHubs = []) {
+    const allowed = new Set(
+      (Array.isArray(candidateHubs) ? candidateHubs : [])
+        .map((loc) => String(loc || '').trim())
+        .filter(Boolean)
+    );
+    let highestCompletedIndex = -1;
+    for (let i = 0; i < MISSION_REGION_PORTAL_HUB_ORDER.length; i += 1) {
+      const [regionId, hub] = MISSION_REGION_PORTAL_HUB_ORDER[i];
+      if (!regionId || !hub) break;
+      if (!isRegionProgressCompleted(player, regionId, hub)) break;
+      highestCompletedIndex = i;
+    }
+
+    const unlockedHubs = new Set();
+    for (let i = 0; i <= highestCompletedIndex; i += 1) {
+      const hub = String(MISSION_REGION_PORTAL_HUB_ORDER[i]?.[1] || '').trim();
+      if (!hub) continue;
+      unlockedHubs.add(hub);
+    }
+
+    const nextIndex = highestCompletedIndex + 1;
+    let nextHub = '';
+    if (nextIndex >= 0 && nextIndex < MISSION_REGION_PORTAL_HUB_ORDER.length) {
+      nextHub = String(MISSION_REGION_PORTAL_HUB_ORDER[nextIndex]?.[1] || '').trim();
+      if (nextHub) unlockedHubs.add(nextHub);
+    }
+
+    if (allowed.size > 0) {
+      for (const hub of Array.from(unlockedHubs)) {
+        if (!allowed.has(hub)) unlockedHubs.delete(hub);
+      }
+      if (nextHub && !allowed.has(nextHub)) nextHub = '';
+    }
+
+    return { unlockedHubs, nextHub };
   }
 
   function getPortalAccessContext(player) {
@@ -112,12 +170,17 @@ function createMapNavigationUtils(deps = {}) {
     const islandCompleted = Boolean(islandState?.completed);
     const regionUnlocked = canFreeRoamCurrentRegion(player);
     const crossRegionUnlocked = Boolean(islandCompleted || regionUnlocked);
-    const nextPortalHub = resolveNextPortalHub(player, from);
+    const portalProgress = resolvePortalProgressState(player, cleaned);
+    const nextPortalHub = String(portalProgress?.nextHub || '').trim();
+    const unlockedHubs = portalProgress?.unlockedHubs instanceof Set
+      ? portalProgress.unlockedHubs
+      : new Set();
     const destinationEntries = cleaned.map((loc) => {
       const completed = isDestinationCompleted(player, loc);
       const isNext = Boolean(nextPortalHub) && loc === nextPortalHub;
-      const enabled = Boolean(crossRegionUnlocked && (isNext || completed));
-      const state = isNext ? 'next' : (completed ? 'completed' : 'locked');
+      const isUnlocked = Boolean(unlockedHubs.has(loc));
+      const enabled = Boolean(crossRegionUnlocked && (isUnlocked || completed));
+      const state = completed ? 'completed' : (isNext || isUnlocked ? 'next' : 'locked');
       return {
         location: loc,
         enabled,

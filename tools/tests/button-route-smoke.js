@@ -237,6 +237,8 @@ function createNoopDeps() {
     showGacha: async () => {},
     handleGachaResult: async () => {},
     handleAllocateHP: async () => {},
+    showAllocateHpModal: async () => {},
+    handleAllocateHpModalSubmit: async () => {},
     handleContinueWithWalletButton: async () => {},
     handleEnterPetNameButton: async () => {},
     handleSkipNameButton: async () => {},
@@ -316,7 +318,7 @@ function buildTestCases() {
     'shop_open_renaiss','shop_post_sell_renaiss','shop_npc_haggle_renaiss','shop_haggle_all_renaiss',
     'shop_haggle_cancel_renaiss','shop_haggle_confirm_renaiss','shop_buy_item_1','shop_scratch_renaiss',
     'shop_buy_point_renaiss','shop_buy_device_renaiss','shop_buy_heal_crystal_renaiss','shop_buy_energy_crystal_renaiss',
-    'shop_buy_1','alloc_hp_10','name_modal_1'
+    'shop_buy_1','alloc_hp_open_pet1','alloc_hp_10','name_modal_1'
   ];
   const modalIds = [
     'pmkt_modal_sell_renaiss',
@@ -325,7 +327,8 @@ function buildTestCases() {
     'char_name_submit_male',
     'name_submit_legacy',
     'wish_pool_submit_0',
-    'custom_action_submit_0'
+    'custom_action_submit_0',
+    'alloc_hp_modal_pet1'
   ];
   const selectIds = [
     'battle_switch_select',

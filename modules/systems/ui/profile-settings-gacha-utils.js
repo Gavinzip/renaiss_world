@@ -8,6 +8,9 @@ function createProfileSettingsGachaUtils(deps = {}) {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
     getPlayerUILang,
     getSettingsText,
     getWorldIntroTemplate,
@@ -320,14 +323,18 @@ function createProfileSettingsGachaUtils(deps = {}) {
     }
 
     const remain = Math.max(0, Number(player?.upgradePoints || 0));
+    const rawAmount = String(amountInput ?? '').trim().toLowerCase();
     let amount = 1;
-    if (String(amountInput || '').toLowerCase() === 'max') {
+    if (rawAmount === 'max') {
       amount = remain;
     } else {
-      const parsed = Math.floor(Number(amountInput || 1));
-      amount = Number.isFinite(parsed) ? parsed : 1;
+      const parsed = Math.floor(Number(rawAmount || 0));
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        await showMovesList(interaction, user, petId, `⚠️ 加點數量格式錯誤，請輸入 1~${remain} 的整數。`);
+        return;
+      }
+      amount = parsed;
     }
-    amount = Math.max(1, amount);
     if (remain <= 0) {
       await showMovesList(interaction, user, petId, '⚠️ 升級點數不足。');
       return;
@@ -347,6 +354,49 @@ function createProfileSettingsGachaUtils(deps = {}) {
       petId,
       `✅ ${result.petName} HP +${result.hpGain}（已用 ${result.pointsUsed} 點，剩餘 ${result.remaining} 點）`
     );
+  }
+
+  async function showAllocateHpModal(interaction, user, petId = '') {
+    const player = CORE.loadPlayer(user.id);
+    if (!player) {
+      await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+      return;
+    }
+    const pet = PET.getPetById(petId);
+    if (!pet || String(pet.ownerId || '') !== String(user.id || '')) {
+      await interaction.reply({ content: '⚠️ 找不到可加點的寵物。', ephemeral: true }).catch(() => {});
+      return;
+    }
+    const remain = Math.max(0, Number(player?.upgradePoints || 0));
+    if (remain <= 0) {
+      await showMovesList(interaction, user, petId, '⚠️ 升級點數不足。');
+      return;
+    }
+    if (!ModalBuilder || !TextInputBuilder || !TextInputStyle) {
+      await interaction.reply({ content: '⚠️ 目前無法開啟輸入視窗，請稍後再試。', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`alloc_hp_modal_${petId}`)
+      .setTitle(`分配 ${pet.name} HP`);
+    const input = new TextInputBuilder()
+      .setCustomId('alloc_hp_amount')
+      .setLabel(`輸入要分配的點數（可用 ${remain}）`)
+      .setPlaceholder(`請輸入 1~${remain}，或輸入 max`)
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(8);
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+    await interaction.showModal(modal).catch(async () => {
+      await interaction.reply({ content: '⚠️ 無法開啟加點視窗，請再按一次。', ephemeral: true }).catch(() => {});
+    });
+  }
+
+  async function handleAllocateHpModalSubmit(interaction, user, customId = '') {
+    const petId = String(customId || '').replace('alloc_hp_modal_', '').trim();
+    const amountRaw = String(interaction?.fields?.getTextInputValue?.('alloc_hp_amount') || '').trim();
+    await handleAllocateHP(interaction, user, petId, amountRaw);
   }
 
   async function showCharacter(interaction, user) {
@@ -417,6 +467,8 @@ function createProfileSettingsGachaUtils(deps = {}) {
     showGacha,
     handleGachaResult,
     handleAllocateHP,
+    showAllocateHpModal,
+    handleAllocateHpModalSubmit,
     showCharacter
   };
 }

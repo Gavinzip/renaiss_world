@@ -43,6 +43,7 @@ function createInteractionMessageUtils() {
     const cid = String(customId || '').trim();
     if (!cid) return false;
     if (ALWAYS_KEEP_VISIBLE_BUTTONS.has(cid)) return true;
+    if (cid.startsWith('alloc_hp_open_')) return true;
     if (!shouldKeepModalLauncherVisible) return false;
     return (
       cid === 'open_profile' ||

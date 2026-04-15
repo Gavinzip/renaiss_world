@@ -286,6 +286,8 @@ function createNoopDeps() {
     showGacha: async () => {},
     handleGachaResult: async () => {},
     handleAllocateHP: async () => {},
+    showAllocateHpModal: async () => {},
+    handleAllocateHpModalSubmit: async () => {},
     handleContinueWithWalletButton: async () => {},
     handleEnterPetNameButton: async () => {},
     handleSkipNameButton: async () => {},
@@ -315,6 +317,8 @@ function parseRouteSignatures() {
 function sampleFromPrefix(prefix) {
   const preset = {
     'alloc_hp_': 'alloc_hp_pet1_1',
+    'alloc_hp_open_': 'alloc_hp_open_pet1',
+    'alloc_hp_modal_': 'alloc_hp_modal_pet1',
     'char_name_submit_': 'char_name_submit_male',
     'choose_element_': 'choose_element_grass',
     'custom_action_submit_': 'custom_action_submit_0',

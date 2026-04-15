@@ -498,29 +498,28 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
 
   const rowAllocate = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`alloc_hp_${selectedPet.id}_1`)
-      .setLabel(`❤️ +1（+${hpPerPoint}）`)
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(remainPoints <= 0),
-    new ButtonBuilder()
-      .setCustomId(`alloc_hp_${selectedPet.id}_5`)
-      .setLabel(`❤️ +5`)
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(remainPoints <= 0),
-    new ButtonBuilder()
-      .setCustomId(`alloc_hp_${selectedPet.id}_10`)
-      .setLabel(`❤️ +10`)
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(remainPoints <= 0),
-    new ButtonBuilder()
-      .setCustomId(`alloc_hp_${selectedPet.id}_max`)
-      .setLabel(`❤️ 全加（剩${remainPoints}）`)
+      .setCustomId(`alloc_hp_open_${selectedPet.id}`)
+      .setLabel(`❤️ 自訂加點（可分配 ${remainPoints}）`)
       .setStyle(ButtonStyle.Primary)
       .setDisabled(remainPoints <= 0),
     new ButtonBuilder()
       .setCustomId(`moves_show_equipment_${selectedPet.id}`)
       .setLabel('🛡️ 目前裝備')
       .setStyle(ButtonStyle.Secondary)
+      .setDisabled(false)
+  );
+
+  // 保留每點換算資訊，讓玩家在打開輸入框前可快速確認。
+  if (rowAllocate.components[0]) {
+    rowAllocate.components[0].setEmoji('➕');
+  }
+
+  const pointHintRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`alloc_hp_hint_${selectedPet.id}_${remainPoints}`)
+      .setLabel(`每點 +${hpPerPoint} HP｜目前可分配 ${remainPoints} 點`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true)
   );
 
   // Discord 訊息元件最多 5 列；若超過會導致 update 失敗並看起來像「按鈕消失」。
@@ -531,6 +530,8 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     if (components.length >= 4) break; // 保留最後一列 rowButtons（總列數 <= 5）
     components.push(row);
   }
+  // 若還有空間，補一列只讀提示，避免「可分配點數」資訊被埋在長文字中。
+  if (components.length < 4) components.push(pointHintRow);
   components.push(rowButtons);
   const payload = { embeds: [embed], content: null, components };
   try {

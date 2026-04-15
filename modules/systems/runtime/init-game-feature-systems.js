@@ -597,6 +597,9 @@ function initGameFeatureSystems(deps = {}) {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
     getPlayerUILang,
     getSettingsText: (...args) => deps.getSettingsText(...args),
     getWorldIntroTemplate: (...args) => deps.getWorldIntroTemplate(...args),
@@ -619,6 +622,8 @@ function initGameFeatureSystems(deps = {}) {
     showGacha,
     handleGachaResult,
     handleAllocateHP,
+    showAllocateHpModal,
+    handleAllocateHpModalSubmit,
     showCharacter
   } = PROFILE_SETTINGS_GACHA_UTILS;
 
@@ -783,6 +788,8 @@ function initGameFeatureSystems(deps = {}) {
     showGacha,
     handleGachaResult,
     handleAllocateHP,
+    showAllocateHpModal,
+    handleAllocateHpModalSubmit,
     showCharacter,
     ensureStarterRewardStateCore,
     grantStarterFivePullIfNeededCore,

@@ -146,6 +146,8 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     showGacha,
     handleGachaResult,
     handleAllocateHP,
+    showAllocateHpModal = async () => {},
+    handleAllocateHpModalSubmit = async () => {},
     handleContinueWithWalletButton,
     handleEnterPetNameButton,
     handleSkipNameButton,
@@ -1713,6 +1715,12 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
   
   // ===== 分配 HP =====
+  if (customId.startsWith('alloc_hp_open_')) {
+    const petId = String(customId || '').replace('alloc_hp_open_', '').trim();
+    await showAllocateHpModal(interaction, user, petId);
+    return;
+  }
+
   if (customId.startsWith('alloc_hp_')) {
     const raw = String(customId || '').replace('alloc_hp_', '').trim();
     let petId = raw;
@@ -1744,6 +1752,11 @@ CLIENT.on('interactionCreate', async (interaction) => {
   // ===== Modal 提交（名字）=====
   if (customId.startsWith('name_modal_')) {
     await handleNameSubmit(interaction, user);
+    return;
+  }
+
+  if (customId.startsWith('alloc_hp_modal_')) {
+    await handleAllocateHpModalSubmit(interaction, user, customId);
     return;
   }
   } catch (err) {
