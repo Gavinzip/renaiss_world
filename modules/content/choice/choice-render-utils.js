@@ -202,7 +202,11 @@ function createChoiceRenderUtils(deps = {}) {
     const raw = String(choice?.choice || choice?.name || '').trim();
     if (!raw || raw === 'true' || raw === 'false') return '';
     const clean = stripChoicePrefix(raw);
-    return ensureBattleMarkerSuffix(clean || raw, choice);
+    const styleTag = String(choice?.styleTag || '').replace(/[【】\[\]]/g, '').trim().slice(0, 6);
+    const base = ensureBattleMarkerSuffix(clean || raw, choice);
+    if (!styleTag) return base;
+    if (String(base || '').includes(`【${styleTag}】`)) return base;
+    return `【${styleTag}】${base}`;
   }
 
   function createCustomInputChoice() {

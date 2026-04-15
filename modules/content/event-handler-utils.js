@@ -1,4 +1,5 @@
 const { MAP_LOCATIONS } = require('./world-map');
+const DYNAMIC_WORLD = require('./dynamic-world-utils');
 
 function createEventHandlerUtils(deps = {}) {
   const {
@@ -330,6 +331,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     await respondError('❌ 請重新開始！');
     return;
   }
+  DYNAMIC_WORLD.ensureDynamicWorldState(player);
 
   const choices = player.eventChoices || [];
   const event = choices[eventIndex];
@@ -833,6 +835,29 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     }
   }
 
+  const dynamicChoiceImpact = DYNAMIC_WORLD.applyChoiceConsequences(player, event, {
+    location: String(player.location || '').trim()
+  });
+  if (dynamicChoiceImpact && result && typeof result === 'object') {
+    result.dynamicStyleTag = String(dynamicChoiceImpact.styleTag || '').trim();
+    result.dynamicWantedDelta = Number(dynamicChoiceImpact.wantedDelta || 0);
+    result.dynamicPressureDelta = Number(dynamicChoiceImpact.pressureDelta || 0);
+    result.dynamicLocationWanted = Number(dynamicChoiceImpact.locationWanted || 0);
+    result.dynamicLocationPressure = Number(dynamicChoiceImpact.locationPressure || 0);
+    result.dynamicFactionDelta = dynamicChoiceImpact.factionDelta && typeof dynamicChoiceImpact.factionDelta === 'object'
+      ? { ...dynamicChoiceImpact.factionDelta }
+      : { beacon: 0, gray: 0, digital: 0, civic: 0 };
+  }
+  if (dynamicChoiceImpact?.styleTag) {
+    queueMemory({
+      type: '抉擇傾向',
+      content: `行動風格：${dynamicChoiceImpact.styleTag}`,
+      outcome: `本地熱度 +${Math.max(0, Number(dynamicChoiceImpact.wantedDelta || 0))}｜動態壓力 +${Number(dynamicChoiceImpact.pressureDelta || 0)}`,
+      importance: 1,
+      tags: ['morality', 'threat', 'dynamic_world']
+    });
+  }
+
   if (result) {
     const goldDelta = Number(result.gold || 0);
     if (!result.skipGoldApply && Number.isFinite(goldDelta) && goldDelta !== 0) {
@@ -1113,6 +1138,15 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   if (result?.autoTravel?.targetLocation) {
     outcomeParts.push(`移動:${result.autoTravel.fromLocation}->${result.autoTravel.targetLocation}`);
   }
+  if (Number.isFinite(Number(result?.dynamicWantedDelta)) && Number(result.dynamicWantedDelta) > 0) {
+    outcomeParts.push(`本地熱度+${Math.floor(Number(result.dynamicWantedDelta || 0))}`);
+  }
+  if (Number.isFinite(Number(result?.dynamicPressureDelta)) && Number(result.dynamicPressureDelta) > 0) {
+    outcomeParts.push(`動態壓力+${Number(result.dynamicPressureDelta).toFixed(1)}`);
+  }
+  if (result?.dynamicStyleTag) {
+    outcomeParts.push(`風格:${String(result.dynamicStyleTag)}`);
+  }
   queueMemory({
     type: '結果',
     content: selectedChoice,
@@ -1122,6 +1156,22 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   });
   
   incrementPlayerStoryTurns(player, 1);
+  DYNAMIC_WORLD.advanceDynamicStateTurn(player, {
+    location: String(player.location || '').trim(),
+    storyTurn: getPlayerStoryTurns(player)
+  });
+  if (event?.dynamicEvent || event?.hiddenMeta?.eventArchetype) {
+    const resolved = DYNAMIC_WORLD.resolveDynamicEventAfterChoice(player, event, result, {
+      location: String(player.location || '').trim(),
+      storyTurn: getPlayerStoryTurns(player)
+    });
+    if (resolved && result && typeof result === 'object') {
+      result.dynamicResolved = true;
+      result.dynamicResolvedArchetype = String(resolved.archetype || '').trim();
+      result.dynamicLocationWanted = Number(resolved.locationWanted || result.dynamicLocationWanted || 0);
+      result.dynamicLocationPressure = Number(resolved.locationPressure || result.dynamicLocationPressure || 0);
+    }
+  }
   const recoveryTick = applyPetRecoveryTurnTick(pet, 1);
   if (recoveryTick.changed) {
     PET.savePet(pet);
@@ -1607,6 +1657,21 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
           digitalMasked
             ? `🧠 市場異常指標 ${score}/100${delta > 0 ? `（+${delta}）` : ''}`
             : `🧠 Digital 詐價風險提示累積值 ${score}/100${delta > 0 ? `（+${delta}）` : ''}`
+        );
+      }
+      if (Number.isFinite(Number(result.dynamicLocationWanted)) || Number.isFinite(Number(result.dynamicLocationPressure))) {
+        const localWanted = Number(result?.dynamicLocationWanted || 0);
+        const localPressure = Number(result?.dynamicLocationPressure || 0);
+        rewardText.push(`🎯 本區熱度 ${localWanted.toFixed(1)}｜事件壓力 ${localPressure.toFixed(1)}`);
+      }
+      if (result?.dynamicFactionDelta && typeof result.dynamicFactionDelta === 'object') {
+        const rep = result.dynamicFactionDelta;
+        const toSigned = (value) => {
+          const n = Math.trunc(Number(value || 0));
+          return n > 0 ? `+${n}` : String(n);
+        };
+        rewardText.push(
+          `🧭 聲望變化 聯${toSigned(rep.beacon)} 灰${toSigned(rep.gray)} D${toSigned(rep.digital)} 民${toSigned(rep.civic)}`
         );
       }
 

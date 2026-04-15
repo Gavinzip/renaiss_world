@@ -3117,6 +3117,16 @@ function createPlayer(discordId, name, gender, sect) {
       history: [],
       pressure: 0
     },
+
+    dynamicWorld: {
+      factionRep: { beacon: 0, gray: 0, digital: 0, civic: 0 },
+      moralityAxes: { law: 0, harm: 0, trust: 0, selfInterest: 0 },
+      wantedByLocation: {},
+      pressureByLocation: {},
+      recentEvents: [],
+      activeChainByLocation: {},
+      lastGeneratedTurn: 0
+    },
     
     memories: [],
     memoryAudit: [],

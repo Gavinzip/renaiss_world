@@ -25,6 +25,7 @@ const {
 const {
   getCollectibleCulturePrompt
 } = require('./collectible-culture');
+const DYNAMIC_WORLD = require('./dynamic-world-utils');
 
 const LANGUAGE_RESOURCES = createGlobalLanguageResources({
   normalizeLangCode: (lang = 'zh-TW') => {
@@ -450,6 +451,33 @@ function normalizeChoiceByLanguage(choice, playerLang = 'zh-TW') {
     desc: normalizeOutputByLanguage(choice.desc || '', playerLang),
     tag: normalizeOutputByLanguage(choice.tag || '', playerLang)
   };
+}
+
+function normalizeDynamicEventMeta(raw = null) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const archetype = String(raw.archetype || raw.type || '').trim().slice(0, 32);
+  if (!archetype) return null;
+  return {
+    archetype,
+    phase: String(raw.phase || '').trim().slice(0, 20) || 'offered',
+    intensity: Math.max(1, Math.min(5, Math.round(Number(raw.intensity || 2) || 2))),
+    chainHint: String(raw.chainHint || '').trim().slice(0, 60)
+  };
+}
+
+function normalizeChoiceSemanticMeta(choice = {}, player = null, location = '') {
+  if (!choice || typeof choice !== 'object') return choice;
+  const dynamicContext = DYNAMIC_WORLD.buildDynamicWorldContext(player, location, {
+    playerLang: String(player?.language || 'zh-TW').trim()
+  });
+  const styleTag = DYNAMIC_WORLD.inferStyleTag(choice, choice?.hiddenMeta);
+  const hiddenMeta = DYNAMIC_WORLD.normalizeChoiceHiddenMeta(choice?.hiddenMeta, choice, {
+    locationWanted: Number(dynamicContext?.wanted || 0)
+  });
+  const dynamicEvent = normalizeDynamicEventMeta(choice?.dynamicEvent || choice?.eventMeta);
+  const out = { ...choice, styleTag, hiddenMeta };
+  if (dynamicEvent) out.dynamicEvent = dynamicEvent;
+  return out;
 }
 
 function sanitizeMainlineBridgeChoiceTone(choice = {}, {
@@ -1045,6 +1073,224 @@ async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = 
   return base.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
+function mapDynamicArchetypeToAction(archetype = '') {
+  const key = String(archetype || '').trim();
+  if (key === 'ambush' || key === 'bounty_hunt') return 'fight';
+  if (key === 'storage_heist') return 'fight';
+  if (key === 'witness_chase') return 'explore';
+  if (key === 'smuggling') return 'social';
+  if (key === 'artifact_dispute') return 'explore';
+  return 'explore';
+}
+
+function buildDynamicEventFallbackChoice(archetype = '', playerLang = 'zh-TW', location = '', dynamicPlan = {}) {
+  const map = {
+    ambush: {
+      name: '反制尾隨者',
+      choice: `在${location || '當前街區'}設下反追蹤路線，逼出尾隨者（會進入戰鬥）`,
+      desc: '主動反制可疑隊伍，避免後續被連環伏擊',
+      tag: '[⚔️會戰鬥]',
+      styleTag: '追獵'
+    },
+    smuggling: {
+      name: '追查灰線貨流',
+      choice: `沿${location || '當前區域'}貨流節點盤查走私轉運路徑`,
+      desc: '鎖定本地異常轉運節點，逼近幕後中介',
+      tag: '[🔍需探索]',
+      styleTag: '佈局'
+    },
+    storage_heist: {
+      name: '攔截封存艙',
+      choice: `趁對方換手封存艙時強行攔截並奪取艙體（會進入戰鬥）`,
+      desc: '高風險硬奪路線，可能直接升高通緝熱度',
+      tag: '[🔥高風險]',
+      styleTag: '強奪'
+    },
+    bounty_hunt: {
+      name: '切斷獵殺路線',
+      choice: `追入${location || '當前街區'}側巷先手擊潰賞金獵隊（會進入戰鬥）`,
+      desc: '先下手壓制追擊隊伍，降低短期壓迫',
+      tag: '[⚔️會戰鬥]',
+      styleTag: '追獵'
+    },
+    witness_chase: {
+      name: '封住目擊缺口',
+      choice: `沿目擊者路線回查時間戳，找出被篡改的關鍵口供`,
+      desc: '從證詞斷點回推，避免線索被人帶偏',
+      tag: '[🔍需探索]',
+      styleTag: '穩健'
+    },
+    artifact_dispute: {
+      name: '介入歸屬爭議',
+      choice: `對${location || '當前區域'}爭議藏品做現場核驗並控場交涉`,
+      desc: '以真偽鑑識壓住衝突，爭取主導調查權',
+      tag: '[🤝需社交]',
+      styleTag: '交涉'
+    }
+  };
+  const base = map[String(archetype || '').trim()] || map.smuggling;
+  const action = mapDynamicArchetypeToAction(archetype);
+  const hiddenMeta = DYNAMIC_WORLD.normalizeChoiceHiddenMeta({
+    law: action === 'fight' ? -1 : 1,
+    harm: action === 'fight' ? 1 : 0,
+    trust: action === 'social' ? 1 : 0,
+    selfInterest: archetype === 'storage_heist' ? 2 : 1,
+    targetFaction: archetype === 'smuggling' ? 'digital' : 'none',
+    witnessRisk: action === 'fight' ? 0.66 : 0.42,
+    eventArchetype: archetype,
+    intensity: dynamicPlan?.intensity || 2
+  }, base, {});
+  const normalized = normalizeChoiceByLanguage({
+    ...base,
+    action,
+    move_to: '',
+    hiddenMeta,
+    dynamicEvent: {
+      archetype,
+      phase: 'offered',
+      intensity: Math.max(1, Math.min(5, Math.round(Number(dynamicPlan?.intensity || 2) || 2))),
+      chainHint: 'local_chain'
+    }
+  }, playerLang);
+  return normalizeChoiceSemanticMeta(normalized, null, location);
+}
+
+async function generateDynamicEventChoiceWithAI({
+  player = null,
+  playerLang = 'zh-TW',
+  location = '',
+  storyText = '',
+  storyTail = '',
+  stageGoal = '',
+  dynamicPlan = null,
+  existingChoices = []
+} = {}) {
+  if (!dynamicPlan || !dynamicPlan.inject) return null;
+  const archetype = String(dynamicPlan.archetype || '').trim() || 'smuggling';
+  const actionHint = mapDynamicArchetypeToAction(archetype);
+  const langInstruction = getAiLanguageDirective(playerLang, 'output');
+  const dynamicContext = DYNAMIC_WORLD.buildDynamicWorldContext(player, location, { playerLang });
+  const recentChoiceTitles = (Array.isArray(existingChoices) ? existingChoices : [])
+    .map((row, idx) => `${idx + 1}. ${String(row?.name || row?.choice || '').trim()}`)
+    .filter(Boolean)
+    .slice(0, 6)
+    .join('\n');
+
+  const prompt = [
+    '你是 Renaiss 的動態事件導演器，負責產生「當前場景綁定」事件選項。',
+    `語言要求：${langInstruction}`,
+    `地點：${location || '未知地點'}`,
+    `事件原型：${archetype}`,
+    `建議行動類型：${actionHint}`,
+    `世界狀態：${dynamicContext?.summary || '（無）'}`,
+    `篇章目標：${String(stageGoal || '').trim() || '維持本地線索推進'}`,
+    '最近故事尾段（必讀）：',
+    String(storyTail || '').trim() || String(storyText || '').trim().slice(-320),
+    recentChoiceTitles ? `已存在選項（避免重複）：\n${recentChoiceTitles}` : '',
+    '',
+    '輸出格式（只輸出 JSON object，不要任何補充文字）：',
+    '{"name":"12字內","choice":"12-30字","desc":"12-32字","tag":"[風險標籤]","move_to":"","action":"explore|social|fight|trade","styleTag":"穩健|交涉|灰線|強奪|追獵|佈局","hiddenMeta":{"law":-2..2,"harm":-2..2,"trust":-2..2,"selfInterest":-2..2,"targetFaction":"beacon|gray|digital|civic|none","witnessRisk":0..1,"eventArchetype":"", "intensity":1..5},"dynamicEvent":{"archetype":"", "phase":"offered", "intensity":1..5, "chainHint":"一句短提示"}}',
+    '',
+    '規則：',
+    '1. 這是「事件選項」，必須與當前尾段直接因果相連，不能像任務模板句。',
+    '2. 禁止抽象空話（例如「先處理本區關鍵」）。',
+    '3. move_to 固定空字串，這是本地事件不是跨城移動。',
+    '4. styleTag 只能用：穩健、交涉、灰線、強奪、追獵、佈局。',
+    '5. 不可出現「善/惡」字眼，善惡判讀只放 hiddenMeta。',
+    '6. 若 action=fight，choice 句尾加「（會進入戰鬥）」。'
+  ].filter(Boolean).join('\n');
+
+  try {
+    const raw = await callAI(prompt, 0.95, {
+      label: 'dynamicEventChoice',
+      model: MINIMAX_MODEL,
+      maxTokens: 420,
+      timeoutMs: Math.max(12000, Number(CHOICE_TIMEOUT_MS || 180000)),
+      retries: 1,
+      unlimitedTimeout: false,
+      unlimitedMaxTokens: true
+    });
+    const parsed = parseJsonOrThrow(normalizeOutputByLanguage(raw, playerLang), 'object');
+    const choice = normalizeChoiceByLanguage({
+      name: String(parsed.name || '').trim(),
+      choice: String(parsed.choice || '').trim(),
+      desc: String(parsed.desc || '').trim(),
+      tag: String(parsed.tag || '').trim(),
+      move_to: '',
+      action: String(parsed.action || actionHint || '').trim().slice(0, 40),
+      styleTag: DYNAMIC_WORLD.normalizeStyleTag(parsed.styleTag || ''),
+      hiddenMeta: DYNAMIC_WORLD.normalizeChoiceHiddenMeta(parsed.hiddenMeta || null, parsed, {}),
+      dynamicEvent: normalizeDynamicEventMeta({
+        ...(parsed.dynamicEvent && typeof parsed.dynamicEvent === 'object' ? parsed.dynamicEvent : {}),
+        archetype,
+        phase: 'offered',
+        intensity: Math.max(1, Math.min(5, Math.round(Number(parsed?.dynamicEvent?.intensity || dynamicPlan?.intensity || 2) || 2)))
+      })
+    }, playerLang);
+    if (!choice?.name || !choice?.choice || !choice?.desc || !choice?.tag) {
+      throw new Error('dynamic choice missing required fields');
+    }
+    return normalizeChoiceSemanticMeta(choice, player, location);
+  } catch (err) {
+    console.warn(`[AI][dynamicEventChoice] fallback: ${err?.message || err}`);
+    return buildDynamicEventFallbackChoice(archetype, playerLang, location, dynamicPlan);
+  }
+}
+
+async function injectDynamicWorldEventChoice(choices = [], options = {}) {
+  const base = Array.isArray(choices) ? choices.filter(Boolean).map((row) => ({ ...row })) : [];
+  if (base.length <= 0) return base;
+  const player = options?.player || null;
+  const location = String(options?.location || player?.location || '').trim();
+  if (!player || !location) return base;
+
+  const storyTurn = Math.max(0, Number(options?.storyTurn || player?.storyTurns || 0));
+  const storyText = String(options?.storyText || '').trim();
+  const storyTail = String(options?.storyTail || '').trim();
+  const dynamicPlan = DYNAMIC_WORLD.chooseDynamicEventPlan(player, location, {
+    storyTurn,
+    storyText
+  });
+  if (!dynamicPlan?.inject) return base;
+
+  const dynamicChoice = await generateDynamicEventChoiceWithAI({
+    player,
+    playerLang: String(options?.playerLang || player?.language || 'zh-TW').trim(),
+    location,
+    storyText,
+    storyTail,
+    stageGoal: String(options?.stageGoal || '').trim(),
+    dynamicPlan,
+    existingChoices: base
+  });
+  if (!dynamicChoice) return base;
+
+  DYNAMIC_WORLD.recordDynamicEventOffered(player, {
+    location,
+    archetype: dynamicPlan.archetype,
+    intensity: dynamicPlan.intensity,
+    phase: 'offered',
+    storyTurn
+  });
+
+  if (base.length < CHOICE_OUTPUT_COUNT) {
+    base.push(dynamicChoice);
+    return base.slice(0, CHOICE_OUTPUT_COUNT);
+  }
+
+  const protectedActions = new Set(['wish_pool', 'market_renaiss', 'market_digital', 'mentor_spar', 'location_story_battle']);
+  let replaceIdx = -1;
+  for (let i = base.length - 1; i >= 0; i--) {
+    const action = String(base[i]?.action || '').trim();
+    if (protectedActions.has(action)) continue;
+    replaceIdx = i;
+    break;
+  }
+  if (replaceIdx < 0) replaceIdx = base.length - 1;
+  base[replaceIdx] = dynamicChoice;
+  return base.slice(0, CHOICE_OUTPUT_COUNT);
+}
+
 function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const options = {
@@ -1509,7 +1755,9 @@ function normalizeMoveToLocation(raw = '') {
   return '';
 }
 
-function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
+function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW', options = {}) {
+  const player = options?.player || null;
+  const location = String(options?.location || player?.location || '').trim();
   const payload = extractJsonPayload(raw);
   if (payload && payload.startsWith('[')) {
     try {
@@ -1522,16 +1770,24 @@ function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
             const choice = String(item.choice || item.text || item.desc || '').trim();
             const desc = String(item.desc || item.choice || item.text || '').trim();
             const tag = String(item.tag || '').trim();
+            const action = String(item.action || '').trim().slice(0, 40);
+            const styleTag = DYNAMIC_WORLD.normalizeStyleTag(item.styleTag || item.style || item.mood || '');
+            const hiddenMeta = DYNAMIC_WORLD.normalizeChoiceHiddenMeta(item.hiddenMeta || item.meta || null, item, {});
+            const dynamicEvent = normalizeDynamicEventMeta(item.dynamicEvent || item.eventMeta || null);
             const moveTo = normalizeMoveToLocation(
               item.move_to || item.moveTo || item.destination || item.to || ''
             );
             if (!choice || !tag) return null;
-            const normalized = normalizeChoiceByLanguage({
+            const normalized = normalizeChoiceSemanticMeta(normalizeChoiceByLanguage({
               name: name || choice.slice(0, 15),
               choice,
               desc: desc || choice,
               tag: tag.startsWith('[') ? tag : `[${tag}]`
-            }, playerLang);
+            }, playerLang), player, location);
+            if (action) normalized.action = action;
+            if (styleTag) normalized.styleTag = normalizeOutputByLanguage(styleTag, playerLang);
+            if (hiddenMeta && typeof hiddenMeta === 'object') normalized.hiddenMeta = hiddenMeta;
+            if (dynamicEvent) normalized.dynamicEvent = dynamicEvent;
             if (moveTo) normalized.move_to = moveTo;
             return normalized;
           })
@@ -1539,7 +1795,7 @@ function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
         if (mapped.length > 0) return mapped.slice(0, CHOICE_OUTPUT_COUNT);
       }
     } catch {
-      const looseParsed = parseLooseChoiceArray(payload, playerLang);
+      const looseParsed = parseLooseChoiceArray(payload, playerLang, { player, location });
       if (looseParsed.length > 0) return looseParsed.slice(0, CHOICE_OUTPUT_COUNT);
     }
   }
@@ -1556,27 +1812,29 @@ function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW') {
       const action = String(tagMatch[2] || '').trim();
       const desc = String(tagMatch[3] || '').trim();
       if (!action || !desc) continue;
-      parsed.push(normalizeChoiceByLanguage({
+      parsed.push(normalizeChoiceSemanticMeta(normalizeChoiceByLanguage({
         name: action,
         choice: desc,
         desc,
         tag: `[${tag}]`
-      }, playerLang));
+      }, playerLang), player, location));
       continue;
     }
     const content = line.replace(/^\d+\.?\s*/, '').trim();
     if (!content || content.length < 6) continue;
-    parsed.push(normalizeChoiceByLanguage({
+    parsed.push(normalizeChoiceSemanticMeta(normalizeChoiceByLanguage({
       name: content.slice(0, 15),
       choice: content,
       desc: content,
       tag: '[❓有驚喜]'
-    }, playerLang));
+    }, playerLang), player, location));
   }
   return parsed.slice(0, CHOICE_OUTPUT_COUNT);
 }
 
-function parseLooseChoiceArray(text = '', playerLang = 'zh-TW') {
+function parseLooseChoiceArray(text = '', playerLang = 'zh-TW', options = {}) {
+  const player = options?.player || null;
+  const location = String(options?.location || player?.location || '').trim();
   const source = String(text || '');
   if (!source) return [];
   const objectBlocks = source.match(/\{[\s\S]*?\}/g) || [];
@@ -1602,16 +1860,20 @@ function parseLooseChoiceArray(text = '', playerLang = 'zh-TW') {
     const choice = readField(block, ['choice', 'text', 'option', 'content', 'desc']);
     const desc = readField(block, ['desc', 'description', 'detail', 'choice', 'text']);
     const tag = readField(block, ['tag', 'risk', 'label']);
+    const styleTag = DYNAMIC_WORLD.normalizeStyleTag(readField(block, ['styleTag', 'style', 'mood']));
+    const action = readField(block, ['action', 'type']).slice(0, 40);
     const moveTo = normalizeMoveToLocation(
       readField(block, ['move_to', 'moveTo', 'destination', 'to'])
     );
     if (!choice || !tag) continue;
-    const normalized = normalizeChoiceByLanguage({
+    const normalized = normalizeChoiceSemanticMeta(normalizeChoiceByLanguage({
       name: name || choice.slice(0, 15),
       choice,
       desc: desc || choice,
       tag: tag.startsWith('[') ? tag : `[${tag}]`
-    }, playerLang);
+    }, playerLang), player, location);
+    if (styleTag) normalized.styleTag = normalizeOutputByLanguage(styleTag, playerLang);
+    if (action) normalized.action = action;
     if (moveTo) normalized.move_to = moveTo;
     out.push(normalized);
     if (out.length >= CHOICE_OUTPUT_COUNT) break;
@@ -1627,12 +1889,14 @@ function getChoiceFingerprint(choice = {}) {
   ].join(' '));
 }
 
-function mergeChoicePool(pool = [], incoming = [], playerLang = 'zh-TW') {
+function mergeChoicePool(pool = [], incoming = [], playerLang = 'zh-TW', options = {}) {
+  const player = options?.player || null;
+  const location = String(options?.location || player?.location || '').trim();
   const out = Array.isArray(pool) ? pool.filter(Boolean).slice(0, 30) : [];
   const seen = new Set(out.map(getChoiceFingerprint).filter(Boolean));
   for (const raw of Array.isArray(incoming) ? incoming : []) {
     if (!raw || typeof raw !== 'object') continue;
-    const choice = normalizeChoiceByLanguage(raw, playerLang);
+    const choice = normalizeChoiceSemanticMeta(normalizeChoiceByLanguage(raw, playerLang), player, location);
     if (!choice?.choice || !choice?.tag) continue;
     const fp = getChoiceFingerprint(choice);
     if (!fp || seen.has(fp)) continue;
@@ -2061,6 +2325,7 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
 // ========== 生成故事（帶記憶）============
 async function generateStory(event, player, pet, previousChoice, memoryContext = '') {
   const startedAt = Date.now();
+  DYNAMIC_WORLD.ensureDynamicWorldState(player);
   const location = player.location || '河港鎮';
   const playerName = player.name || '冒險者';
   const petName = pet?.name || '寵物';
@@ -2131,6 +2396,7 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
       ? '本輪接近戰鬥節奏點（4/5），可升高張力，先鋪備戰/追蹤/對峙。'
       : '本輪非強制衝突點，優先維持線索連續與地區推進。');
   const wantedPressure = getWantedPressure(player);
+  const dynamicWorldContext = DYNAMIC_WORLD.buildDynamicWorldContext(player, location, { playerLang: player?.language || 'zh-TW' });
   const nearbyHostile = getNearbyHostileNpcSummary(location, 3);
   const nearbyHostileHint = nearbyHostile.count > 0 ? nearbyHostile.names.join('、') : '（附近暫無明確敵對 NPC）';
   const npcs = RENAISS_NPCS[location] || [];
@@ -2253,6 +2519,7 @@ ${collectibleCulturePrompt}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
 戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格｜${battleCadenceHint}
 通緝熱度：${wantedPressure}（>=${WANTED_AMBUSH_MIN_LEVEL} 時，敵對勢力更可能主動接近）
+動態世界狀態：${dynamicWorldContext?.summary || '（無）'}
 附近敵對 NPC：${nearbyHostileHint}
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
@@ -2404,6 +2671,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 // ========== AI 生成選項（帶風險標籤+更具體）============
 async function generateChoicesWithAI(player, pet, previousStory, memoryContext = '') {
   const startedAt = Date.now();
+  DYNAMIC_WORLD.ensureDynamicWorldState(player);
   const newbieMask = isInNewbiePhase(player);
   const arcMeta = getLocationArcMeta(player);
   const location = player.location || '河港鎮';
@@ -2435,6 +2703,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
   const battleCadence = getBattleCadenceInfo(player);
   const wantedPressure = getWantedPressure(player);
+  const dynamicWorldContext = DYNAMIC_WORLD.buildDynamicWorldContext(player, location, { playerLang: player?.language || 'zh-TW' });
   const nearbyHostile = getNearbyHostileNpcSummary(location, 3);
   const nearbyHostileHint = nearbyHostile.count > 0 ? nearbyHostile.names.join('、') : '（附近暫無明確敵對 NPC）';
   const cadenceRequirement = battleCadence.dueConflict
@@ -2575,6 +2844,7 @@ ${collectibleCulturePrompt}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
 戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格
 通緝熱度：${wantedPressure}
+動態世界狀態：${dynamicWorldContext?.summary || '（無）'}
 附近敵對 NPC：${nearbyHostileHint}
 封存艙尺寸規格：便攜小型艙體（約小背包大小，可單人攜行）
 附近可互動地點：${nearbyHint}
@@ -2617,12 +2887,14 @@ ${anchorText}
 1. 每個選項要有創意！拒絕無聊！
 2. 5 個選項都要符合故事劇情發展，且與本段故事有因果關聯，不可出現平行無關支線
 3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
-   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]","move_to":"目的城市或空字串"}
+   {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]","move_to":"目的城市或空字串","styleTag":"穩健|交涉|灰線|強奪|追獵|佈局","hiddenMeta":{"law":-2..2,"harm":-2..2,"trust":-2..2,"selfInterest":-2..2,"targetFaction":"beacon|gray|digital|civic|none","witnessRisk":0..1}}
 3a. 不得少於 5 筆、不得輸出 null/空物件；就算資訊不足也要輸出完整 5 筆且保持合理
 3b. move_to 規則：只有「真的會移動到另一座城市」才填城市名（例如「洛陽城」）；非移動選項必須填空字串 ""
 3c. move_to 只能填地圖中的城市名，且要與該選項文案一致
 3d. move_to 自檢：若 choice 文案出現「前往/趕往/啟程去 + 城市名」，必須填同一城市；若只是城內行動（調查、詢問、監視、交易），move_to 必須是 ""
 3e. 禁止「文案寫跨城但 move_to 空白」與「move_to 有城市但文案沒提該城市」兩種錯誤
+3f. styleTag 必填，且僅能為：穩健、交涉、灰線、強奪、追獵、佈局
+3g. hiddenMeta 必填，且只作系統判讀，不要在文案中出現善惡分數字眼
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前人物、場景或衝突
 4a. ${destinationContinuityRule}
 5. 至少 1 個選項必須包含「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
@@ -2702,8 +2974,8 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
         unlimitedMaxTokens: true
       });
       const normalizedResult = normalizeOutputByLanguage(result, playerLang);
-      const parsedChoices = parseChoicesFromAIResult(normalizedResult, playerLang);
-      choicePool = mergeChoicePool(choicePool, parsedChoices, playerLang);
+      const parsedChoices = parseChoicesFromAIResult(normalizedResult, playerLang, { player, location });
+      choicePool = mergeChoicePool(choicePool, parsedChoices, playerLang, { player, location });
       const candidateChoices = pickTopChoicesFromPool(choicePool, {
         anchors: storyAnchors,
         location,
@@ -2740,8 +3012,17 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       }
     }
 
-    const safeChoices = (Array.isArray(validatedChoices) ? validatedChoices : [])
-      .map((choice) => canonicalizeKingCodenamesChoice(choice));
+    let safeChoices = (Array.isArray(validatedChoices) ? validatedChoices : [])
+      .map((choice) => normalizeChoiceSemanticMeta(canonicalizeKingCodenamesChoice(choice), player, location));
+    safeChoices = await injectDynamicWorldEventChoice(safeChoices, {
+      player,
+      playerLang,
+      location,
+      storyText: fullStoryText,
+      storyTail: storyFocus.tail,
+      stageGoal,
+      storyTurn: Math.max(0, Number(player?.storyTurns || 0))
+    });
     recordAIPerf('choices', Date.now() - startedAt);
     console.log(`[AI][generateChoicesWithAI] total ${Date.now() - startedAt}ms`);
     return safeChoices;
