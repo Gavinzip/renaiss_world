@@ -1,5 +1,6 @@
 function getRuntimeConstants(env = process.env) {
   const RESETDATA_PASSWORD = String(env.RESETDATA_PASSWORD || '0121').trim();
+  const ADMIN_OWNER_USER_ID = String(env.ADMIN_OWNER_USER_ID || '1051129116419702784').trim();
   const TELEPORT_DEVICE_COST = Math.max(0, Number(env.TELEPORT_DEVICE_COST || 200));
   const TELEPORT_DEVICE_DURATION_HOURS = Math.max(1, Number(env.TELEPORT_DEVICE_DURATION_HOURS || 6));
   const TELEPORT_DEVICE_STOCK_LIMIT = Math.max(1, Math.min(9999, Number(env.TELEPORT_DEVICE_STOCK_LIMIT || 999)));
@@ -91,6 +92,7 @@ function getRuntimeConstants(env = process.env) {
 
   return {
     RESETDATA_PASSWORD,
+    ADMIN_OWNER_USER_ID,
     TELEPORT_DEVICE_COST,
     TELEPORT_DEVICE_DURATION_HOURS,
     TELEPORT_DEVICE_STOCK_LIMIT,

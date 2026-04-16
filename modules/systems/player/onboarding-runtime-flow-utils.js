@@ -46,6 +46,109 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
   } = deps;
   const walletSyncInFlight = new Set();
 
+  function getWalletOnboardingText(lang = 'zh-TW') {
+    const code = String(lang || 'zh-TW').trim() || 'zh-TW';
+    const texts = {
+      'zh-TW': {
+        title: '💳 要先填錢包地址嗎？',
+        desc: '你可以現在選填 BSC 錢包地址。\n系統只會先暫存，等角色建立完成後才正式綁定並同步資產與可領 Rns。\n\n不填也沒關係，之後到設定再綁就可以。',
+        pendingDesc: (address) => `已暫存錢包地址：\`${address || 'unknown'}\`\n\n角色建立完成後，系統才會正式綁定並同步。`,
+        boundDesc: (address) => `偵測到既有錢包綁定紀錄：\`${address || 'unknown'}\`\n\n等你建立角色後，系統會直接同步這個錢包的資產。`,
+        bindNow: '💳 填入地址',
+        editNow: '✏️ 修改地址',
+        skipForNow: '⏭️ 先跳過',
+        continueSetup: '➡️ 繼續建立角色',
+        walletField: '💡 提示',
+        walletFieldValue: '現在填只會先暫存；角色建立完成後才正式寫入。',
+        modalTitle: '💳 暫存錢包地址',
+        modalLabel: 'BSC 錢包地址',
+        modalPlaceholder: '0x...',
+        invalidAddress: '無效的 BSC 錢包地址格式！'
+      },
+      'zh-CN': {
+        title: '💳 要先填钱包地址吗？',
+        desc: '你可以现在选填 BSC 钱包地址。\n系统只会先暂存，等角色创建完成后才正式绑定并同步资产与可领 Rns。\n\n不填也没关系，之后到设置再绑就可以。',
+        pendingDesc: (address) => `已暂存钱包地址：\`${address || 'unknown'}\`\n\n角色创建完成后，系统才会正式绑定并同步。`,
+        boundDesc: (address) => `检测到既有钱包绑定记录：\`${address || 'unknown'}\`\n\n等你创建角色后，系统会直接同步这个钱包的资产。`,
+        bindNow: '💳 填入地址',
+        editNow: '✏️ 修改地址',
+        skipForNow: '⏭️ 先跳过',
+        continueSetup: '➡️ 继续创建角色',
+        walletField: '💡 提示',
+        walletFieldValue: '现在填只会先暂存；角色创建完成后才正式写入。',
+        modalTitle: '💳 暂存钱包地址',
+        modalLabel: 'BSC 钱包地址',
+        modalPlaceholder: '0x...',
+        invalidAddress: '无效的 BSC 钱包地址格式！'
+      },
+      en: {
+        title: '💳 Add Wallet Address Now?',
+        desc: 'You can optionally enter your BSC wallet address now.\nThe system will only store it temporarily, and will bind it for real after character creation finishes.\n\nYou can also skip this and bind it later in Settings.',
+        pendingDesc: (address) => `Wallet address saved temporarily: \`${address || 'unknown'}\`\n\nIt will be formally bound after character creation finishes.`,
+        boundDesc: (address) => `Existing wallet binding detected: \`${address || 'unknown'}\`\n\nOnce you finish character creation, the system will sync assets from this wallet.`,
+        bindNow: '💳 Add Address',
+        editNow: '✏️ Edit Address',
+        skipForNow: '⏭️ Skip for Now',
+        continueSetup: '➡️ Continue Setup',
+        walletField: '💡 Note',
+        walletFieldValue: 'The address is only staged during onboarding; formal binding happens after character creation.',
+        modalTitle: '💳 Save Wallet Address',
+        modalLabel: 'BSC Wallet Address',
+        modalPlaceholder: '0x...',
+        invalidAddress: 'Invalid BSC wallet address format.'
+      }
+    };
+    return texts[code] || texts['zh-TW'];
+  }
+
+  function getPendingOnboardingWalletAddress(userId) {
+    const raw = getPlayerTempData(userId, 'onboardingWalletAddress');
+    if (typeof WALLET.normalizeWalletAddress === 'function') {
+      return WALLET.normalizeWalletAddress(raw);
+    }
+    return String(raw || '').trim().toLowerCase();
+  }
+
+  function buildOnboardingWalletPrompt(user, lang = 'zh-TW') {
+    const text = getWalletOnboardingText(lang);
+    const boundWalletAddress = WALLET.getWalletAddress(user.id) || '';
+    const pendingWalletAddress = boundWalletAddress ? '' : getPendingOnboardingWalletAddress(user.id);
+    const hasFormalWallet = Boolean(boundWalletAddress);
+    const hasPendingWallet = Boolean(pendingWalletAddress);
+    const displayAddress = boundWalletAddress || pendingWalletAddress;
+
+    const embed = new EmbedBuilder()
+      .setTitle(text.title)
+      .setColor(hasFormalWallet || hasPendingWallet ? 0x10b981 : 0xffd700)
+      .setDescription(
+        hasFormalWallet
+          ? text.boundDesc(displayAddress)
+          : hasPendingWallet
+            ? text.pendingDesc(displayAddress)
+            : text.desc
+      )
+      .addFields({ name: text.walletField, value: text.walletFieldValue, inline: false });
+
+    const buttons = hasFormalWallet
+      ? [
+          new ButtonBuilder().setCustomId('continue_with_wallet').setLabel(text.continueSetup).setStyle(ButtonStyle.Primary)
+        ]
+      : hasPendingWallet
+        ? [
+            new ButtonBuilder().setCustomId('continue_with_wallet').setLabel(text.continueSetup).setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('open_wallet_modal_onboarding').setLabel(text.editNow).setStyle(ButtonStyle.Secondary)
+          ]
+        : [
+            new ButtonBuilder().setCustomId('open_wallet_modal_onboarding').setLabel(text.bindNow).setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('continue_with_wallet').setLabel(text.skipForNow).setStyle(ButtonStyle.Secondary)
+          ];
+
+    return {
+      embed,
+      row: new ActionRowBuilder().addComponents(buttons)
+    };
+  }
+
   async function showWalletBindModal(interaction) {
     const modal = new ModalBuilder()
       .setCustomId('wallet_bind_modal')
@@ -55,6 +158,24 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       .setCustomId('wallet_address')
       .setLabel('BSC 錢包地址')
       .setPlaceholder('0x...')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+    await interaction.showModal(modal);
+  }
+
+  async function showOnboardingWalletBindModal(interaction, user) {
+    const selectedLang = getPlayerTempData(user?.id, 'language') || 'zh-TW';
+    const text = getWalletOnboardingText(selectedLang);
+    const modal = new ModalBuilder()
+      .setCustomId('wallet_bind_modal_onboarding')
+      .setTitle(text.modalTitle);
+
+    const input = new TextInputBuilder()
+      .setCustomId('wallet_address')
+      .setLabel(text.modalLabel)
+      .setPlaceholder(text.modalPlaceholder)
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
@@ -242,6 +363,38 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     syncWalletInBackground(interaction, user, result.address);
   }
 
+  async function handleOnboardingWalletBind(interaction, user) {
+    const selectedLang = getPlayerTempData(user.id, 'language') || 'zh-TW';
+    const text = getWalletOnboardingText(selectedLang);
+    const existingWalletAddress = WALLET.getWalletAddress(user.id) || '';
+    if (existingWalletAddress) {
+      const prompt = buildOnboardingWalletPrompt(user, selectedLang);
+      await interaction.update({ embeds: [prompt.embed], components: [prompt.row] }).catch(async () => {
+        await interaction.reply({ embeds: [prompt.embed], components: [prompt.row], ephemeral: true }).catch(() => {});
+      });
+      return;
+    }
+
+    const walletAddress = interaction.fields.getTextInputValue('wallet_address').trim();
+    const normalizedAddress = typeof WALLET.normalizeWalletAddress === 'function'
+      ? WALLET.normalizeWalletAddress(walletAddress)
+      : String(walletAddress || '').toLowerCase().trim();
+    const isValid = typeof WALLET.isValidWalletAddressFormat === 'function'
+      ? WALLET.isValidWalletAddressFormat(normalizedAddress)
+      : /^0x[a-fA-F0-9]{40}$/.test(normalizedAddress);
+
+    if (!isValid) {
+      await interaction.reply({ content: `❌ ${text.invalidAddress}`, ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    setPlayerTempData(user.id, 'onboardingWalletAddress', normalizedAddress);
+    const prompt = buildOnboardingWalletPrompt(user, selectedLang);
+    await interaction.update({ embeds: [prompt.embed], components: [prompt.row] }).catch(async () => {
+      await interaction.reply({ embeds: [prompt.embed], components: [prompt.row], ephemeral: true }).catch(() => {});
+    });
+  }
+
   async function handleWalletSyncNow(interaction, user) {
     const userId = String(user?.id || '').trim();
     const alreadyRunning = walletSyncInFlight.has(userId);
@@ -302,7 +455,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
   async function sendOnboardingLanguageSelection(interaction, user, options = {}) {
     const walletBound = WALLET.isWalletBound(user.id);
     const walletNote = walletBound
-      ? '✅ 已綁定錢包：建立角色時會帶入目前錢包資產。'
+      ? '✅ 偵測到既有錢包綁定紀錄：建立角色後會直接同步。'
       : 'ℹ️ 尚未綁定錢包：你可以先玩，之後到設定綁定並即時入帳。';
 
     const langEmbed = new EmbedBuilder()
@@ -330,22 +483,46 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     await interaction.channel.send({ embeds: [langEmbed], components: [langRow] }).catch(() => {});
   }
 
+  async function sendOnboardingWalletPrompt(interaction, user, lang = 'zh-TW', options = {}) {
+    const prompt = buildOnboardingWalletPrompt(user, lang);
+
+    if (options.replaceCurrent) {
+      await interaction.update({ embeds: [prompt.embed], components: [prompt.row] }).catch(async () => {
+        await interaction.reply({ embeds: [prompt.embed], components: [prompt.row], ephemeral: true }).catch(() => {});
+      });
+      return;
+    }
+
+    await interaction.channel.send({ embeds: [prompt.embed], components: [prompt.row] }).catch(() => {});
+  }
+
   async function handleContinueWithWalletButton(interaction, user) {
     const threadChannel = interaction.channel;
 
     const player = CORE.loadPlayer(user.id);
     if (player) {
-      await interaction.deferUpdate().catch(() => {});
+      await interaction.update({ components: [] }).catch(async () => {
+        await interaction.deferUpdate().catch(() => {});
+      });
       await showMainMenu(interaction, player, PET.loadPet(user.id));
       return;
     }
 
-    await interaction.deferUpdate().catch(() => {});
+    await interaction.update({ components: [] }).catch(async () => {
+      await interaction.deferUpdate().catch(() => {});
+    });
 
     try {
       const selectedLang = getPlayerTempData(user.id, 'language') || 'zh-TW';
       const payload = buildGenderSelectionPayload(selectedLang, user.username);
-      payload.embed.addFields({ name: '💳 錢包同步', value: '角色建立後自動同步並立即入帳', inline: true });
+      const boundWalletAddress = WALLET.getWalletAddress(user.id) || '';
+      const pendingWalletAddress = boundWalletAddress ? '' : getPendingOnboardingWalletAddress(user.id);
+      const walletNote = boundWalletAddress
+        ? '偵測到既有綁定紀錄，建角後會直接同步'
+        : pendingWalletAddress
+          ? `已暫存地址 ${pendingWalletAddress.slice(0, 6)}...${pendingWalletAddress.slice(-4)}，建角後才正式綁定`
+          : '本次未填寫，之後可到設定補綁';
+      payload.embed.addFields({ name: '💳 錢包處理', value: walletNote, inline: true });
 
       await threadChannel.send({
         embeds: [payload.embed],
@@ -453,12 +630,34 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     player.eventChoices = [];
     CORE.savePlayer(player);
     let startupWalletCredit = 0;
-    if (WALLET.isWalletBound(user.id)) {
+    let boundWalletAddress = WALLET.getWalletAddress(user.id) || '';
+    const onboardingWalletAddress = boundWalletAddress ? '' : getPendingOnboardingWalletAddress(user.id);
+    let walletBindingText = boundWalletAddress
+      ? `沿用既有綁定：\`${boundWalletAddress}\``
+      : '本次未填寫，可之後到設定補綁';
+    let walletSyncText = '本次未綁定錢包';
+
+    if (!boundWalletAddress && onboardingWalletAddress) {
+      const bindResult = WALLET.bindWallet(user.id, onboardingWalletAddress);
+      if (bindResult?.success) {
+        boundWalletAddress = bindResult.address;
+        walletBindingText = `已正式綁定：\`${bindResult.address}\``;
+      } else {
+        walletBindingText = `暫存地址未能正式綁定：${bindResult?.reason || '未知錯誤'}`;
+        walletSyncText = '錢包未同步，請稍後到設定重試';
+      }
+    }
+
+    if (boundWalletAddress) {
       try {
         const walletSync = await syncWalletAndApplyNow(user.id);
         startupWalletCredit = Math.max(0, Number(walletSync?.creditedNow || 0));
+        walletSyncText = startupWalletCredit > 0
+          ? `本次已入帳 ${startupWalletCredit} Rns`
+          : '已完成首次同步，本次無新增可領';
       } catch (walletSyncErr) {
         console.error('[錢包] 建角後首次同步失敗:', walletSyncErr?.message || walletSyncErr);
+        walletSyncText = '已綁定，但首次同步失敗，之後可到設定手動同步';
       }
     }
 
@@ -528,7 +727,8 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
         { name: t('gold', uiLang), value: String(player.stats.財富), inline: true }
       )
       .addFields(
-        { name: '💳 錢包入帳', value: startupWalletCredit > 0 ? `本次已入帳 ${startupWalletCredit} Rns` : '本次無新增可領', inline: false }
+        { name: '💳 錢包綁定', value: walletBindingText, inline: false },
+        { name: '💰 錢包同步', value: walletSyncText, inline: false }
       )
       .addFields(
         { name: '✨ 開局天賦', value: `${tierMeta.emoji} ${selectedMove.name}｜${tierMeta.name}（機率 ${tierMeta.rate}）`, inline: false },
@@ -832,11 +1032,14 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
 
   return {
     showWalletBindModal,
+    showOnboardingWalletBindModal,
     syncWalletAndApplyNow,
     syncWalletInBackground,
     handleWalletBind,
+    handleOnboardingWalletBind,
     handleWalletSyncNow,
     sendOnboardingLanguageSelection,
+    sendOnboardingWalletPrompt,
     handleContinueWithWalletButton,
     handleLegacyAlignmentChoice,
     handleChooseGender,

@@ -63,8 +63,10 @@ function initCommandInteractionWiring(deps = {}) {
     showWorldShopHaggleOffer,
     showWorldShopHaggleAllOffer,
     showWalletBindModal,
+    showOnboardingWalletBindModal,
     handleWalletSyncNow,
     handleWalletBind,
+    handleOnboardingWalletBind,
     normalizeFriendId,
     createFriendRequest,
     getPlayerDisplayNameById,
@@ -160,8 +162,10 @@ function initCommandInteractionWiring(deps = {}) {
 
   const WALLET_INTERACTION_UTILS = createWalletInteractionUtils({
     showWalletBindModal,
+    showOnboardingWalletBindModal,
     handleWalletSyncNow,
-    handleWalletBind
+    handleWalletBind,
+    handleOnboardingWalletBind
   });
   const { handleWalletInteractions } = WALLET_INTERACTION_UTILS;
 

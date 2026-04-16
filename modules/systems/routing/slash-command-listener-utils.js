@@ -21,10 +21,10 @@ function createSlashCommandListenerUtils() {
         if (commandName === 'start') await handleStart(interaction, user);
         if (commandName === 'warstatus') await handleWarStatus(interaction);
         if (commandName === 'resetdata') await handleResetData(interaction, user);
-        if (commandName === 'resetplayerhistory') await handleResetPlayerHistory(interaction);
-        if (commandName === 'resetworld') await handleResetWorld(interaction);
+        if (commandName === 'resetplayerhistory') await handleResetPlayerHistory(interaction, user);
+        if (commandName === 'resetworld') await handleResetWorld(interaction, user);
         if (commandName === 'backupworld') await handleBackupWorld(interaction, user);
-        if (commandName === 'backupcheck') await handleBackupCheck(interaction);
+        if (commandName === 'backupcheck') await handleBackupCheck(interaction, user);
         if (commandName === 'pullworlddata') await handlePullWorldData(interaction, user);
         if (commandName === 'interactioncoverage') await handleInteractionCoverage(interaction, user);
       } catch (err) {

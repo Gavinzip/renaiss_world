@@ -1,7 +1,8 @@
 function createInteractionMessageUtils() {
   const ALWAYS_KEEP_VISIBLE_BUTTONS = new Set([
     'open_friend_add_modal',
-    'open_wallet_modal'
+    'open_wallet_modal',
+    'open_wallet_modal_onboarding'
   ]);
 
   const shouldKeepModalLauncherVisible = (() => {

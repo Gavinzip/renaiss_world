@@ -1,7 +1,22 @@
-const SLASH_COMMANDS = [
+const { PermissionFlagsBits } = require('discord.js');
+
+const OWNER_ONLY_DEFAULT_PERMISSIONS = String(PermissionFlagsBits.Administrator);
+
+function withOwnerOnlyVisibility(command) {
+  return {
+    dm_permission: false,
+    default_member_permissions: OWNER_ONLY_DEFAULT_PERMISSIONS,
+    ...command
+  };
+}
+
+const PUBLIC_SLASH_COMMANDS = [
   { name: 'start', description: '開始你的Renaiss星球冒險！（有存檔則繼續）' },
-  { name: 'warstatus', description: '查看正派與 Digital 張力、勢力值與最近三次衝突' },
-  {
+  { name: 'warstatus', description: '查看正派與 Digital 張力、勢力值與最近三次衝突' }
+];
+
+const ADMIN_SLASH_COMMANDS = [
+  withOwnerOnlyVisibility({
     name: 'resetdata',
     description: '清空角色資料（需密碼）',
     options: [
@@ -22,8 +37,8 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
-  },
-  {
+  }),
+  withOwnerOnlyVisibility({
     name: 'resetplayerhistory',
     description: '清空指定玩家全部角色資料（需密碼）',
     options: [
@@ -40,8 +55,8 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
-  },
-  {
+  }),
+  withOwnerOnlyVisibility({
     name: 'resetworld',
     description: '清空世界事件或重置整個世界（需密碼）',
     options: [
@@ -62,8 +77,8 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
-  },
-  {
+  }),
+  withOwnerOnlyVisibility({
     name: 'backupworld',
     description: '手動備份世界/玩家/記憶資料到備份 Git（需密碼）',
     options: [
@@ -80,8 +95,8 @@ const SLASH_COMMANDS = [
         required: false
       }
     ]
-  },
-  {
+  }),
+  withOwnerOnlyVisibility({
     name: 'backupcheck',
     description: '檢查備份環境變數是否被程式讀到（需密碼）',
     options: [
@@ -92,8 +107,8 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
-  },
-  {
+  }),
+  withOwnerOnlyVisibility({
     name: 'pullworlddata',
     description: '從遠端備份 Git 拉最新資料並覆蓋伺服器資料（需密碼）',
     options: [
@@ -104,8 +119,8 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
-  },
-  {
+  }),
+  withOwnerOnlyVisibility({
     name: 'interactioncoverage',
     description: '查看或重置互動按鈕覆蓋報表（需密碼）',
     options: [
@@ -126,9 +141,13 @@ const SLASH_COMMANDS = [
         required: true
       }
     ]
-  }
+  })
 ];
 
+const SLASH_COMMANDS = [...PUBLIC_SLASH_COMMANDS, ...ADMIN_SLASH_COMMANDS];
+
 module.exports = {
+  PUBLIC_SLASH_COMMANDS,
+  ADMIN_SLASH_COMMANDS,
   SLASH_COMMANDS
 };

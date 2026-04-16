@@ -28,6 +28,7 @@ function initAdminRuntimeSystems(deps = {}) {
     STORY_GEN_LOCKS,
     STORY_GEN_LOCK_TTL_MS,
     RESETDATA_PASSWORD,
+    ADMIN_OWNER_USER_ID,
     PLAYERS_DIR,
     PETS_FILE,
     PLAYER_THREADS_FILE,
@@ -170,6 +171,7 @@ function initAdminRuntimeSystems(deps = {}) {
 
   const SLASH_ADMIN_UTILS = createSlashAdminUtils({
     RESETDATA_PASSWORD,
+    ADMIN_OWNER_USER_ID,
     clearAllCharacterData,
     clearSelfCharacterData,
     clearTargetPlayerAllData,

@@ -5,7 +5,8 @@ function createReadyCommandRegisterUtils(deps = {}) {
     startWorldBackupScheduler = () => {},
     notifyWorldBackupSuccess = async () => {},
     startAutoTick = () => {},
-    commands = []
+    commands = [],
+    publicCommands = []
   } = deps;
 
   function registerReadyHandlers() {
@@ -20,7 +21,7 @@ function createReadyCommandRegisterUtils(deps = {}) {
       startWorldBackupScheduler(notifyWorldBackupSuccess);
 
       try {
-        await CLIENT.application.commands.set(commands);
+        await CLIENT.application.commands.set(publicCommands);
         console.log('[Slash] 全球指令已註冊');
       } catch (e) {
         console.log('[Slash] 全球註冊失敗:', e.message);

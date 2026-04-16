@@ -1,6 +1,7 @@
 function createSlashAdminUtils(deps = {}) {
   const {
     RESETDATA_PASSWORD = '0121',
+    ADMIN_OWNER_USER_ID = '1051129116419702784',
     clearAllCharacterData = () => ({}),
     clearSelfCharacterData = () => ({}),
     clearTargetPlayerAllData = () => ({}),
@@ -16,6 +17,14 @@ function createSlashAdminUtils(deps = {}) {
     EmbedBuilder
   } = deps;
 
+  async function rejectIfNotAdminOwner(interaction, user) {
+    const userId = String(user?.id || '').trim();
+    const ownerId = String(ADMIN_OWNER_USER_ID || '').trim();
+    if (!ownerId || userId === ownerId) return false;
+    await interaction.reply({ content: '⛔ 你沒有權限使用這個指令。', ephemeral: true }).catch(() => {});
+    return true;
+  }
+
   function normalizeBackupNote(note = '') {
     return String(note || '')
       .trim()
@@ -25,6 +34,7 @@ function createSlashAdminUtils(deps = {}) {
   }
 
   async function handleResetData(interaction, user) {
+    if (await rejectIfNotAdminOwner(interaction, user)) return;
     const scope = String(interaction.options.getString('scope') || 'self').trim().toLowerCase();
     const password = String(interaction.options.getString('password') || '').trim();
 
@@ -69,7 +79,8 @@ function createSlashAdminUtils(deps = {}) {
     });
   }
 
-  async function handleResetPlayerHistory(interaction) {
+  async function handleResetPlayerHistory(interaction, user) {
+    if (await rejectIfNotAdminOwner(interaction, user)) return;
     const playerId = String(interaction.options.getString('player_id') || '').trim();
     const password = String(interaction.options.getString('password') || '').trim();
 
@@ -98,7 +109,8 @@ function createSlashAdminUtils(deps = {}) {
     });
   }
 
-  async function handleResetWorld(interaction) {
+  async function handleResetWorld(interaction, user) {
+    if (await rejectIfNotAdminOwner(interaction, user)) return;
     const mode = String(interaction.options.getString('mode') || 'events').trim().toLowerCase();
     const password = String(interaction.options.getString('password') || '').trim();
 
@@ -124,6 +136,7 @@ function createSlashAdminUtils(deps = {}) {
   }
 
   async function handleBackupWorld(interaction, user) {
+    if (await rejectIfNotAdminOwner(interaction, user)) return;
     const password = String(interaction.options.getString('password') || '').trim();
     const noteRaw = String(interaction.options.getString('note') || '').trim();
 
@@ -170,7 +183,8 @@ function createSlashAdminUtils(deps = {}) {
     });
   }
 
-  async function handleBackupCheck(interaction) {
+  async function handleBackupCheck(interaction, user) {
+    if (await rejectIfNotAdminOwner(interaction, user)) return;
     const password = String(interaction.options.getString('password') || '').trim();
     if (password !== RESETDATA_PASSWORD) {
       await interaction.reply({ content: '❌ 密碼錯誤，無法查看備份狀態。', ephemeral: true });
@@ -202,6 +216,7 @@ function createSlashAdminUtils(deps = {}) {
   }
 
   async function handlePullWorldData(interaction, user) {
+    if (await rejectIfNotAdminOwner(interaction, user)) return;
     const password = String(interaction.options.getString('password') || '').trim();
     if (password !== RESETDATA_PASSWORD) {
       await interaction.reply({ content: '❌ 密碼錯誤，無法拉取遠端資料。', ephemeral: true });
@@ -247,7 +262,8 @@ function createSlashAdminUtils(deps = {}) {
     return out || '（無）';
   }
 
-  async function handleInteractionCoverage(interaction) {
+  async function handleInteractionCoverage(interaction, user) {
+    if (await rejectIfNotAdminOwner(interaction, user)) return;
     const mode = String(interaction.options.getString('mode') || 'view').trim().toLowerCase();
     const password = String(interaction.options.getString('password') || '').trim();
     if (password !== RESETDATA_PASSWORD) {

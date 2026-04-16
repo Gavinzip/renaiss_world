@@ -39,6 +39,7 @@ const SCRATCH_LOTTERY_FILE = path.join(DATA_DIR, 'scratch_lottery.json');
 const INTERACTION_COVERAGE_FILE = path.join(DATA_DIR, 'interaction_coverage.json');
 const {
   RESETDATA_PASSWORD,
+  ADMIN_OWNER_USER_ID,
   TELEPORT_DEVICE_COST,
   TELEPORT_DEVICE_DURATION_HOURS,
   TELEPORT_DEVICE_STOCK_LIMIT,
@@ -193,7 +194,7 @@ const { createBattleCoreUtils } = require('./modules/systems/battle/battle-core-
 const { createGachaSlotUtils } = require('./modules/systems/gacha/gacha-slot-utils');
 const { createReadyCommandRegisterUtils } = require('./modules/systems/runtime/ready-command-register-utils');
 const { createUiTextUtils } = require('./modules/systems/runtime/ui-text-utils');
-const { SLASH_COMMANDS } = require('./modules/systems/runtime/slash-commands');
+const { SLASH_COMMANDS, PUBLIC_SLASH_COMMANDS } = require('./modules/systems/runtime/slash-commands');
 const { initGameFeatureSystems } = require('./modules/systems/runtime/init-game-feature-systems');
 const { initCommandInteractionWiring } = require('./modules/systems/runtime/init-command-interaction-wiring');
 const { registerRuntimeHandlers } = require('./modules/systems/runtime/register-runtime-handlers');
@@ -1082,6 +1083,7 @@ const ADMIN_RUNTIME_SYSTEMS = initAdminRuntimeSystems({
   STORY_GEN_LOCKS,
   STORY_GEN_LOCK_TTL_MS,
   RESETDATA_PASSWORD,
+  ADMIN_OWNER_USER_ID,
   PLAYERS_DIR,
   PETS_FILE,
   PLAYER_THREADS_FILE,
@@ -1395,6 +1397,7 @@ const {
   handleWalletBind,
   handleWalletSyncNow,
   sendOnboardingLanguageSelection,
+  sendOnboardingWalletPrompt,
   handleContinueWithWalletButton,
   handleLegacyAlignmentChoice,
   handleChooseGender,
@@ -1501,7 +1504,8 @@ const READY_COMMAND_REGISTER_UTILS = createReadyCommandRegisterUtils({
   startWorldBackupScheduler: (...args) => startWorldBackupScheduler(...args),
   notifyWorldBackupSuccess: (...args) => notifyWorldBackupSuccess(...args),
   startAutoTick: (...args) => startAutoTick(...args),
-  commands: SLASH_COMMANDS
+  commands: SLASH_COMMANDS,
+  publicCommands: PUBLIC_SLASH_COMMANDS
 });
 const { registerReadyHandlers } = READY_COMMAND_REGISTER_UTILS;
 

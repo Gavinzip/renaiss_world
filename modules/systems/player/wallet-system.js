@@ -67,9 +67,9 @@ async function flushWalletSettings() {
 
 // ============== 綁定錢包地址 ==============
 function bindWallet(discordUserId, walletAddress) {
-  const normalizedAddress = walletAddress.toLowerCase().trim();
+  const normalizedAddress = normalizeWalletAddress(walletAddress);
   
-  if (!/^0x[a-fA-F0-9]{40}$/.test(normalizedAddress)) {
+  if (!isValidWalletAddressFormat(normalizedAddress)) {
     return { success: false, reason: '無效的 BSC 錢包地址格式！' };
   }
   
@@ -118,6 +118,10 @@ function parseFmvUSD(card) {
 
 function normalizeWalletAddress(walletAddress) {
   return String(walletAddress || '').toLowerCase().trim();
+}
+
+function isValidWalletAddressFormat(walletAddress) {
+  return /^0x[a-fA-F0-9]{40}$/.test(normalizeWalletAddress(walletAddress));
 }
 
 function dedupeCollectibles(rows) {
@@ -696,6 +700,8 @@ module.exports = {
   deleteWalletBinding,
   flushWalletSettings,
   bindWallet,
+  normalizeWalletAddress,
+  isValidWalletAddressFormat,
   getWalletAddress,
   fetchCardFMV,
   fetchUSDTTransfers,

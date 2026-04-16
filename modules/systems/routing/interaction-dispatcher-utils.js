@@ -39,6 +39,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     handleChoosePetElement,
     handleLegacyAlignmentChoice,
     sendOnboardingLanguageSelection,
+    sendOnboardingWalletPrompt,
     handleHatchEgg,
     handleDrawMove,
     showFriendsMenu,
@@ -469,14 +470,8 @@ CLIENT.on('interactionCreate', async (interaction) => {
     const lang = customId.replace('select_lang_', '');
     // 儲存語言到內存，等創建角色後寫入
     setPlayerTempData(user.id, 'language', lang);
-    
-    // 立即鎖住本則語言按鈕，避免重複觸發
-    await interaction.update({ components: [] }).catch(async () => {
-      await interaction.deferUpdate().catch(() => {});
-    });
-    
-    const payload = buildGenderSelectionPayload(lang, user.username);
-    await interaction.channel.send({ embeds: [payload.embed], components: [payload.row] });
+
+    await sendOnboardingWalletPrompt(interaction, user, lang, { replaceCurrent: true });
     return;
   }
   
