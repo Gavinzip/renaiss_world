@@ -345,6 +345,9 @@ function initBattleRuntimeDomain(deps = {}) {
     publishBattleWorldEvent,
     ensureBattleEnergyState,
     resolvePlayerMainPet,
+    canPetFight,
+    getPlayerOwnedPets,
+    recordCashflow,
     renderManualBattle: (...args) => renderManualBattle(...args),
     formatRecoveryTurnsShort
   });

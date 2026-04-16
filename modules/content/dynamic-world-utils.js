@@ -1,3 +1,7 @@
+const {
+  computeAlignmentProfileFromDynamicState
+} = require('./alignment-profile-utils');
+
 function clampNumber(value, min, max, fallback = min) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
@@ -29,6 +33,8 @@ function normalizeStyleTag(raw = '') {
   return clean.slice(0, 8);
 }
 
+const SECRET_REALM_COOLDOWN_TURNS = clampInt(process.env.SECRET_REALM_COOLDOWN_TURNS, 3, 30, 8);
+
 function buildDefaultState() {
   return {
     factionRep: {
@@ -47,7 +53,8 @@ function buildDefaultState() {
     pressureByLocation: {},
     recentEvents: [],
     activeChainByLocation: {},
-    lastGeneratedTurn: 0
+    lastGeneratedTurn: 0,
+    lastSecretRealmTurn: 0
   };
 }
 
@@ -113,6 +120,7 @@ function ensureDynamicWorldState(player = null) {
   }
 
   state.lastGeneratedTurn = Math.max(0, Number(raw.lastGeneratedTurn || 0));
+  state.lastSecretRealmTurn = Math.max(0, Number(raw.lastSecretRealmTurn || 0));
 
   player.dynamicWorld = state;
   const after = JSON.stringify(state);
@@ -283,10 +291,11 @@ function applyChoiceConsequences(player = null, choice = {}, options = {}) {
   state.wantedByLocation[location] = nextWanted;
   state.pressureByLocation[location] = nextPressure;
 
+  const alignment = computeAlignmentProfileFromDynamicState(state, location);
   const topWanted = Object.values(state.wantedByLocation)
     .map((v) => Math.max(0, Number(v || 0)))
     .reduce((acc, cur) => Math.max(acc, cur), 0);
-  player.wanted = Math.max(0, Math.floor(topWanted));
+  player.wanted = Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0));
 
   return {
     changed: true,
@@ -340,10 +349,18 @@ function advanceDynamicStateTurn(player = null, options = {}) {
     }
   }
 
+  const alignment = computeAlignmentProfileFromDynamicState(state, location);
   const topWanted = Object.values(state.wantedByLocation)
     .map((v) => Math.max(0, Number(v || 0)))
     .reduce((acc, cur) => Math.max(acc, cur), 0);
-  player.wanted = Math.max(0, Math.floor(topWanted));
+  if (location) {
+    const wantedFloor = Math.max(0, Number(alignment.wantedFloor || 0));
+    const localWanted = Math.max(0, Number(state.wantedByLocation[location] || 0));
+    if (localWanted < wantedFloor) {
+      state.wantedByLocation[location] = wantedFloor;
+    }
+  }
+  player.wanted = Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0));
 
   return {
     changed: true,
@@ -362,6 +379,7 @@ function buildDynamicWorldContext(player = null, location = '', options = {}) {
   const axes = state.moralityAxes;
   const wanted = Math.max(0, Number(state.wantedByLocation[loc] || 0));
   const pressure = Math.max(0, Number(state.pressureByLocation[loc] || 0));
+  const alignment = computeAlignmentProfileFromDynamicState(state, loc);
   const recent = state.recentEvents
     .filter((row) => row.location === loc)
     .slice(-3)
@@ -371,23 +389,24 @@ function buildDynamicWorldContext(player = null, location = '', options = {}) {
 
   const playerLang = String(options.playerLang || 'zh-TW').trim();
   if (playerLang === 'en') {
+    const summary = `Dynamic pressure=${pressure.toFixed(2)} | local wanted=${wanted.toFixed(2)} | rep(beacon/gray/digital/civic)=${rep.beacon}/${rep.gray}/${rep.digital}/${rep.civic} | morality(law/harm/trust/self)=${axes.law}/${axes.harm}/${axes.trust}/${axes.selfInterest}${recent.length > 0 ? ` | recent=${recent.join('>')}` : ''}${chain?.archetype ? ` | chain=${chain.archetype}#${chain.stage}` : ''} | alignment(good/bad)=${alignment.goodScore}/${alignment.badScore}`;
     return {
       pressure,
       wanted,
-      summary: `Dynamic pressure=${pressure.toFixed(2)} | local wanted=${wanted.toFixed(2)} | rep(beacon/gray/digital/civic)=${rep.beacon}/${rep.gray}/${rep.digital}/${rep.civic} | morality(law/harm/trust/self)=${axes.law}/${axes.harm}/${axes.trust}/${axes.selfInterest}${recent.length > 0 ? ` | recent=${recent.join('>')}` : ''}${chain?.archetype ? ` | chain=${chain.archetype}#${chain.stage}` : ''}`
+      summary
     };
   }
   if (playerLang === 'zh-CN') {
     return {
       pressure,
       wanted,
-      summary: `动态压力=${pressure.toFixed(2)}｜本区通缉热度=${wanted.toFixed(2)}｜阵营声望(联/灰/Digital/市民)=${rep.beacon}/${rep.gray}/${rep.digital}/${rep.civic}｜倾向(合法/伤害/守信/利己)=${axes.law}/${axes.harm}/${axes.trust}/${axes.selfInterest}${recent.length > 0 ? `｜最近事件=${recent.join('>')}` : ''}${chain?.archetype ? `｜事件链=${chain.archetype}#${chain.stage}` : ''}`
+      summary: `动态压力=${pressure.toFixed(2)}｜本区通缉热度=${wanted.toFixed(2)}｜阵营声望(联/灰/Digital/市民)=${rep.beacon}/${rep.gray}/${rep.digital}/${rep.civic}｜倾向(合法/伤害/守信/利己)=${axes.law}/${axes.harm}/${axes.trust}/${axes.selfInterest}｜善恶分=${alignment.goodScore}/${alignment.badScore}${recent.length > 0 ? `｜最近事件=${recent.join('>')}` : ''}${chain?.archetype ? `｜事件链=${chain.archetype}#${chain.stage}` : ''}`
     };
   }
   return {
     pressure,
     wanted,
-    summary: `動態壓力=${pressure.toFixed(2)}｜本區通緝熱度=${wanted.toFixed(2)}｜陣營聲望(聯/灰/Digital/市民)=${rep.beacon}/${rep.gray}/${rep.digital}/${rep.civic}｜傾向(合法/傷害/守信/利己)=${axes.law}/${axes.harm}/${axes.trust}/${axes.selfInterest}${recent.length > 0 ? `｜最近事件=${recent.join('>')}` : ''}${chain?.archetype ? `｜事件鏈=${chain.archetype}#${chain.stage}` : ''}`
+    summary: `動態壓力=${pressure.toFixed(2)}｜本區通緝熱度=${wanted.toFixed(2)}｜陣營聲望(聯/灰/Digital/市民)=${rep.beacon}/${rep.gray}/${rep.digital}/${rep.civic}｜傾向(合法/傷害/守信/利己)=${axes.law}/${axes.harm}/${axes.trust}/${axes.selfInterest}｜善惡分=${alignment.goodScore}/${alignment.badScore}${recent.length > 0 ? `｜最近事件=${recent.join('>')}` : ''}${chain?.archetype ? `｜事件鏈=${chain.archetype}#${chain.stage}` : ''}`
   };
 }
 
@@ -411,9 +430,15 @@ function chooseDynamicEventPlan(player = null, location = '', options = {}) {
   const storyTurn = Math.max(0, Number(options.storyTurn || player?.storyTurns || 0));
   const pressure = Math.max(0, Number(state.pressureByLocation[loc] || 0));
   const wanted = Math.max(0, Number(state.wantedByLocation[loc] || 0));
+  const alignment = computeAlignmentProfileFromDynamicState(state, loc);
   const chain = state.activeChainByLocation[loc];
 
-  const baseChance = clampNumber(0.12 + pressure * 0.035 + wanted * 0.042, 0.08, 0.82, 0.2);
+  const baseChance = clampNumber(
+    0.12 + pressure * 0.035 + wanted * 0.042 + Math.max(0, Number(alignment.badScore || 0) - 55) * 0.0024,
+    0.08,
+    0.82,
+    0.2
+  );
   const cooldown = Math.max(0, storyTurn - Number(state.lastGeneratedTurn || 0));
   const cooldownFactor = cooldown <= 1 ? 0.42 : (cooldown === 2 ? 0.72 : 1);
   const chainBoost = chain ? 0.18 : 0;
@@ -423,7 +448,8 @@ function chooseDynamicEventPlan(player = null, location = '', options = {}) {
   const forceByState = Boolean(
     (chain && pressure >= 3.2) ||
     pressure >= 6 ||
-    wanted >= 5
+    wanted >= 5 ||
+    Number(alignment.badScore || 0) >= 76
   );
   const shouldInject = force || forceByState || Math.random() < finalChance;
   if (!shouldInject) {
@@ -444,13 +470,20 @@ function chooseDynamicEventPlan(player = null, location = '', options = {}) {
   const hasStorageCue = /(封存[艙舱倉藏函]|貨樣|货样|艙體|舱体)/u.test(storyText);
   const hasTradeCue = /(交易|收購|收购|走私|貨流|货流|攤位|开价|開價|黑市)/u.test(storyText);
 
+  const turnsSinceSecretRealm = Math.max(0, storyTurn - Number(state.lastSecretRealmTurn || 0));
+  const canOpenSecretRealm = Boolean(
+    alignment.secretRealmEligible &&
+    turnsSinceSecretRealm >= SECRET_REALM_COOLDOWN_TURNS
+  );
+
   const weightRows = [
-    { archetype: 'ambush', weight: 1.2 + wanted * 0.9 + (chain?.archetype === 'ambush' ? 1.2 : 0) },
+    { archetype: 'ambush', weight: 1.2 + wanted * 0.9 + (chain?.archetype === 'ambush' ? 1.2 : 0) + Math.max(0, Number(alignment.badScore || 0) - 60) * 0.05 },
     { archetype: 'smuggling', weight: 1.3 + pressure * 0.28 + (hasTradeCue ? 0.9 : 0) },
     { archetype: 'storage_heist', weight: 1.1 + (hasStorageCue ? 1.35 : 0.2) + Math.max(0, Number(state.moralityAxes.selfInterest || 0)) * 0.08 },
-    { archetype: 'bounty_hunt', weight: 1.0 + wanted * 0.72 },
+    { archetype: 'bounty_hunt', weight: 1.0 + wanted * 0.72 + Math.max(0, Number(alignment.badScore || 0) - 58) * 0.04 },
     { archetype: 'witness_chase', weight: 1.0 + pressure * 0.24 + (hasTradeCue ? 0.5 : 0) },
-    { archetype: 'artifact_dispute', weight: 1.1 + pressure * 0.18 }
+    { archetype: 'artifact_dispute', weight: 1.1 + pressure * 0.18 },
+    { archetype: 'secret_realm', weight: canOpenSecretRealm ? (0.9 + Math.max(0, Number(alignment.goodScore || 0) - 70) * 0.055) : 0 }
   ];
 
   for (const row of weightRows) {
@@ -467,7 +500,10 @@ function chooseDynamicEventPlan(player = null, location = '', options = {}) {
     pressure,
     wanted,
     archetype: picked?.archetype || 'smuggling',
-    intensity: clampInt(Math.round(1 + pressure / 5 + wanted / 4), 1, 5, 2)
+    intensity: clampInt(Math.round(1 + pressure / 5 + wanted / 4), 1, 5, 2),
+    hint: picked?.archetype === 'secret_realm'
+      ? '善行共鳴觸發的秘境入口'
+      : ''
   };
 }
 
@@ -505,6 +541,9 @@ function recordDynamicEventOffered(player = null, payload = {}) {
   };
 
   state.lastGeneratedTurn = storyTurn;
+  if (archetype === 'secret_realm') {
+    state.lastSecretRealmTurn = storyTurn;
+  }
   return { changed: true };
 }
 
@@ -565,10 +604,11 @@ function resolveDynamicEventAfterChoice(player = null, choice = {}, result = {},
     state.recentEvents = state.recentEvents.slice(state.recentEvents.length - 18);
   }
 
+  const alignment = computeAlignmentProfileFromDynamicState(state, location);
   const topWanted = Object.values(state.wantedByLocation)
     .map((v) => Math.max(0, Number(v || 0)))
     .reduce((acc, cur) => Math.max(acc, cur), 0);
-  player.wanted = Math.max(0, Math.floor(topWanted));
+  player.wanted = Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0));
 
   return {
     changed: true,
@@ -589,5 +629,10 @@ module.exports = {
   buildDynamicWorldContext,
   chooseDynamicEventPlan,
   recordDynamicEventOffered,
-  resolveDynamicEventAfterChoice
+  resolveDynamicEventAfterChoice,
+  getDynamicAlignmentProfile: (player = null, location = '') => {
+    const ensured = ensureDynamicWorldState(player);
+    const loc = normalizeLocationName(location || player?.location || '');
+    return computeAlignmentProfileFromDynamicState(ensured.state, loc);
+  }
 };

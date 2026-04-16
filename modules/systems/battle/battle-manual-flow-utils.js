@@ -1159,8 +1159,6 @@ async function handleBattleWait(interaction, user) {
     }
     CORE.savePlayer(player);
     if (combatant.isHuman) {
-      player.battleState = null;
-      CORE.savePlayer(player);
       await showTrueGameOver(interaction, user, playerPhase.message || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, responseMode);
       return;
     }
@@ -1349,8 +1347,6 @@ async function handleBattleWait(interaction, user) {
     }
     CORE.savePlayer(player);
     if (combatant.isHuman) {
-      player.battleState = null;
-      CORE.savePlayer(player);
       await showTrueGameOver(interaction, user, combinedMessage || `💀 你在蓄能時被 ${enemy.name} 擊倒...`, responseMode);
       return;
     }
@@ -1491,8 +1487,6 @@ async function handleFlee(interaction, user, attemptNum) {
 
   if (result.death) {
     if (combatant?.isHuman) {
-      player.battleState = null;
-      CORE.savePlayer(player);
       await showTrueGameOver(interaction, user, result.message);
       return;
     }

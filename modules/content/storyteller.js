@@ -1158,6 +1158,7 @@ function mapDynamicArchetypeToAction(archetype = '') {
   if (key === 'witness_chase') return 'explore';
   if (key === 'smuggling') return 'social';
   if (key === 'artifact_dispute') return 'explore';
+  if (key === 'secret_realm') return 'explore';
   return 'explore';
 }
 
@@ -2752,8 +2753,9 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   });
   const dynamicArchetypeHint = String(dynamicPlan?.archetype || '').trim();
   const dynamicActionHint = dynamicArchetypeHint ? mapDynamicArchetypeToAction(dynamicArchetypeHint) : '';
+  const dynamicThemeHint = String(dynamicPlan?.hint || '').trim();
   const dynamicInjectRule = dynamicPlan?.inject
-    ? `20. 本回合必須在 5 個選項中內建 1 個「動態事件選項」，並在該筆 JSON 填上 dynamicEvent={"archetype":"${dynamicArchetypeHint || 'smuggling'}","phase":"offered","intensity":${Math.max(1, Math.min(5, Number(dynamicPlan?.intensity || 2) || 2))},"chainHint":"一句短提示"}；該選項必須與當前場景因果相連，不可模板句。建議 action=${dynamicActionHint || 'explore'}。`
+    ? `20. 本回合必須在 5 個選項中內建 1 個「動態事件選項」，並在該筆 JSON 填上 dynamicEvent={"archetype":"${dynamicArchetypeHint || 'smuggling'}","phase":"offered","intensity":${Math.max(1, Math.min(5, Number(dynamicPlan?.intensity || 2) || 2))},"chainHint":"一句短提示"}；該選項必須與當前場景因果相連，不可模板句。建議 action=${dynamicActionHint || 'explore'}。${dynamicThemeHint ? `主題提示：${dynamicThemeHint}。` : ''}`
     : '20. 非必要時可不輸出 dynamicEvent；若輸出，最多 1 筆，且必須與當前場景因果相連。';
   const recentChoiceText = Array.isArray(player?.recentChoiceHistory)
     ? player.recentChoiceHistory

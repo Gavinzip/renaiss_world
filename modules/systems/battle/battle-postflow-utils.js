@@ -1,3 +1,5 @@
+const EQUIP = require('../equipment/equipment-fusion-agent');
+
 function createBattlePostflowUtils(deps = {}) {
   const CORE = deps.CORE;
   const PET = deps.PET;
@@ -29,26 +31,214 @@ function createBattlePostflowUtils(deps = {}) {
   const publishBattleWorldEvent = typeof deps.publishBattleWorldEvent === 'function'
     ? deps.publishBattleWorldEvent
     : (() => {});
+  const getPlayerOwnedPets = typeof deps.getPlayerOwnedPets === 'function'
+    ? deps.getPlayerOwnedPets
+    : (() => []);
+  const recordCashflow = typeof deps.recordCashflow === 'function'
+    ? deps.recordCashflow
+    : (() => {});
+  const canPetFight = typeof deps.canPetFight === 'function'
+    ? deps.canPetFight
+    : (() => false);
+
+  function pickRandomIndexes(total = 0, count = 0) {
+    const max = Math.max(0, Math.floor(Number(total || 0)));
+    const need = Math.max(0, Math.min(max, Math.floor(Number(count || 0))));
+    const pool = Array.from({ length: max }, (_, i) => i);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool.slice(0, need).sort((a, b) => b - a);
+  }
+
+  function isSkillChipItem(raw = '') {
+    const text = String(raw || '').trim();
+    if (!text) return false;
+    return /^技能晶片[：:]/u.test(text) || /技能晶片/u.test(text);
+  }
+
+  function consumeBattleDefeatCompensation(player = null) {
+    if (!player || typeof player !== 'object') {
+      return { lines: ['⚠️ 無法套用戰敗懲罰（玩家資料不存在）'] };
+    }
+    const lines = [];
+    const removed = { materials: [], chips: [], equipment: null };
+    const targetFine = 1000;
+    const currentGold = Math.max(0, Math.floor(Number(player?.stats?.財富 || 0)));
+    const paid = Math.min(targetFine, currentGold);
+    const remainingFine = Math.max(0, targetFine - paid);
+    if (!player.stats || typeof player.stats !== 'object') player.stats = {};
+    player.stats.財富 = Math.max(0, currentGold - paid);
+
+    if (paid > 0) {
+      lines.push(`💸 戰敗罰款：-${paid} Rns${remainingFine > 0 ? `（仍不足 ${remainingFine}）` : ''}`);
+      recordCashflow(player, {
+        amount: -paid,
+        category: 'battle_total_defeat_penalty',
+        source: '雙寵皆倒戰敗罰款'
+      });
+    } else {
+      lines.push('💸 戰敗罰款：Rns 不足，改扣物資');
+    }
+
+    if (remainingFine <= 0) {
+      return { lines, removed };
+    }
+
+    const herbs = Array.isArray(player.herbs) ? player.herbs : [];
+    const inventory = Array.isArray(player.inventory) ? player.inventory : [];
+    if (!Array.isArray(player.herbs)) player.herbs = herbs;
+    if (!Array.isArray(player.inventory)) player.inventory = inventory;
+    const materialRefs = [];
+    for (let i = 0; i < herbs.length; i++) {
+      materialRefs.push({ source: 'herbs', idx: i, name: String(herbs[i] || '').trim() || '未知素材' });
+    }
+    for (let i = 0; i < inventory.length; i++) {
+      const itemName = String(inventory[i] || '').trim();
+      if (!itemName || isSkillChipItem(itemName)) continue;
+      materialRefs.push({ source: 'inventory', idx: i, name: itemName });
+    }
+
+    if (materialRefs.length > 0) {
+      const picked = pickRandomIndexes(materialRefs.length, 3).map((idx) => materialRefs[idx]).filter(Boolean);
+      const bySource = { herbs: [], inventory: [] };
+      for (const ref of picked) bySource[ref.source].push(ref);
+      bySource.herbs.sort((a, b) => b.idx - a.idx);
+      bySource.inventory.sort((a, b) => b.idx - a.idx);
+      for (const ref of bySource.herbs) {
+        const [drop] = herbs.splice(ref.idx, 1);
+        removed.materials.push(String(drop || ref.name || '未知素材'));
+      }
+      for (const ref of bySource.inventory) {
+        const [drop] = inventory.splice(ref.idx, 1);
+        removed.materials.push(String(drop || ref.name || '未知素材'));
+      }
+      lines.push(`🧰 物資損失：${removed.materials.slice(0, 3).join('、')}`);
+      return { lines, removed };
+    }
+
+    const chipRefs = [];
+    for (let i = 0; i < inventory.length; i++) {
+      const itemName = String(inventory[i] || '').trim();
+      if (!itemName || !isSkillChipItem(itemName)) continue;
+      chipRefs.push({ idx: i, name: itemName });
+    }
+    if (chipRefs.length > 0) {
+      const picked = pickRandomIndexes(chipRefs.length, 5).map((idx) => chipRefs[idx]).filter(Boolean);
+      picked.sort((a, b) => b.idx - a.idx);
+      for (const ref of picked) {
+        const [drop] = inventory.splice(ref.idx, 1);
+        removed.chips.push(String(drop || ref.name || '技能晶片'));
+      }
+      lines.push(`📉 技能晶片遺失：${removed.chips.length} 枚`);
+      return { lines, removed };
+    }
+
+    EQUIP.ensurePlayerEquipmentState(player);
+    const allPets = getPlayerOwnedPets(String(player?.id || '').trim());
+    const equippedRefs = [];
+    for (const pet of allPets) {
+      const petId = String(pet?.id || '').trim();
+      if (!petId) continue;
+      const slots = EQUIP.getPetEquipmentSlots(player, petId, { ensure: false });
+      for (const [slot, item] of Object.entries(slots || {})) {
+        if (!item || typeof item !== 'object') continue;
+        equippedRefs.push({
+          petId,
+          petName: String(pet?.name || '未知寵物'),
+          slot: String(slot || ''),
+          itemName: String(item?.name || '').trim() || '未知裝備'
+        });
+      }
+    }
+    if (equippedRefs.length > 0) {
+      const picked = equippedRefs[Math.floor(Math.random() * equippedRefs.length)];
+      const slots = EQUIP.getPetEquipmentSlots(player, picked.petId, { ensure: true });
+      if (slots && Object.prototype.hasOwnProperty.call(slots, picked.slot)) {
+        slots[picked.slot] = null;
+      }
+      player.petEquipment = player.petEquipment || {};
+      if (typeof player.activePetId === 'string' && picked.petId === String(player.activePetId || '').trim()) {
+        player.equipment = EQUIP.getPetEquipmentSlots(player, picked.petId, { ensure: false });
+      }
+      removed.equipment = picked;
+      lines.push(`🛡️ 裝備遺失：${picked.petName} 的 ${picked.itemName}`);
+      return { lines, removed };
+    }
+
+    lines.push('⚠️ 已無可扣罰資產');
+    return { lines, removed };
+  }
+
+  function isPetDeadForDefeat(pet = null) {
+    if (!pet || typeof pet !== 'object') return true;
+    const status = String(pet.status || '').trim();
+    const hp = Math.max(0, Number(pet.hp || 0));
+    return status === '死亡' || hp <= 0;
+  }
+
+  function resolveOwnedPetsForDefeatCheck(player = null, userId = '') {
+    const ownerId = String(userId || player?.id || '').trim();
+    const owned = getPlayerOwnedPets(ownerId);
+    const pets = Array.isArray(owned) ? owned.filter(Boolean) : [];
+    if (pets.length > 0) return pets;
+    const fallback = ownerId && PET && typeof PET.loadPet === 'function'
+      ? PET.loadPet(ownerId)
+      : null;
+    return fallback ? [fallback] : [];
+  }
 
   async function showTrueGameOver(interaction, user, detailText, mode = 'update') {
-    const beforeReset = CORE.loadPlayer(user.id);
-    const enemyName = String(beforeReset?.battleState?.enemy?.name || '敵人').trim();
-    if (beforeReset) {
+    const player = CORE.loadPlayer(user.id);
+    const enemyName = String(player?.battleState?.enemy?.name || '敵人').trim();
+    const pets = resolveOwnedPetsForDefeatCheck(player, user?.id);
+    const allPetsDead = pets.length > 0
+      ? pets.every((pet) => isPetDeadForDefeat(pet))
+      : true;
+    const anyPetUsable = pets.some((pet) => canPetFight(pet));
+
+    if (player && allPetsDead) {
       publishBattleWorldEvent(
-        beforeReset,
+        player,
         enemyName,
         'player_down',
         String(detailText || '').replace(/\s+/g, ' ').slice(0, 120)
       );
     }
-    CORE.resetPlayerGame(user.id);
+    if (player && typeof player === 'object') {
+      player.battleState = null;
+      CORE.savePlayer(player);
+    }
+
+    if (!allPetsDead) {
+      const embed = new EmbedBuilder()
+        .setTitle('⚠️ 本場敗退')
+        .setColor(0xff9900)
+        .setDescription(
+          `${detailText}\n\n🏁 本局勝者：${enemyName}\n\n` +
+          `你還有可用寵物，未觸發全滅懲罰。\n` +
+          `${anyPetUsable ? '請回主選單改派寵物再戰。' : '目前沒有可上場寵物，但未達全寵死亡判定。'}`
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('main_menu').setLabel('📖 繼續').setStyle(ButtonStyle.Secondary)
+      );
+      await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
+      return;
+    }
+
+    const penalty = consumeBattleDefeatCompensation(player);
     const embed = new EmbedBuilder()
-      .setTitle('💀 你戰死了...')
+      .setTitle('💀 全隊覆滅')
       .setColor(0xff0000)
-      .setDescription(`${detailText}\n\n🏁 勝者：${enemyName}\n你的旅程就此結束...`);
+      .setDescription(
+        `${detailText}\n\n🏁 勝者：${enemyName}\n\n` +
+        `${Array.isArray(penalty?.lines) && penalty.lines.length > 0 ? penalty.lines.join('\n') : '⚠️ 戰敗懲罰套用失敗'}\n\n` +
+        `你還活著，請重新整隊後繼續冒險。`
+      );
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('restart_onboarding').setLabel('📖 繼續（重新開始）').setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId('main_menu').setLabel('📖 繼續').setStyle(ButtonStyle.Danger)
     );
 
     await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);

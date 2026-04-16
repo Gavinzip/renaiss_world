@@ -1,3 +1,5 @@
+const { computeAlignmentProfileFromPlayer } = require('../../content/alignment-profile-utils');
+
 function createMentorCadenceUtils(deps = {}) {
   const {
     CORE,
@@ -47,12 +49,15 @@ function createMentorCadenceUtils(deps = {}) {
   function getPlayerWantedPressure(player = null) {
     if (!player || typeof player !== 'object') return 0;
     const localWanted = Math.max(0, Number(player?.wanted || 0));
+    const alignment = computeAlignmentProfileFromPlayer(player, String(player?.location || '').trim());
+    const wantedFloor = Math.max(0, Number(alignment.wantedFloor || 0));
+    const wantedBoost = Math.max(0, Number(alignment.wantedBoost || 0));
     const playerId = String(player?.id || '').trim();
     let worldWanted = 0;
     if (playerId && CORE && typeof CORE.getPlayerWantedLevel === 'function') {
       worldWanted = Math.max(0, Number(CORE.getPlayerWantedLevel(playerId) || 0));
     }
-    return Math.max(localWanted, worldWanted);
+    return Math.max(localWanted, worldWanted, wantedFloor + wantedBoost);
   }
 
   function getWantedEscalationProfile(wantedLevel = 0) {
