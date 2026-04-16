@@ -1,6 +1,7 @@
 const { MAP_LOCATIONS } = require('./world-map');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
 const { appendLootAudit } = require('../systems/data/loot-audit-log');
+const SHOW_DYNAMIC_WORLD_METERS = String(process.env.SHOW_DYNAMIC_WORLD_METERS || '').trim() === '1';
 
 function formatBridgePreviewText(storyText = '') {
   const preservedMarkers = ['📌', '📖', '🧭', '📍', '⚠️'];
@@ -1804,20 +1805,22 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
             : `🧠 Digital 詐價風險提示累積值 ${score}/100${delta > 0 ? `（+${delta}）` : ''}`
         );
       }
-      if (Number.isFinite(Number(result.dynamicLocationWanted)) || Number.isFinite(Number(result.dynamicLocationPressure))) {
-        const localWanted = Number(result?.dynamicLocationWanted || 0);
-        const localPressure = Number(result?.dynamicLocationPressure || 0);
-        rewardText.push(`🎯 本區熱度 ${localWanted.toFixed(1)}｜事件壓力 ${localPressure.toFixed(1)}`);
-      }
-      if (result?.dynamicFactionDelta && typeof result.dynamicFactionDelta === 'object') {
-        const rep = result.dynamicFactionDelta;
-        const toSigned = (value) => {
-          const n = Math.trunc(Number(value || 0));
-          return n > 0 ? `+${n}` : String(n);
-        };
-        rewardText.push(
-          `🧭 聲望變化 聯${toSigned(rep.beacon)} 灰${toSigned(rep.gray)} D${toSigned(rep.digital)} 民${toSigned(rep.civic)}`
-        );
+      if (SHOW_DYNAMIC_WORLD_METERS) {
+        if (Number.isFinite(Number(result.dynamicLocationWanted)) || Number.isFinite(Number(result.dynamicLocationPressure))) {
+          const localWanted = Number(result?.dynamicLocationWanted || 0);
+          const localPressure = Number(result?.dynamicLocationPressure || 0);
+          rewardText.push(`🎯 本區熱度 ${localWanted.toFixed(1)}｜事件壓力 ${localPressure.toFixed(1)}`);
+        }
+        if (result?.dynamicFactionDelta && typeof result.dynamicFactionDelta === 'object') {
+          const rep = result.dynamicFactionDelta;
+          const toSigned = (value) => {
+            const n = Math.trunc(Number(value || 0));
+            return n > 0 ? `+${n}` : String(n);
+          };
+          rewardText.push(
+            `🧭 聲望變化 聯${toSigned(rep.beacon)} 灰${toSigned(rep.gray)} D${toSigned(rep.digital)} 民${toSigned(rep.civic)}`
+          );
+        }
       }
 
       const worldEvents = getMergedWorldEvents(5);
