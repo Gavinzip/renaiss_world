@@ -481,7 +481,44 @@ function stripNarrativeDraftLeak(text = '') {
     }
   }
 
-  return out.trim();
+  // 清理提示詞控制段落或內部規則名稱外漏到玩家故事正文。
+  const leakedControlTokens = [
+    '【主線鋪陳保留',
+    '【島嶼知識邊界',
+    '【關鍵任務選項規則',
+    '【關鍵任務敘事規則',
+    '【關鍵NPC移動導引',
+    '【導航約束',
+    '【跨島真相邊界',
+    '【前一段故事',
+    '【玩家之前的足跡',
+    '【可驗證 NPC 對話原句',
+    '【主線橋接鎖定',
+    '【開局敘事硬規則',
+    '【完整故事全文（必讀）',
+    '【已出現元素清單',
+    '【上一個行動結果',
+    '【本回移動摘要'
+  ];
+  out = out
+    .split('\n')
+    .filter((line) => !leakedControlTokens.some((token) => line.includes(token)))
+    .join('\n');
+
+  // 清理行內「根據【規則】...」之類敘事污染。
+  out = out
+    .replace(/根據【[^】]{2,40}】[^。！？\n]{0,120}[。！？]?/gu, '')
+    .replace(/按照【[^】]{2,40}】[^。！？\n]{0,120}[。！？]?/gu, '')
+    .replace(/依據【[^】]{2,40}】[^。！？\n]{0,120}[。！？]?/gu, '')
+    .replace(/按規則[^。！？\n]{0,120}[。！？]?/gu, '')
+    .replace(/依規則[^。！？\n]{0,120}[。！？]?/gu, '')
+    .replace(/地區進度\s*\d+\s*\/\s*\d+/gu, '')
+    .replace(/stage\s*\d+\s*\/\s*\d+/giu);
+
+  return out
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 function sanitizeAIContent(content) {
@@ -2454,6 +2491,11 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     !String(player?.currentStory || '').trim() &&
     !previousChoice
   );
+  const isPortalArrivalBeat = ['portal_jump_followup', 'device_jump_followup'].includes(previousActionCode);
+  const canLeadWithWeather = isOpeningBeat || isPortalArrivalBeat;
+  const weatherLeadRule = canLeadWithWeather
+    ? `本回合屬於${isOpeningBeat ? '開局' : '傳送抵達'}段落，可用天候作為開場主句，但需在 1-2 句內迅速回到人物行動。`
+    : '非開局且非傳送抵達時，禁止用「天氣/雨絲/晴空/風雪」當開場主句；必須先從人物動作、對話或現場事件切入，再把天候融入行動細節。';
 
   // 記憶上下文
   const focusedMemory = canonicalizeKingCodenamesText(
@@ -2554,7 +2596,8 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 1. 有具體的場景（光線、聲音、氣味、溫度、觸感）
 2. 有NPC或環境的互動
 3. 強調原創世界觀：收藏品真偽鑑識、封存艙/修復台、來源線索、夥伴協作
-3a. 場景需自然反映當地天候「${locationWeatherProfile?.name || '晴空'}」，且至少 1 個行動選擇要受天候影響（例如路線、接觸方式、風險判斷）
+3a. 天候「${locationWeatherProfile?.name || '晴空'}」要融入角色行動與互動（路線、接觸方式、風險判斷），不要每回合都把天氣寫成固定開場句
+3b. ${weatherLeadRule}
 4. 故事要有懸念，讓人想繼續看
 5. 嚴格使用對應語言，${langInstruction.replace('請用', '全部')}
 6. 若語言設定為 zh-TW，嚴禁使用簡體字
