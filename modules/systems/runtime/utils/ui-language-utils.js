@@ -27,14 +27,28 @@ function createUiLanguageUtils(deps = {}) {
 
   function normalizeLangCode(lang = 'zh-TW') {
     const raw = String(lang || '').trim();
-    if (raw === 'en' || raw === 'zh-CN') return raw;
+    const lower = raw.toLowerCase();
+    if (
+      raw === 'zh-CN' ||
+      lower === 'zh-cn' ||
+      lower === 'zh_cn' ||
+      lower === 'zh-hans' ||
+      lower === 'cn' ||
+      lower === 'sc' ||
+      lower.includes('简体')
+    ) return 'zh-CN';
+    if (
+      raw === 'en' ||
+      lower === 'english' ||
+      lower === 'en_us' ||
+      lower === 'en-us' ||
+      lower.startsWith('en-')
+    ) return 'en';
     return 'zh-TW';
   }
 
   function getPlayerUILang(player = null) {
-    const raw = String(player?.language || configLanguage || 'zh-TW').trim();
-    if (raw === 'zh-CN' || raw === 'en') return raw;
-    return 'zh-TW';
+    return normalizeLangCode(player?.language || configLanguage || 'zh-TW');
   }
 
   function getUtilityButtonLabels(lang = 'zh-TW') {

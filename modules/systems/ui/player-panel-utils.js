@@ -85,14 +85,7 @@ function createPlayerPanelUtils(deps = {}) {
     showMainMenu
   } = deps;
 
-function getPlayerPanelText(lang = 'zh-TW') {
-  if (typeof getLanguageSection === 'function') {
-    const fromGlobal = getLanguageSection('playerPanelText', lang);
-    if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
-      return fromGlobal;
-    }
-  }
-  return {
+  const PLAYER_PANEL_TEXT_FALLBACK = {
     skillChipPrefix: '技能晶片：',
     fusionBlockedItems: ['乾糧一包', '水囊'],
     fusionSlots: {
@@ -102,47 +95,38 @@ function getPlayerPanelText(lang = 'zh-TW') {
       shoes: '鞋子（速度）',
       unknown: '未知槽位'
     },
-    finance: {
-      notFound: '❌ 找不到角色！',
-      title: '💸 資金流水',
-      desc: '以下為你最近的收入與支出紀錄。',
-      currentRns: '💰 目前 Rns',
-      unreadNotices: '📬 未讀金流通知',
-      recentLedger: '📒 最近 20 筆流水',
-      noUnread: '（目前無未讀）',
-      backInventory: '🎒 返回背包',
-      backMenu: '返回主選單'
-    },
-    memoryAudit: {
-      noRecords: '暫無記錄',
-      title: '🧠 記憶檢查',
-      desc: '查看每回合寫入記憶的內容，以及為何被判定需要保留。',
-      streamTitle: '最近24筆流水',
-      categorySummary: '📊 類別分佈',
-      backMenu: '返回主選單'
-    },
-    codex: {
-      overviewTitle: '📚 圖鑑總覽',
-      overviewDesc: '可分開查看 NPC 圖鑑與技能圖鑑。未收集項目只顯示數量，不顯示名稱。',
-      npcProgress: '🤝 NPC 圖鑑進度',
-      skillProgress: '🧬 技能圖鑑進度',
-      unknownCount: '🕶️ 未收集（隱藏名稱）',
-      npcButton: '🤝 NPC圖鑑',
-      skillButton: '🧬 技能圖鑑',
-      npcTitle: '🤝 NPC 圖鑑',
-      npcCollected: '已收集 NPC',
-      npcUnknown: '未收集 NPC',
-      npcEmpty: '（尚未遇到 NPC）',
-      skillTitle: '🧬 技能圖鑑',
-      skillCollected: '已收集技能',
-      skillUnknown: '未收集技能',
-      skillEmpty: '（尚未抽到技能）',
-      backCodex: '📚 回圖鑑',
-      canFight: '可交鋒',
-      canDraw: '可抽取'
-    }
+    finance: {},
+    memoryAudit: {},
+    codex: {},
+    moves: {},
+    inventory: {},
+    equipment: {}
   };
-}
+
+  function getPlayerPanelText(lang = 'zh-TW') {
+    const base = typeof getLanguageSection === 'function'
+      ? (getLanguageSection('playerPanelText', 'zh-TW') || {})
+      : {};
+    const localized = typeof getLanguageSection === 'function'
+      ? (getLanguageSection('playerPanelText', lang) || {})
+      : {};
+    return {
+      ...PLAYER_PANEL_TEXT_FALLBACK,
+      ...base,
+      ...localized,
+      fusionSlots: {
+        ...(PLAYER_PANEL_TEXT_FALLBACK.fusionSlots || {}),
+        ...(base?.fusionSlots || {}),
+        ...(localized?.fusionSlots || {})
+      },
+      finance: { ...(base?.finance || {}), ...(localized?.finance || {}) },
+      memoryAudit: { ...(base?.memoryAudit || {}), ...(localized?.memoryAudit || {}) },
+      codex: { ...(base?.codex || {}), ...(localized?.codex || {}) },
+      moves: { ...(base?.moves || {}), ...(localized?.moves || {}) },
+      inventory: { ...(base?.inventory || {}), ...(localized?.inventory || {}) },
+      equipment: { ...(base?.equipment || {}), ...(localized?.equipment || {}) }
+    };
+  }
 
 const SKILL_CHIP_PREFIX = String(getPlayerPanelText('zh-TW').skillChipPrefix || '技能晶片：');
 const PROTECTED_MOVE_IDS = new Set(['flee']);
@@ -155,12 +139,41 @@ const FUSION_BLOCKED_ITEMS = new Set(
 function getFusionSlotLabel(slot = '', uiLang = 'zh-TW') {
   const slots = getPlayerPanelText(uiLang)?.fusionSlots || {};
   const key = String(slot || '').trim();
-  return slots[key] || slots.unknown || '未知槽位';
+  return slots[key] || slots.unknown || 'Unknown Slot';
 }
 
 function getFusionRarityLabel(rarity = '') {
   const safe = String(rarity || '').trim().toUpperCase();
   return ['N', 'R', 'SR', 'SSR', 'UR'].includes(safe) ? safe : 'N';
+}
+
+function getPanelMoveText(uiLang = 'zh-TW') {
+  const base = getPlayerPanelText('zh-TW')?.moves || {};
+  const localized = getPlayerPanelText(uiLang)?.moves || {};
+  return { ...base, ...localized };
+}
+
+function getFinanceText(uiLang = 'zh-TW') {
+  const base = getPlayerPanelText('zh-TW')?.finance || {};
+  const localized = getPlayerPanelText(uiLang)?.finance || {};
+  return { ...base, ...localized };
+}
+
+function getMemoryAuditText(uiLang = 'zh-TW') {
+  const base = getPlayerPanelText('zh-TW')?.memoryAudit || {};
+  const localized = getPlayerPanelText(uiLang)?.memoryAudit || {};
+  return { ...base, ...localized };
+}
+
+function localizeChipReason(reason = '', uiLang = 'zh-TW') {
+  const text = String(reason || '').trim();
+  const tx = getPanelMoveText(uiLang);
+  if (!text) return tx.reasonNotLearnable;
+  if (text === '未知技能') return tx.reasonUnknownSkill;
+  if (text === '屬性不符') return tx.reasonElementMismatch;
+  if (text === '已學會') return tx.reasonLearned;
+  if (text === '不可學') return tx.reasonNotLearnable;
+  return text;
 }
 
 function isSkillChipItemName(name = '') {
@@ -279,8 +292,9 @@ async function safeUpdatePanelInteraction(interaction, payload, context = 'panel
 async function showMovesList(interaction, user, selectedPetId = '', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
   const uiLang = getPlayerUILang(player);
+  const moveTx = getPanelMoveText(uiLang);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', embeds: [], components: [] });
+    await interaction.update({ content: moveTx.notFoundPlayer, embeds: [], components: [] });
     return;
   }
 
@@ -289,7 +303,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Primary)
     );
-    await interaction.update({ content: '❌ 沒有寵物！', embeds: [], components: [row] });
+    await interaction.update({ content: moveTx.noPet, embeds: [], components: [row] });
     return;
   }
 
@@ -341,7 +355,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   const blockedChipReasonSummary = allChipEntries
     .filter((entry) => !entry?.canLearn)
     .reduce((acc, entry) => {
-      const reason = String(entry?.reason || '不可學').trim() || '不可學';
+      const reason = localizeChipReason(entry?.reason, uiLang);
       const count = Number(entry?.count || 0);
       acc[reason] = (acc[reason] || 0) + (count > 0 ? count : 1);
       return acc;
@@ -369,25 +383,28 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   const unlockedMoves = (selectedPet.moves || []).map((m, i) => {
     const isFlee = Boolean(m?.effect && m.effect.flee);
     const isProtected = isProtectedMoveId(m?.id);
-    const statusMark = isFlee ? '🏃固定' : (isProtected ? '🛠️固有' : '✅攜帶');
+    const statusMark = isFlee ? moveTx.statusFixed : (isProtected ? moveTx.statusInnate : moveTx.statusCarried);
     const dmg = buildMoveDamageBreakdown(m, selectedPet);
     const energyCost = isFlee ? '-' : BATTLE.getMoveEnergyCost(m);
     const moveSpeed = getMoveSpeedValue(m);
     const tierEmoji = m.tier === 3 ? '🔮' : m.tier === 2 ? '💠' : '⚪';
-    const tierName = m.tier === 3 ? '史詩' : m.tier === 2 ? '稀有' : '普通';
+    const tierName = m.tier === 3 ? moveTx.tierEpic : m.tier === 2 ? moveTx.tierRare : moveTx.tierCommon;
     const effectStr = describeMoveEffects(m);
     const dotSecondLine = dmg.secondTick > 0
-      ? `\n   ⏱️ 持續傷害第2跳：${format1(dmg.secondTick)}（${dmg.secondTickText}）`
+      ? moveTx.dotTick2(dmg.secondTick, dmg.secondTickText)
       : '';
-    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | 直傷${format1(dmg.instant)} | 總傷${format1(dmg.total)} | ⚡${energyCost} | 🚀速度${format1(moveSpeed)} | ${effectStr || '無效果'}${dotSecondLine}`;
+    const instantLabel = moveTx.damageInstantLabel || 'Hit';
+    const totalLabel = moveTx.damageTotalLabel || 'Total';
+    const speedLabel = moveTx.speedLabel || 'Speed';
+    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | ${instantLabel}${format1(dmg.instant)} | ${totalLabel}${format1(dmg.total)} | ⚡${energyCost} | 🚀${speedLabel}${format1(moveSpeed)} | ${effectStr || moveTx.effectNone}${dotSecondLine}`;
   });
 
   const petSummary = ownedPets.map((pet, i) => {
     const carriedMoves = getPetAttackMoves(pet)
       .filter((m) => !isProtectedMoveId(m?.id))
       .slice(0, PET_MOVE_LOADOUT_LIMIT);
-    const activeNames = carriedMoves.map((m) => m.name).join('、') || '（尚未學習攻擊招式）';
-    return `${i + 1}. **${pet.name}**（${pet.type}）\n攜帶：${carriedMoves.length}/${PET_MOVE_LOADOUT_LIMIT}｜${activeNames}`;
+    const activeNames = carriedMoves.map((m) => m.name).join('、') || moveTx.noAttackLearned;
+    return `${i + 1}. **${pet.name}**（${pet.type}）\n${moveTx.carriedSummary(carriedMoves.length, PET_MOVE_LOADOUT_LIMIT, activeNames)}`;
   }).join('\n\n');
 
   const chipOverview = allChipEntries.length > 0
@@ -395,16 +412,20 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       .map((entry, idx) => {
         const move = entry.move || {};
         const tierEmoji = move.tier === 3 ? '🔮' : move.tier === 2 ? '💠' : '⚪';
-        const tierName = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
-        const mark = entry.canLearn ? '✅可學' : (entry.reason === '已學會' ? '📘已學' : '🚫不可學');
-        const reasonText = entry.canLearn ? '' : `（${entry.reason || '不可學'}）`;
+        const tierName = move.tier === 3 ? moveTx.tierEpic : move.tier === 2 ? moveTx.tierRare : moveTx.tierCommon;
+        const localizedReason = localizeChipReason(entry.reason, uiLang);
+        const mark = entry.canLearn ? moveTx.markLearnable : (localizedReason === moveTx.reasonLearned ? moveTx.markLearned : moveTx.markBlocked);
+        const reasonText = entry.canLearn ? '' : `（${localizedReason || moveTx.notLearnable}）`;
         const dmg = buildMoveDamageBreakdown(move, selectedPet);
         const energyCost = BATTLE.getMoveEnergyCost(move);
         const moveSpeed = getMoveSpeedValue(move);
         const effectStr = describeMoveEffects(move);
-        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}${reasonText}\n   ${move.element}/${tierName} | 💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | 直${format1(dmg.instant)} / 總${format1(dmg.total)} | ⚡${energyCost} | 🚀${format1(moveSpeed)} | ${effectStr || '無效果'}`;
+        const instantShort = moveTx.damageInstantShort || 'Hit';
+        const totalShort = moveTx.damageTotalShort || 'Total';
+        const unknownElement = moveTx.unknownElement || 'Unknown';
+        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}${reasonText}\n   ${move.element || unknownElement}/${tierName} | 💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | ${instantShort}${format1(dmg.instant)} / ${totalShort}${format1(dmg.total)} | ⚡${energyCost} | 🚀${format1(moveSpeed)} | ${effectStr || moveTx.effectNone}`;
       })
-    : ['（背包目前沒有技能晶片）'];
+    : [moveTx.noSkillChips];
 
   const movePreviewPager = paginateList(unlockedMoves, 0, MOVES_DETAIL_PAGE_SIZE);
   const chipPreviewPager = paginateList(chipOverview, 0, MOVES_DETAIL_PAGE_SIZE);
@@ -415,9 +436,9 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   );
   const sharedPage = Math.max(0, Math.min(totalPages - 1, currentPage));
   const movePager = paginateList(unlockedMoves, sharedPage, MOVES_DETAIL_PAGE_SIZE);
-  const moveDetailText = movePager.items.length > 0 ? movePager.items.join('\n\n') : '（無招式）';
+  const moveDetailText = movePager.items.length > 0 ? movePager.items.join('\n\n') : moveTx.noAttackMoves;
   const chipPager = paginateList(chipOverview, sharedPage, MOVES_DETAIL_PAGE_SIZE);
-  const chipDetailText = chipPager.items.length > 0 ? chipPager.items.join('\n\n') : '（背包目前沒有技能晶片）';
+  const chipDetailText = chipPager.items.length > 0 ? chipPager.items.join('\n\n') : moveTx.noSkillChips;
 
   const noticeLine = notice
     ? (String(notice).startsWith('✅') || String(notice).startsWith('⚠️') ? String(notice) : `✅ ${notice}`)
@@ -425,30 +446,38 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
 
   const description = [
     noticeLine,
-    `**目前管理：${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）`,
-    `傷害公式：**基礎傷害 + 攻擊加成**（攻擊加成 = ⌊ATK × 0.2⌋）`,
-    `本寵 ATK ${format1(selectedAttack)} → 攻擊加成 +${format1(selectedAtkBonus)}${normalizedPetElement ? `｜屬性平衡 x${format1(elementScale)}` : ''}`,
-    `持續傷害：列表顯示「第2跳」預估值（若效果不足2回合則不顯示）`,
-    `學習入口：請用下拉選單「學習技能晶片」`,
-    `學習清單排序：史詩 > 稀有 > 普通`,
-    `取消學習：會退回技能晶片到背包，可拿去賣`,
-    `上陣規則：已學會的攻擊招式會自動上陣；上限 **${PET_MOVE_LOADOUT_LIMIT}**（逃跑不占名額）`,
-    `目前上陣名額：${selectedConfiguredAttackCount}/${PET_MOVE_LOADOUT_LIMIT}${selectedSlotFull ? '（已滿；點選學習時會提示先取消一招）' : ''}`,
-    `已解鎖招式：${selectedPet.moves.length}`,
-    `背包晶片：${allChipTotal} 枚｜可學：${learnableChipTotal} 枚 / ${learnableChips.length} 種`,
-    (!learnableChipTotal && allChipTotal > 0 && blockedChipReasonText) ? `目前不可學原因：${blockedChipReasonText}` : '',
-    `升級點數：${Number(player?.upgradePoints || 0)} 點（每點 +${Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 1)} HP，可批量）`,
-    `主上場寵物：${activePetResolved?.pet?.name || selectedPet.name}`
+    moveTx.manage(selectedPet.name, getPetElementDisplayName(selectedPet.type)),
+    moveTx.formula,
+    moveTx.petAtk(
+      selectedAttack,
+      selectedAtkBonus,
+      normalizedPetElement
+        ? (typeof moveTx.elementBalanceSuffix === 'function'
+          ? moveTx.elementBalanceSuffix(format1(elementScale))
+          : `｜屬性平衡 x${format1(elementScale)}`)
+        : ''
+    ),
+    moveTx.dotHint,
+    moveTx.learnHint,
+    moveTx.sortHint,
+    moveTx.unlearnHint,
+    moveTx.loadoutRule(PET_MOVE_LOADOUT_LIMIT),
+    moveTx.loadoutNow(selectedConfiguredAttackCount, PET_MOVE_LOADOUT_LIMIT, selectedSlotFull),
+    moveTx.unlocked(selectedPet.moves.length),
+    moveTx.chips(allChipTotal, learnableChipTotal, learnableChips.length),
+    (!learnableChipTotal && allChipTotal > 0 && blockedChipReasonText) ? moveTx.blockedReasons(blockedChipReasonText) : '',
+    moveTx.upgradePoints(Number(player?.upgradePoints || 0), Number(GACHA?.GACHA_CONFIG?.hpPerPoint || 1)),
+    moveTx.activePet(activePetResolved?.pet?.name || selectedPet.name)
   ].filter(Boolean).join('\n');
 
   const embed = new EmbedBuilder()
-    .setTitle(`🐾 寵物管理`)
+    .setTitle(moveTx.title)
     .setColor(getPetElementColor(selectedPet.type))
     .setDescription(description)
     .addFields(
-      { name: `🧭 ${selectedPet.name} 招式清單（第 ${movePager.page + 1}/${movePager.totalPages} 頁）`, value: moveDetailText.slice(0, 1024), inline: false },
-      { name: `🎒 可學習技能晶片（第 ${chipPager.page + 1}/${chipPager.totalPages} 頁）`, value: chipDetailText.slice(0, 1024), inline: false },
-      { name: '🐾 全寵物攜帶總覽', value: petSummary.slice(0, 1024), inline: false }
+      { name: moveTx.fieldMoves(selectedPet.name, movePager.page + 1, movePager.totalPages), value: moveDetailText.slice(0, 1024), inline: false },
+      { name: moveTx.fieldChips(chipPager.page + 1, chipPager.totalPages), value: chipDetailText.slice(0, 1024), inline: false },
+      { name: moveTx.fieldOverview, value: petSummary.slice(0, 1024), inline: false }
     );
 
   const petSelectOptions = ownedPets.slice(0, 25).map((pet) => {
@@ -458,14 +487,14 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     );
     return {
       label: `${pet.name}`.slice(0, 100),
-      description: `攜帶 ${carriedCount}/${PET_MOVE_LOADOUT_LIMIT} 招`,
+      description: moveTx.petSelectDesc(carriedCount, PET_MOVE_LOADOUT_LIMIT),
       value: pet.id,
       default: pet.id === selectedPet.id
     };
   });
   const petSelect = new StringSelectMenuBuilder()
     .setCustomId('moves_pet_select')
-    .setPlaceholder('選擇要管理的寵物')
+    .setPlaceholder(moveTx.petSelectPlaceholder)
     .addOptions(petSelectOptions);
   const rowPetSelect = new ActionRowBuilder().addComponents(petSelect);
 
@@ -473,21 +502,21 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   if (learnableChips.length > 0) {
     const learnOptions = learnableChips.slice(0, 25).map((entry) => {
       const move = entry.move || {};
-      const tierText = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
+      const tierText = move.tier === 3 ? moveTx.tierEpic : move.tier === 2 ? moveTx.tierRare : moveTx.tierCommon;
       const dmg = buildMoveDamageBreakdown(move, selectedPet);
       const energyCost = BATTLE.getMoveEnergyCost(move);
       const moveSpeed = getMoveSpeedValue(move);
-      const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
+      const effectShort = String(describeMoveEffects(move) || moveTx.effectNone).replace(/；/g, '/').slice(0, 44);
       return {
-        label: `${move.tier === 3 ? '🔮史詩' : move.tier === 2 ? '💠稀有' : '⚪普通'}｜${move.name}`.slice(0, 100),
-        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
+        label: `${move.tier === 3 ? `🔮${moveTx.tierEpic}` : move.tier === 2 ? `💠${moveTx.tierRare}` : `⚪${moveTx.tierCommon}`}｜${move.name}`.slice(0, 100),
+        description: `${move.element || (moveTx.unknownElement || 'Unknown')}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
     });
     rowLearnChip = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('moves_learn_chip')
-        .setPlaceholder(`學習技能晶片（${learnableChipTotal} 枚，依稀有度）`)
+        .setPlaceholder(moveTx.learnPlaceholder(learnableChipTotal))
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(learnOptions)
@@ -502,21 +531,21 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       return String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-Hant');
     });
     const unlearnOptions = sortedForgettableMoves.slice(0, 25).map((move) => {
-      const tierText = move.tier === 3 ? '史詩' : move.tier === 2 ? '稀有' : '普通';
+      const tierText = move.tier === 3 ? moveTx.tierEpic : move.tier === 2 ? moveTx.tierRare : moveTx.tierCommon;
       const dmg = buildMoveDamageBreakdown(move, selectedPet);
       const energyCost = BATTLE.getMoveEnergyCost(move);
       const moveSpeed = getMoveSpeedValue(move);
-      const effectShort = String(describeMoveEffects(move) || '無效果').replace(/；/g, '/').slice(0, 44);
+      const effectShort = String(describeMoveEffects(move) || moveTx.effectNone).replace(/；/g, '/').slice(0, 44);
       return {
-        label: `${move.tier === 3 ? '🔮史詩' : move.tier === 2 ? '💠稀有' : '⚪普通'}｜${move.name}`.slice(0, 100),
-        description: `${move.element || '未知'}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
+        label: `${move.tier === 3 ? `🔮${moveTx.tierEpic}` : move.tier === 2 ? `💠${moveTx.tierRare}` : `⚪${moveTx.tierCommon}`}｜${move.name}`.slice(0, 100),
+        description: `${move.element || (moveTx.unknownElement || 'Unknown')}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
     });
     rowUnlearnChip = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('moves_unlearn_chip')
-        .setPlaceholder('取消學習（依稀有度，退回技能晶片）')
+        .setPlaceholder(moveTx.unlearnPlaceholder)
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(unlearnOptions)
@@ -528,32 +557,32 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   const rowButtons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`moves_page_prev_${selectedPet.id}_${movePager.page}`)
-      .setLabel('⬅️ 上一頁')
+      .setLabel(moveTx.prevPage)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(sharedPage <= 0),
     new ButtonBuilder()
       .setCustomId(`moves_page_next_${selectedPet.id}_${movePager.page}`)
-      .setLabel('➡️ 下一頁')
+      .setLabel(moveTx.nextPage)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(sharedPage >= totalPages - 1),
     new ButtonBuilder()
       .setCustomId(`set_main_pet_${selectedPet.id}`)
-      .setLabel(activePetId === String(selectedPet.id) ? '✅ 主上場' : '🎯 設主上場')
+      .setLabel(activePetId === String(selectedPet.id) ? moveTx.activeMain : moveTx.setMain)
       .setStyle(activePetId === String(selectedPet.id) ? ButtonStyle.Success : ButtonStyle.Primary)
       .setDisabled(activePetId === String(selectedPet.id)),
-    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 檔案').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('open_profile').setLabel(moveTx.profile).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
 
   const rowAllocate = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`alloc_hp_open_${selectedPet.id}`)
-      .setLabel(`❤️ 自訂加點（可分配 ${remainPoints}）`)
+      .setLabel(moveTx.allocHp(remainPoints))
       .setStyle(ButtonStyle.Primary)
       .setDisabled(remainPoints <= 0),
     new ButtonBuilder()
       .setCustomId(`moves_show_equipment_${selectedPet.id}`)
-      .setLabel('🛡️ 目前裝備')
+      .setLabel(moveTx.equipment)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(false)
   );
@@ -566,7 +595,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   const pointHintRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`alloc_hp_hint_${selectedPet.id}_${remainPoints}`)
-      .setLabel(`每點 +${hpPerPoint} HP｜目前可分配 ${remainPoints} 點`)
+      .setLabel(moveTx.pointHint(hpPerPoint, remainPoints))
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(true)
   );
@@ -597,14 +626,15 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
   }
 }
 
-function buildEquipmentSlotDetailLine(item = null, slot = 'helmet') {
-  if (!item || typeof item !== 'object') return `• ${getFusionSlotLabel(slot)}：未裝備`;
+function buildEquipmentSlotDetailLine(item = null, slot = 'helmet', uiLang = 'zh-TW') {
+  const eqTx = getEquipmentText(uiLang);
+  if (!item || typeof item !== 'object') return `• ${getFusionSlotLabel(slot, uiLang)}：${eqTx.notEquipped || '未裝備'}`;
   const rarity = getFusionRarityLabel(item.rarity);
-  const name = String(item.name || '未命名裝備');
+  const name = String(item.name || eqTx.unnamedGear || '未命名裝備');
   const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
   const statText = formatEquipmentStatText(slot, stats);
   const value = Math.max(0, Number(item.value || 0));
-  return `• ${getFusionSlotLabel(slot)}：${rarity} ${name}｜${statText}｜估值 ${value}`;
+  return `• ${getFusionSlotLabel(slot, uiLang)}：${rarity} ${name}｜${statText}｜${eqTx.estimateLabel || '估值'} ${value}`;
 }
 
 function formatEquipmentStatText(slot = '', stats = {}) {
@@ -625,9 +655,10 @@ function parsePetIdFromEquipmentCustomId(customId = '', prefix = '') {
   return String(raw.slice(prefix.length) || '').trim();
 }
 
-function buildPetEquipmentOwnershipLines(player = null, ownedPets = []) {
+function buildPetEquipmentOwnershipLines(player = null, ownedPets = [], uiLang = 'zh-TW') {
+  const eqTx = getEquipmentText(uiLang);
   const pets = Array.isArray(ownedPets) ? ownedPets : [];
-  if (!player || pets.length <= 0) return ['（尚未有寵物裝備資料）'];
+  if (!player || pets.length <= 0) return [eqTx.noPetEquipmentData || '（尚未有寵物裝備資料）'];
   const lines = [];
   for (const pet of pets) {
     const petId = String(pet?.id || '').trim();
@@ -635,20 +666,21 @@ function buildPetEquipmentOwnershipLines(player = null, ownedPets = []) {
     const slots = FUSION.getPetEquipmentSlots(player, petId, { ensure: false });
     const equippedSlots = FUSION.EQUIPMENT_SLOTS
       .filter((slot) => Boolean(slots?.[slot] && typeof slots[slot] === 'object'))
-      .map((slot) => getFusionSlotLabel(slot));
+      .map((slot) => getFusionSlotLabel(slot, uiLang));
     if (equippedSlots.length <= 0) continue;
-    lines.push(`• ${String(pet?.name || '寵物')}：${equippedSlots.join('、')}`);
+    lines.push(`• ${String(pet?.name || eqTx.petLabel || '寵物')}：${equippedSlots.join('、')}`);
   }
-  return lines.length > 0 ? lines : ['（目前尚未有任何寵物穿戴裝備）'];
+  return lines.length > 0 ? lines : [eqTx.noPetEquipped || '（目前尚未有任何寵物穿戴裝備）'];
 }
 
 async function showPetEquipmentView(interaction, user, selectedPetId = '', notice = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const eqTx = getEquipmentText(uiLang);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: eqTx.notFoundPlayer || '❌ 找不到角色！', components: [] });
     return;
   }
-  const uiLang = getPlayerUILang(player);
   const changed = FUSION.ensurePlayerEquipmentState(player);
   if (changed) CORE.savePlayer(player);
 
@@ -662,17 +694,17 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
   const selectedPetIdSafe = String(selectedPet?.id || '').trim();
   const equipment = FUSION.getPetEquipmentSlots(player, selectedPetIdSafe, { ensure: true });
   const bonus = FUSION.getEquippedBonuses(player, selectedPetIdSafe);
-  const slotLines = FUSION.EQUIPMENT_SLOTS.map((slot) => buildEquipmentSlotDetailLine(equipment?.[slot], slot));
+  const slotLines = FUSION.EQUIPMENT_SLOTS.map((slot) => buildEquipmentSlotDetailLine(equipment?.[slot], slot, uiLang));
   const loreLines = FUSION.EQUIPMENT_SLOTS
     .map((slot) => {
       const item = equipment?.[slot];
       if (!item || typeof item !== 'object') return '';
       const lore = String(item.lore || '').trim();
       if (!lore) return '';
-      return `【${getFusionSlotLabel(slot)}】${lore}`;
+      return `【${getFusionSlotLabel(slot, uiLang)}】${lore}`;
     })
     .filter(Boolean);
-  const ownershipLines = buildPetEquipmentOwnershipLines(player, ownedPets);
+  const ownershipLines = buildPetEquipmentOwnershipLines(player, ownedPets, uiLang);
   const equipCandidates = Array.isArray(player?.equipmentBag) ? player.equipmentBag : [];
   const equipOptions = equipCandidates
     .map((item, idx) => {
@@ -680,11 +712,11 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
       const slot = String(item.slot || '').trim();
       if (!FUSION.EQUIPMENT_SLOTS.includes(slot)) return null;
       const rarity = getFusionRarityLabel(item.rarity);
-      const name = String(item.name || '未命名裝備').slice(0, 46);
+      const name = String(item.name || eqTx.unnamedGear || '未命名裝備').slice(0, 46);
       const value = Math.max(0, Number(item.value || 0));
       return {
-        label: `【${getFusionSlotLabel(slot)}】${rarity} ${name}`.slice(0, 100),
-        description: `估值 ${value}｜背包編號 #${idx + 1}`.slice(0, 100),
+        label: `【${getFusionSlotLabel(slot, uiLang)}】${rarity} ${name}`.slice(0, 100),
+        description: `${eqTx.estimateLabel || '估值'} ${value}｜${eqTx.bagNo || '背包編號'} #${idx + 1}`.slice(0, 100),
         value: String(idx)
       };
     })
@@ -695,33 +727,33 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
       const item = equipment?.[slot];
       if (!item || typeof item !== 'object') return null;
       return {
-        label: `${getFusionSlotLabel(slot)}｜${String(item.name || '未命名裝備')}`.slice(0, 100),
-        description: `拆下後會回到裝備背包`.slice(0, 100),
+        label: `${getFusionSlotLabel(slot, uiLang)}｜${String(item.name || eqTx.unnamedGear || '未命名裝備')}`.slice(0, 100),
+        description: `${eqTx.unequipHint || '拆下後會回到裝備背包'}`.slice(0, 100),
         value: slot
       };
     })
     .filter(Boolean);
 
   const embed = new EmbedBuilder()
-    .setTitle('🛡️ 寵物裝備管理')
+    .setTitle(eqTx.title || '🛡️ 寵物裝備管理')
     .setColor(0x64748b)
     .setDescription(
-      `${selectedPet ? `目前寵物：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）\n` : ''}` +
+      `${selectedPet ? `${eqTx.currentPet || '目前寵物'}：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）\n` : ''}` +
       `${notice ? `${notice}\n` : ''}` +
-      `每隻寵物可獨立穿戴頭盔/盔甲/腰帶/鞋子。\n` +
-      `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜DEF +${Math.floor(Number(bonus.defense || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`
+      `${eqTx.intro || '每隻寵物可獨立穿戴頭盔/盔甲/腰帶/鞋子。'}\n` +
+      `${eqTx.totalBonus || '總加成'}：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜DEF +${Math.floor(Number(bonus.defense || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`
     )
     .addFields(
-      { name: '🎯 裝備欄位', value: slotLines.join('\n').slice(0, 1024), inline: false },
-      { name: '📜 裝備敘述', value: loreLines.length > 0 ? loreLines.join('\n').slice(0, 1024) : '（目前沒有裝備敘述）', inline: false },
-      { name: '🐾 裝備歸屬', value: ownershipLines.join('\n').slice(0, 1024), inline: false }
+      { name: eqTx.slotsTitle || '🎯 裝備欄位', value: slotLines.join('\n').slice(0, 1024), inline: false },
+      { name: eqTx.loreTitle || '📜 裝備敘述', value: loreLines.length > 0 ? loreLines.join('\n').slice(0, 1024) : (eqTx.loreEmpty || '（目前沒有裝備敘述）'), inline: false },
+      { name: eqTx.ownershipTitle || '🐾 裝備歸屬', value: ownershipLines.join('\n').slice(0, 1024), inline: false }
     );
 
   const rows = [];
   if (equipOptions.length > 0) {
     const equipSelect = new StringSelectMenuBuilder()
       .setCustomId(`pet_eq_equip_${selectedPetIdSafe}`)
-      .setPlaceholder('從裝備背包裝上到目前寵物')
+      .setPlaceholder(eqTx.equipPlaceholder || '從裝備背包裝上到目前寵物')
       .setMinValues(1)
       .setMaxValues(1)
       .addOptions(equipOptions);
@@ -730,7 +762,7 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
   if (unequipOptions.length > 0) {
     const unequipSelect = new StringSelectMenuBuilder()
       .setCustomId(`pet_eq_unequip_${selectedPetIdSafe}`)
-      .setPlaceholder('拆下目前寵物的已裝備欄位')
+      .setPlaceholder(eqTx.unequipPlaceholder || '拆下目前寵物的已裝備欄位')
       .setMinValues(1)
       .setMaxValues(1)
       .addOptions(unequipOptions);
@@ -741,9 +773,9 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(backPetId ? `moves_open_pet_${backPetId}` : 'show_moves')
-      .setLabel('🐾 返回寵物管理')
+      .setLabel(eqTx.backPetPanel || '🐾 返回寵物管理')
       .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('open_profile').setLabel('💳 檔案').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('open_profile').setLabel(eqTx.profile || '💳 檔案').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('main_menu').setLabel(t('back', uiLang)).setStyle(ButtonStyle.Secondary)
   );
   rows.push(row);
@@ -752,111 +784,122 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
 
 async function handlePetEquipmentEquipSelect(interaction, user, customId = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const eqTx = getEquipmentText(uiLang);
   if (!player) {
-    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: eqTx.notFoundPlayer || '❌ Character not found!', ephemeral: true }).catch(() => {});
     return;
   }
   const petId = parsePetIdFromEquipmentCustomId(customId, 'pet_eq_equip_');
   const ownedPets = getPlayerOwnedPets(user.id);
   const selectedPet = ownedPets.find((p) => String(p?.id || '').trim() === petId) || null;
   if (!petId || !selectedPet) {
-    await interaction.reply({ content: '⚠️ 寵物資料失效，請重新開啟裝備頁。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: eqTx.petDataExpired || '⚠️ Pet data expired. Please reopen equipment.', ephemeral: true }).catch(() => {});
     return;
   }
   const bagIndex = Number(String(interaction?.values?.[0] || '').trim());
   const result = FUSION.equipBagItemToPet(player, petId, bagIndex);
   if (!result?.success) {
-    await interaction.reply({ content: '⚠️ 無法裝備，請重新選擇。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: eqTx.equipFailed || '⚠️ Unable to equip. Please choose again.', ephemeral: true }).catch(() => {});
     return;
   }
   CORE.savePlayer(player);
-  const equippedName = String(result?.equipped?.name || '裝備').trim() || '裝備';
-  await showPetEquipmentView(interaction, user, petId, `✅ 已為 ${selectedPet.name} 裝上：${equippedName}`);
+  const gearWord = eqTx.gearWord || 'Gear';
+  const equippedName = String(result?.equipped?.name || gearWord).trim() || gearWord;
+  const successText = typeof eqTx.equipSuccess === 'function'
+    ? eqTx.equipSuccess(selectedPet.name, equippedName)
+    : `✅ Equipped ${equippedName} on ${selectedPet.name}`;
+  await showPetEquipmentView(interaction, user, petId, successText);
 }
 
 async function handlePetEquipmentUnequipSelect(interaction, user, customId = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const eqTx = getEquipmentText(uiLang);
   if (!player) {
-    await interaction.reply({ content: '❌ 找不到角色！', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: eqTx.notFoundPlayer || '❌ Character not found!', ephemeral: true }).catch(() => {});
     return;
   }
   const petId = parsePetIdFromEquipmentCustomId(customId, 'pet_eq_unequip_');
   const ownedPets = getPlayerOwnedPets(user.id);
   const selectedPet = ownedPets.find((p) => String(p?.id || '').trim() === petId) || null;
   if (!petId || !selectedPet) {
-    await interaction.reply({ content: '⚠️ 寵物資料失效，請重新開啟裝備頁。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: eqTx.petDataExpired || '⚠️ Pet data expired. Please reopen equipment.', ephemeral: true }).catch(() => {});
     return;
   }
   const slot = String(interaction?.values?.[0] || '').trim();
   const result = FUSION.unequipPetSlotToBag(player, petId, slot);
   if (!result?.success) {
-    await interaction.reply({ content: '⚠️ 拆裝失敗，請重新操作。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: eqTx.unequipFailed || '⚠️ Unequip failed. Please try again.', ephemeral: true }).catch(() => {});
     return;
   }
   CORE.savePlayer(player);
-  const unequippedName = String(result?.unequipped?.name || '裝備').trim() || '裝備';
-  await showPetEquipmentView(interaction, user, petId, `↩️ 已拆下：${unequippedName}`);
+  const gearWord = eqTx.gearWord || 'Gear';
+  const unequippedName = String(result?.unequipped?.name || gearWord).trim() || gearWord;
+  const successText = typeof eqTx.unequipSuccess === 'function'
+    ? eqTx.unequipSuccess(unequippedName)
+    : `↩️ Unequipped: ${unequippedName}`;
+  await showPetEquipmentView(interaction, user, petId, successText);
 }
 
 async function showFinanceLedger(interaction, user) {
   const player = CORE.loadPlayer(user.id);
   const uiLang = getPlayerUILang(player);
-  const panelText = getPlayerPanelText(uiLang);
-  const tx = panelText.finance || {};
+  const tx = getFinanceText(uiLang);
   if (!player) {
-    await interaction.update({ content: tx.notFound || '❌ 找不到角色！', components: [] });
+    await interaction.update({ content: tx.notFound || '❌ Character not found!', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
   const ledgerText = buildFinanceLedgerText(player, 20);
   const notices = Array.isArray(player.financeNotices) ? player.financeNotices.slice(0, 5) : [];
-  const noticeText = notices.length > 0 ? notices.map((n, i) => `${i + 1}. ${n}`).join('\n') : (tx.noUnread || '（目前無未讀）');
+  const noticeText = notices.length > 0 ? notices.map((n, i) => `${i + 1}. ${n}`).join('\n') : (tx.noUnread || '(No unread)');
+  const tokenUnit = tx.tokenUnit || 'Rns';
 
   const embed = new EmbedBuilder()
-    .setTitle(tx.title || '💸 資金流水')
+    .setTitle(tx.title || '💸 Cashflow')
     .setColor(0x1f9d55)
-    .setDescription(tx.desc || '以下為你最近的收入與支出紀錄。')
+    .setDescription(tx.desc || 'Recent income and expense records.')
     .addFields(
-      { name: tx.currentRns || '💰 目前 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: false },
-      { name: tx.unreadNotices || '📬 未讀金流通知', value: noticeText.slice(0, 1024), inline: false },
-      { name: tx.recentLedger || '📒 最近 20 筆流水', value: ledgerText.slice(0, 1024), inline: false }
+      { name: tx.currentRns || '💰 Current Rns', value: `${Number(player?.stats?.財富 || 0)} ${tokenUnit}`, inline: false },
+      { name: tx.unreadNotices || '📬 Unread Notices', value: noticeText.slice(0, 1024), inline: false },
+      { name: tx.recentLedger || '📒 Recent Ledger', value: ledgerText.slice(0, 1024), inline: false }
     );
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('show_inventory').setLabel(tx.backInventory || '🎒 返回背包').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu || '返回主選單').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('show_inventory').setLabel(tx.backInventory || '🎒 Back to Inventory').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu || 'Back to Menu').setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
 }
 
 async function showMemoryAudit(interaction, user) {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const tx = getMemoryAuditText(uiLang);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await interaction.update({ content: tx.notFound || '❌ Character not found!', components: [] });
     return;
   }
-  const uiLang = getPlayerUILang(player);
-  const panelText = getPlayerPanelText(uiLang);
-  const tx = panelText.memoryAudit || {};
   const rows = buildMemoryAuditRows(player, 24);
   const auditText = buildMemoryAuditText(rows, uiLang);
   const categoryCount = {};
   for (const row of rows) {
-    const key = String(row?.category || '一般記憶');
+    const key = String(row?.category || tx.categoryDefault || 'General');
     categoryCount[key] = Number(categoryCount[key] || 0) + 1;
   }
   const categorySummary = Object.entries(categoryCount)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6)
     .map(([name, count]) => `${name}x${count}`)
-    .join('、') || (tx.noRecords || '暫無記錄');
+    .join('、') || (tx.noRecords || 'No records');
 
-  const title = tx.title || '🧠 記憶檢查';
-  const desc = tx.desc || '查看每回合寫入記憶的內容，以及為何被判定需要保留。';
-  const streamTitle = tx.streamTitle || '最近24筆流水';
+  const title = tx.title || '🧠 Memory Audit';
+  const desc = tx.desc || 'Shows what was written into memory each turn and why.';
+  const streamTitle = tx.streamTitle || 'Recent 24 Records';
   const descBody =
     `${desc}\n\n` +
-    `${tx.categorySummary || '📊 類別分佈'}：${categorySummary}\n\n` +
+    `${tx.categorySummary || '📊 Category Summary'}：${categorySummary}\n\n` +
     `📒 ${streamTitle}\n${auditText}`;
 
   const embed = new EmbedBuilder()
@@ -865,7 +908,7 @@ async function showMemoryAudit(interaction, user) {
     .setDescription(descBody.slice(0, 3950));
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu || '返回主選單').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('main_menu').setLabel(tx.backMenu || 'Back to Menu').setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({ embeds: [embed], components: [row] });
 }
@@ -1776,12 +1819,20 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
   ));
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`shop_buy_${safeMarket}_${Math.max(0, pager.page - 1)}`)
+      .setCustomId(
+        pager.page <= 0
+          ? `shop_buy_prev_disabled_${safeMarket}_${pager.page}`
+          : `shop_buy_${safeMarket}_${Math.max(0, pager.page - 1)}`
+      )
       .setLabel('⬅️ 上一頁')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(pager.page <= 0),
     new ButtonBuilder()
-      .setCustomId(`shop_buy_${safeMarket}_${Math.min(pager.totalPages - 1, pager.page + 1)}`)
+      .setCustomId(
+        pager.page >= pager.totalPages - 1
+          ? `shop_buy_next_disabled_${safeMarket}_${pager.page}`
+          : `shop_buy_${safeMarket}_${Math.min(pager.totalPages - 1, pager.page + 1)}`
+      )
       .setLabel('➡️ 下一頁')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(pager.page >= pager.totalPages - 1),
@@ -1853,23 +1904,24 @@ async function showWorldShopScene(interaction, user, marketType = 'renaiss', not
 }
 
 // ============== 行囊/背包 ==============
-function getPlayerEquipmentSummary(player = null) {
+function getPlayerEquipmentSummary(player = null, uiLang = 'zh-TW') {
+  const eqTx = getEquipmentText(uiLang);
   const activePetId = String(player?.activePetId || '').trim();
   const equipment = FUSION.getPetEquipmentSlots(player, activePetId, { ensure: false });
   const bagCount = Array.isArray(player?.equipmentBag) ? player.equipmentBag.length : 0;
   const slotLines = FUSION.EQUIPMENT_SLOTS.map((slot) => {
     const item = equipment?.[slot];
     if (!item || typeof item !== 'object') {
-      return `• ${getFusionSlotLabel(slot)}：未裝備`;
+      return `• ${getFusionSlotLabel(slot, uiLang)}：${eqTx.notEquipped || '未裝備'}`;
     }
     const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
     const statText = formatEquipmentStatText(slot, stats);
-    return `• ${getFusionSlotLabel(slot)}：${getFusionRarityLabel(item.rarity)} ${String(item.name || '未命名裝備')}｜${statText}`;
+    return `• ${getFusionSlotLabel(slot, uiLang)}：${getFusionRarityLabel(item.rarity)} ${String(item.name || eqTx.unnamedGear || '未命名裝備')}｜${statText}`;
   });
   const bonus = FUSION.getEquippedBonuses(player, activePetId);
   return {
     slotText: slotLines.join('\n'),
-    totalText: `總加成：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜DEF +${Math.floor(Number(bonus.defense || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`,
+    totalText: `${eqTx.totalBonus || '總加成'}：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜DEF +${Math.floor(Number(bonus.defense || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`,
     bagCount
   };
 }
@@ -1881,26 +1933,43 @@ function normalizeInventoryViewMode(raw = '') {
   return 'items';
 }
 
-function getInventoryViewLabel(view = 'items') {
-  const safeView = normalizeInventoryViewMode(view);
-  if (safeView === 'goods') return '🧰 藏品';
-  if (safeView === 'equipment') return '🛡️ 裝備';
-  return '📦 物品';
+function getInventoryText(uiLang = 'zh-TW') {
+  const base = getPlayerPanelText('zh-TW')?.inventory || {};
+  const localized = getPlayerPanelText(uiLang)?.inventory || {};
+  return { ...base, ...localized };
 }
 
-function buildEquipmentBagLine(item = null, index = 0) {
+function getEquipmentText(uiLang = 'zh-TW') {
+  const base = getPlayerPanelText('zh-TW')?.equipment || {};
+  const localized = getPlayerPanelText(uiLang)?.equipment || {};
+  return { ...base, ...localized };
+}
+
+function getInventoryViewLabel(view = 'items', uiLang = 'zh-TW') {
+  const safeView = normalizeInventoryViewMode(view);
+  const invTx = getInventoryText(uiLang);
+  if (safeView === 'goods') return invTx.tabGoods;
+  if (safeView === 'equipment') return invTx.tabEquipment;
+  return invTx.tabItems;
+}
+
+function buildEquipmentBagLine(item = null, index = 0, uiLang = 'zh-TW') {
+  const eqTx = getEquipmentText(uiLang);
   if (!item || typeof item !== 'object') return '';
   const slot = String(item?.slot || '').trim();
   if (!FUSION.EQUIPMENT_SLOTS.includes(slot)) return '';
   const rarity = getFusionRarityLabel(item.rarity);
-  const name = String(item.name || '未命名裝備').trim() || '未命名裝備';
+  const name = String(item.name || eqTx.unnamedGear || '未命名裝備').trim() || (eqTx.unnamedGear || '未命名裝備');
   const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
   const statText = formatEquipmentStatText(slot, stats);
   const value = Math.max(0, Number(item.value || 0));
-  return `${index + 1}. 【${getFusionSlotLabel(slot)}】${rarity} ${name}｜${statText}｜估值 ${value}`;
+  return `${index + 1}. 【${getFusionSlotLabel(slot, uiLang)}】${rarity} ${name}｜${statText}｜${eqTx.estimateLabel || '估值'} ${value}`;
 }
 
-function getFusionCandidates(player = null) {
+function getFusionCandidates(player = null, uiLang = 'zh-TW') {
+  const invTx = getInventoryText(uiLang);
+  const sourceLabelInventory = invTx.sourceLabelInventory || '背包';
+  const sourceLabelGoods = invTx.sourceLabelGoods || '藏品';
   const out = [];
   const inventory = Array.isArray(player?.inventory) ? player.inventory : [];
   const tradeGoods = Array.isArray(player?.tradeGoods) ? player.tradeGoods : [];
@@ -1914,7 +1983,7 @@ function getFusionCandidates(player = null) {
     out.push({
       token: `iv_${i}`,
       source: 'inventory',
-      sourceLabel: '背包',
+      sourceLabel: sourceLabelInventory,
       name,
       value: refValue,
       inventoryIndex: i
@@ -1930,7 +1999,7 @@ function getFusionCandidates(player = null) {
     out.push({
       token: `tg_${id}`,
       source: 'tradeGoods',
-      sourceLabel: '藏品',
+      sourceLabel: sourceLabelGoods,
       name,
       value,
       rarity,
@@ -2082,7 +2151,7 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
 
   const pruned = pruneEmptyTradeGoodsEntries(player);
   const changed = FUSION.ensurePlayerEquipmentState(player);
-  const candidates = getFusionCandidates(player);
+  const candidates = getFusionCandidates(player, uiLang);
   const validDraftTokens = getValidatedFusionDraftTokens(player, candidates);
   const draftChanged = setInventoryFusionDraftTokens(player, validDraftTokens);
   if (pruned || changed || draftChanged) CORE.savePlayer(player);
@@ -2192,7 +2261,7 @@ async function handleInventoryFusionSelect(interaction, user, customId = '') {
     return;
   }
 
-  const candidates = getFusionCandidates(player);
+  const candidates = getFusionCandidates(player, uiLang);
   const byToken = new Map(candidates.map((row) => [String(row.token || ''), row]));
   const picks = uniqueTokens.map((token) => byToken.get(token)).filter(Boolean);
   if (picks.length !== uniqueTokens.length) {
@@ -2238,7 +2307,7 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
   const changed = FUSION.ensurePlayerEquipmentState(player);
   if (pruned || changed) CORE.savePlayer(player);
   const currentPage = Math.max(0, Number(String(customId || '').split('_').pop() || 0));
-  const candidates = getFusionCandidates(player);
+  const candidates = getFusionCandidates(player, uiLang);
   const byToken = new Map(candidates.map((row) => [String(row?.token || '').trim(), row]));
   const draftTokens = getValidatedFusionDraftTokens(player, candidates);
   if (draftTokens.length !== 3) {
@@ -2327,10 +2396,11 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
 async function showInventory(interaction, user, page = 0, notice = '', viewMode = 'items') {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: getInventoryText('zh-TW').notFoundPlayer, components: [] });
     return;
   }
   const uiLang = getPlayerUILang(player);
+  const invTx = getInventoryText(uiLang);
   ECON.ensurePlayerEconomy(player);
   const pruned = pruneEmptyTradeGoodsEntries(player);
   const stateChanged = FUSION.ensurePlayerEquipmentState(player);
@@ -2348,13 +2418,13 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
     `${i + 1}. ${String(g?.name || '未命名藏品')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns）`
   );
   const equipmentBagLines = equipmentBag
-    .map((row, i) => buildEquipmentBagLine(row, i))
+    .map((row, i) => buildEquipmentBagLine(row, i, uiLang))
     .filter(Boolean);
 
-  const itemPages = buildPagedFieldChunks(itemLines, 1000, '（空）');
-  const herbPages = buildPagedFieldChunks(herbLines, 1000, '（空）');
-  const goodsPages = buildPagedFieldChunks(goodLines, 1000, '（空）');
-  const equipmentBagPages = buildPagedFieldChunks(equipmentBagLines, 1000, '（空）');
+  const itemPages = buildPagedFieldChunks(itemLines, 1000, invTx.empty);
+  const herbPages = buildPagedFieldChunks(herbLines, 1000, invTx.empty);
+  const goodsPages = buildPagedFieldChunks(goodLines, 1000, invTx.empty);
+  const equipmentBagPages = buildPagedFieldChunks(equipmentBagLines, 1000, invTx.empty);
 
   let totalPages = 1;
   if (safeView === 'goods') {
@@ -2365,56 +2435,56 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
     totalPages = Math.max(itemPages.length, herbPages.length, 1);
   }
   const safePage = Math.max(0, Math.min(totalPages - 1, Number(page || 0)));
-  const itemsList = itemPages[Math.min(safePage, itemPages.length - 1)] || '（空）';
-  const herbsList = herbPages[Math.min(safePage, herbPages.length - 1)] || '（空）';
-  const goodsList = goodsPages[Math.min(safePage, goodsPages.length - 1)] || '（空）';
-  const equipmentBagList = equipmentBagPages[Math.min(safePage, equipmentBagPages.length - 1)] || '（空）';
-  const equipmentInfo = getPlayerEquipmentSummary(player);
-  const fusionCandidates = getFusionCandidates(player);
+  const itemsList = itemPages[Math.min(safePage, itemPages.length - 1)] || invTx.empty;
+  const herbsList = herbPages[Math.min(safePage, herbPages.length - 1)] || invTx.empty;
+  const goodsList = goodsPages[Math.min(safePage, goodsPages.length - 1)] || invTx.empty;
+  const equipmentBagList = equipmentBagPages[Math.min(safePage, equipmentBagPages.length - 1)] || invTx.empty;
+  const equipmentInfo = getPlayerEquipmentSummary(player, uiLang);
+  const fusionCandidates = getFusionCandidates(player, uiLang);
 
   const embed = new EmbedBuilder()
-    .setTitle(`🎒 ${player.name} 的行囊`)
+    .setTitle(invTx.bagTitle(player.name))
     .setColor(0x8B4513)
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
-      `目前分頁：${getInventoryViewLabel(safeView)}（第 ${safePage + 1}/${totalPages} 頁）\n` +
-      `你身上攜帶的物品\n` +
-      `寶物融合：可用藏品 ${fusionCandidates.length} 件（需 3 件）`
+      `${invTx.pageLabel(getInventoryViewLabel(safeView, uiLang), safePage + 1, totalPages)}\n` +
+      `${invTx.carrying}\n` +
+      `${invTx.fusionReady(fusionCandidates.length)}`
     );
 
   if (safeView === 'goods') {
     embed
-      .addFields({ name: `🧰 藏品（第 ${safePage + 1}/${totalPages} 頁）`, value: goodsList, inline: false })
-      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
+      .addFields({ name: invTx.goodsField(safePage + 1, totalPages), value: goodsList, inline: false })
+      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} ${invTx.tokenUnit}`, inline: false });
   } else if (safeView === 'equipment') {
     embed
-      .addFields({ name: `🛡️ 目前穿戴（背包 ${equipmentInfo.bagCount} 件）`, value: equipmentInfo.slotText, inline: false })
-      .addFields({ name: '📈 裝備總加成', value: equipmentInfo.totalText, inline: false })
-      .addFields({ name: `🎒 裝備背包（第 ${safePage + 1}/${totalPages} 頁）`, value: equipmentBagList, inline: false })
-      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
+      .addFields({ name: invTx.equipWorn(equipmentInfo.bagCount), value: equipmentInfo.slotText, inline: false })
+      .addFields({ name: invTx.equipBonus, value: equipmentInfo.totalText, inline: false })
+      .addFields({ name: invTx.equipBag(safePage + 1, totalPages), value: equipmentBagList, inline: false })
+      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} ${invTx.tokenUnit}`, inline: false });
   } else {
     embed
       .addFields(
-        { name: `📦 物品（第 ${safePage + 1}/${totalPages} 頁）`, value: itemsList, inline: true },
-        { name: `🌿 草藥（第 ${safePage + 1}/${totalPages} 頁）`, value: herbsList, inline: true }
+        { name: invTx.itemField(safePage + 1, totalPages), value: itemsList, inline: true },
+        { name: invTx.herbField(safePage + 1, totalPages), value: herbsList, inline: true }
       )
-      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} Rns 代幣`, inline: false });
+      .addFields({ name: t('gold', uiLang), value: `${player.stats.財富} ${invTx.tokenUnit}`, inline: false });
   }
 
   const rowTabs = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('inv_tab_items_0')
-      .setLabel('📦 物品')
+      .setLabel(invTx.tabItems)
       .setStyle(safeView === 'items' ? ButtonStyle.Primary : ButtonStyle.Secondary)
       .setDisabled(safeView === 'items'),
     new ButtonBuilder()
       .setCustomId('inv_tab_goods_0')
-      .setLabel('🧰 藏品')
+      .setLabel(invTx.tabGoods)
       .setStyle(safeView === 'goods' ? ButtonStyle.Primary : ButtonStyle.Secondary)
       .setDisabled(safeView === 'goods'),
     new ButtonBuilder()
       .setCustomId('inv_tab_equipment_0')
-      .setLabel('🛡️ 裝備')
+      .setLabel(invTx.tabEquipment)
       .setStyle(safeView === 'equipment' ? ButtonStyle.Primary : ButtonStyle.Secondary)
       .setDisabled(safeView === 'equipment')
   );
@@ -2422,7 +2492,7 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
   const rowPage = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`inv_page_prev_${safeView}_${safePage}`)
-      .setLabel('⬅️ 上一頁')
+      .setLabel(invTx.prevPage)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage <= 0),
     new ButtonBuilder()
@@ -2432,14 +2502,14 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
       .setDisabled(true),
     new ButtonBuilder()
       .setCustomId(`inv_page_next_${safeView}_${safePage}`)
-      .setLabel('➡️ 下一頁')
+      .setLabel(invTx.nextPage)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages - 1)
   );
   const rowFusion = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('inv_fusion_open_0')
-      .setLabel('🧪 融合寶物')
+      .setLabel(invTx.fusionButton)
       .setStyle(ButtonStyle.Success)
       .setDisabled(fusionCandidates.length < 3)
   );
