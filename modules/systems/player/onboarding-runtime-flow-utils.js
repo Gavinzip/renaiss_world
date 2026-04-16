@@ -295,6 +295,8 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
   function syncWalletInBackground(interaction, user, bindAddress = '') {
     const userId = String(user?.id || '').trim();
     if (!userId) return;
+    if (walletSyncInFlight.has(userId)) return;
+    walletSyncInFlight.add(userId);
 
     Promise.resolve()
       .then(async () => {
@@ -327,6 +329,9 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
             ephemeral: true
           }).catch(() => {});
         }
+      })
+      .finally(() => {
+        walletSyncInFlight.delete(userId);
       });
   }
 
@@ -629,13 +634,13 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     player.currentStory = '';
     player.eventChoices = [];
     CORE.savePlayer(player);
-    let startupWalletCredit = 0;
     let boundWalletAddress = WALLET.getWalletAddress(user.id) || '';
     const onboardingWalletAddress = boundWalletAddress ? '' : getPendingOnboardingWalletAddress(user.id);
     let walletBindingText = boundWalletAddress
       ? `沿用既有綁定：\`${boundWalletAddress}\``
       : '本次未填寫，可之後到設定補綁';
     let walletSyncText = '本次未綁定錢包';
+    let shouldBackgroundSync = false;
 
     if (!boundWalletAddress && onboardingWalletAddress) {
       const bindResult = WALLET.bindWallet(user.id, onboardingWalletAddress);
@@ -649,16 +654,8 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     }
 
     if (boundWalletAddress) {
-      try {
-        const walletSync = await syncWalletAndApplyNow(user.id);
-        startupWalletCredit = Math.max(0, Number(walletSync?.creditedNow || 0));
-        walletSyncText = startupWalletCredit > 0
-          ? `本次已入帳 ${startupWalletCredit} Rns`
-          : '已完成首次同步，本次無新增可領';
-      } catch (walletSyncErr) {
-        console.error('[錢包] 建角後首次同步失敗:', walletSyncErr?.message || walletSyncErr);
-        walletSyncText = '已綁定，但首次同步失敗，之後可到設定手動同步';
-      }
+      shouldBackgroundSync = true;
+      walletSyncText = '已排入背景同步，完成後自動入帳（不影響建角）';
     }
 
     clearPlayerTempData(user.id);
@@ -762,6 +759,10 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       await interaction.reply({ embeds: [embed], components: [row] }).catch(async () => {
         await interaction.channel.send({ embeds: [embed], components: [row] });
       });
+    }
+
+    if (shouldBackgroundSync) {
+      syncWalletInBackground(interaction, user, boundWalletAddress);
     }
   }
 
