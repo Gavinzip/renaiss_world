@@ -66,7 +66,7 @@ const RENAISS_NPCS = {
   ],
   '大都': [
     { name: '阿爾文', title: '節點執行官', level: 25, pet: '金焰獅', petType: '熱能', align: '信標聯盟', desc: '主導大型區域治理與調度' },
-    { name: 'Q', title: '情資網路管理者', level: 18, pet: '棱鏡烏鴉', petType: '訊號', align: '中立', desc: '擅長追蹤異常訊號與偽造流言' },
+    { name: '季衡', title: '情資網路管理者', level: 18, pet: '棱鏡烏鴉', petType: '訊號', align: '中立', desc: '擅長追蹤異常訊號與偽造流言' },
     { name: '牡丹', title: '公共關係顧問', level: 12, pet: '花仙蝶', petType: '生質', align: '信標聯盟', desc: '精於社交協商與多方協調' }
   ],
   '蓬萊觀測島': [
@@ -1996,6 +1996,68 @@ function hasThreatCue(text = '') {
   return !THREAT_RESOLVED_KEYWORDS.some((keyword) => tail.includes(keyword));
 }
 
+function buildNpcMentionPattern(name = '') {
+  const safe = String(name || '').trim();
+  if (!safe) return null;
+  if (/^[A-Za-z0-9]$/u.test(safe)) {
+    return new RegExp(`(^|[^A-Za-z0-9_])${escapeRegex(safe)}(?=[^A-Za-z0-9_]|$)`, 'u');
+  }
+  return new RegExp(escapeRegex(safe), 'u');
+}
+
+function findNpcMentionIndex(text = '', name = '') {
+  const source = String(text || '');
+  const pattern = buildNpcMentionPattern(name);
+  if (!source || !pattern) return -1;
+  const matched = pattern.exec(source);
+  if (!matched) return -1;
+  if (/^[A-Za-z0-9]$/u.test(String(name || '').trim())) {
+    return matched.index + String(matched[1] || '').length;
+  }
+  return matched.index;
+}
+
+function hasNpcIntroCueAroundMention(text = '', name = '') {
+  const source = String(text || '');
+  const safeName = String(name || '').trim();
+  if (!source || !safeName) return true;
+  const pattern = buildNpcMentionPattern(safeName);
+  if (!pattern) return true;
+  const introRegex = new RegExp(
+    `(?:看見|看到|見到|遇見|注意到|發現|一名|一位|名叫|叫做|自稱|站在|站著|從旁|走來|走近|靠近|攔下|出現在|現身|不遠處).{0,14}${pattern.source}|` +
+    `${pattern.source}.{0,18}(?:站在|走來|走近|靠近|攔下|從旁|從後|出聲|開口|自我介紹|向你|朝你|現身|出現在|停在)`,
+    'u'
+  );
+  return introRegex.test(source);
+}
+
+function validateStoryNpcContinuity(story = '', options = {}) {
+  const source = String(story || '').trim();
+  if (!source) return [];
+  const immediateContext = [
+    options.previousStorySummary || '',
+    options.previousAction || '',
+    options.previousOutcome || ''
+  ].join('\n');
+  const npcList = Array.isArray(options.npcs) ? options.npcs : [];
+  const issues = [];
+
+  for (const npc of npcList) {
+    const npcName = String(npc?.name || '').trim();
+    if (!npcName) continue;
+    const idx = findNpcMentionIndex(source, npcName);
+    if (idx < 0) continue;
+    if (findNpcMentionIndex(immediateContext, npcName) >= 0) continue;
+    const windowStart = Math.max(0, idx - 28);
+    const windowEnd = Math.min(source.length, idx + Math.max(48, npcName.length + 24));
+    const mentionWindow = source.slice(windowStart, windowEnd);
+    if (hasNpcIntroCueAroundMention(mentionWindow, npcName)) continue;
+    issues.push(`NPC「${npcName}」首次出場缺少介紹，像是前文已在場人物`);
+  }
+
+  return issues;
+}
+
 function resolveMainlineBridgeLock(player = null, previousChoice = null) {
   const fromPlayer = player && typeof player === 'object' && player.mainlineBridgeLock && typeof player.mainlineBridgeLock === 'object'
     ? player.mainlineBridgeLock
@@ -2540,6 +2602,8 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 45. 即使沒有候選戰利品，若你判斷本回合劇情自然會拿到寶物，也可以新增一個合理寶物；但必須符合地區與場景，不可突兀亂給。
 46. 若有【本回移動摘要】，可在故事內容自然描述，不要輸出機械標記格式。
 47. 禁止輸出任何「🧾 回合標記」或同義的系統欄位行；僅允許第43條的「🧰 掉寶標記」作為隱藏結算標記。
+48. 當地 NPC 名稱必須逐字使用【當地的人】中的原名，禁止自行改寫成別名、前綴職稱或擴寫稱呼（例如只能寫既定原名，不能自行加前綴或換代號）。
+49. 若某個 NPC 不在【前一段故事】、【上一個行動】或【上一個行動結果】中，則他本回合第一次出場時，必須先交代「他從哪裡出現／你怎麼注意到他」；禁止一開場就把他寫成已經在身邊接話很久的人。
 
 直接開始講：`;
 
@@ -2549,33 +2613,52 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 
   for (let i = 0; i < uniqCandidates.length; i++) {
     const model = uniqCandidates[i];
+    let repairIssues = [];
     try {
-      const story = await callAI(prompt, 0.95, {
-        label: i === 0 ? 'generateStory.fast' : 'generateStory.fallback',
-        model,
-        maxTokens: 1600,
-        timeoutMs: STORY_TIMEOUT_MS,
-        retries: STORY_GEN_RETRIES,
-        strictFinalOnly: true,
-        continueOnLength: true,
-        maxContinuations: 1,
-        unlimitedTimeout: false,
-        unlimitedMaxTokens: false
-      });
-      let normalizedStory = normalizeOutputByLanguage(stripNarrativeDraftLeak(story), playerLang);
-      normalizedStory = canonicalizeKingCodenamesText(normalizedStory);
-      normalizedStory = sanitizeStoryTurnMarker(normalizedStory);
-      if (!normalizedStory || normalizedStory.length < 120) {
-        throw new Error('Story too short');
-      }
+      for (let pass = 0; pass < 2; pass += 1) {
+        const promptWithRepair = repairIssues.length > 0
+          ? `${prompt}\n\n【上一個候選稿被退回，請完整重寫並修正以下問題】\n- ${repairIssues.join('\n- ')}`
+          : prompt;
+        const story = await callAI(promptWithRepair, 0.95, {
+          label: i === 0 ? 'generateStory.fast' : 'generateStory.fallback',
+          model,
+          maxTokens: 1600,
+          timeoutMs: STORY_TIMEOUT_MS,
+          retries: STORY_GEN_RETRIES,
+          strictFinalOnly: true,
+          continueOnLength: true,
+          maxContinuations: 1,
+          unlimitedTimeout: false,
+          unlimitedMaxTokens: false
+        });
+        let normalizedStory = normalizeOutputByLanguage(stripNarrativeDraftLeak(story), playerLang);
+        normalizedStory = canonicalizeKingCodenamesText(normalizedStory);
+        normalizedStory = sanitizeStoryTurnMarker(normalizedStory);
+        if (!normalizedStory || normalizedStory.length < 120) {
+          throw new Error('Story too short');
+        }
 
-      if (normalizedStory.length > 2600) {
+        const continuityIssues = validateStoryNpcContinuity(normalizedStory, {
+          previousStorySummary,
+          previousAction,
+          previousOutcome,
+          npcs
+        });
+        if (continuityIssues.length > 0) {
+          repairIssues = continuityIssues;
+          console.warn(`[Storyteller] generateStory continuity retry: ${continuityIssues.join(' | ')}`);
+          if (pass < 1) continue;
+          throw new Error(continuityIssues[0]);
+        }
+
+        if (normalizedStory.length > 2600) {
+          recordAIPerf('story', Date.now() - startedAt);
+          return normalizedStory.substring(0, 2600) + '...[故事過長已截斷]';
+        }
         recordAIPerf('story', Date.now() - startedAt);
-        return normalizedStory.substring(0, 2600) + '...[故事過長已截斷]';
+        console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
+        return normalizedStory;
       }
-      recordAIPerf('story', Date.now() - startedAt);
-      console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
-      return normalizedStory;
     } catch (e) {
       console.error(`[Storyteller] generateStory model=${model} 失敗:`, e.message);
     }
