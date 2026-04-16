@@ -530,7 +530,7 @@ function sampleFromPrefix(prefix, ctx = {}) {
     'quick_shop_': 'quick_shop_renaiss',
     'select_lang_': 'select_lang_zh-TW',
     'set_main_pet_': `set_main_pet_${petId}`,
-    'shop_buy_': 'shop_buy_renaiss_0',
+    'shop_buy_': 'shop_buy_renaiss',
     'shop_buy_device_': 'shop_buy_device_renaiss',
     'shop_buy_energy_crystal_': 'shop_buy_energy_crystal_renaiss',
     'shop_buy_heal_crystal_': 'shop_buy_heal_crystal_renaiss',

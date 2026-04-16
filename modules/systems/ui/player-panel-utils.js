@@ -1669,6 +1669,37 @@ async function handleMarketPostModal(interaction, user, listingType = 'sell', ma
   }
 }
 
+function buildShopBuySelectOptions(listings = []) {
+  const source = Array.isArray(listings) ? listings : [];
+  const options = [];
+  const seenValues = new Set();
+  let droppedInvalid = 0;
+
+  for (let idx = 0; idx < source.length; idx += 1) {
+    const listing = source[idx];
+    const listingId = String(listing?.id || '').trim();
+    const itemName = String(listing?.itemName || '商品').trim() || '商品';
+    const qty = Math.max(1, Number(listing?.quantity || 1));
+    const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
+    const value = `shopbuy_${listingId}`;
+    const label = `${idx + 1}. ${itemName}`.slice(0, 100).trim();
+    const description = `x${qty}｜單價 ${unitPrice} Rns｜下拉選購`.slice(0, 100).trim();
+
+    if (!listingId || !label || !description || value.length > 100 || seenValues.has(value)) {
+      droppedInvalid += 1;
+      continue;
+    }
+
+    seenValues.add(value);
+    options.push({ label, description, value });
+  }
+
+  return {
+    options,
+    droppedInvalid
+  };
+}
+
 async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
   if (!player) {
@@ -1705,6 +1736,8 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
   const listText = listings.length > 0
     ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
     : '（目前沒有可購買商品）';
+  const { options: selectOptions, droppedInvalid: droppedInvalidOptions } = buildShopBuySelectOptions(listings);
+  const totalDroppedCorrupted = droppedCorrupted + droppedInvalidOptions;
 
   const embed = new EmbedBuilder()
     .setTitle(`🛒 商店可購買商品｜${getMarketTypeLabel(safeMarket)}`)
@@ -1712,7 +1745,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     .setDescription(
       `${notice ? `✅ ${notice}\n\n` : ''}` +
       `${listText}\n\n` +
-      `${droppedCorrupted > 0 ? `⚠️ 已略過 ${droppedCorrupted} 筆異常賣單資料（請賣家重新掛單）。\n` : ''}` +
+      `${totalDroppedCorrupted > 0 ? `⚠️ 已略過 ${totalDroppedCorrupted} 筆異常賣單資料（請賣家重新掛單）。\n` : ''}` +
       `頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}\n` +
       `回血水晶：${SHOP_HEAL_CRYSTAL_COST} Rns（恢復氣血）\n` +
       `回能水晶：${SHOP_ENERGY_CRYSTAL_COST} Rns（恢復能量）\n` +
@@ -1723,17 +1756,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     );
 
   const rows = [];
-  if (listings.length > 0) {
-    const selectOptions = listings.slice(0, 25).map((listing, idx) => {
-      const itemName = String(listing.itemName || '商品');
-      const qty = Math.max(1, Number(listing.quantity || 1));
-      const unitPrice = Math.max(1, Number(listing.unitPrice || 0));
-      return {
-        label: `${idx + 1}. ${itemName}`.slice(0, 100),
-        description: `x${qty}｜單價 ${unitPrice} Rns｜下拉選購`.slice(0, 100),
-        value: `shopbuy_${String(listing.id || '').trim()}`
-      };
-    });
+  if (selectOptions.length > 0) {
     const select = new StringSelectMenuBuilder()
       .setCustomId(`shop_buy_select_${safeMarket}`)
       .setPlaceholder('下拉選擇要購買的商品')
@@ -1741,6 +1764,8 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
       .setMaxValues(1)
       .addOptions(selectOptions);
     rows.push(new ActionRowBuilder().addComponents(select));
+  } else if (listings.length > 0 && droppedInvalidOptions > 0) {
+    console.error(`[Shop] buy panel dropped ${droppedInvalidOptions} invalid select options in ${safeMarket} market`);
   }
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
