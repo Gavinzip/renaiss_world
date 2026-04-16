@@ -1,5 +1,37 @@
 const { MAP_LOCATIONS } = require('./world-map');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
+const { appendLootAudit } = require('../systems/data/loot-audit-log');
+
+function formatBridgePreviewText(storyText = '') {
+  const preservedMarkers = ['📌', '📖', '🧭', '📍', '⚠️'];
+  const normalizeMarkerLines = (text = '') => String(text || '')
+    .replace(/\s+(📌|📖|🧭|📍|⚠️)/gu, '\n$1')
+    .trim();
+
+  const lines = String(storyText || '')
+    .split('\n')
+    .map((line) => String(line || '').trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      if (/^現場結果[:：]/u.test(line)) {
+        const body = line.replace(/^現場結果[:：]\s*/u, '').trim();
+        const markerIndex = preservedMarkers
+          .map((marker) => body.indexOf(marker))
+          .filter((index) => index >= 0)
+          .sort((a, b) => a - b)[0];
+        if (markerIndex === undefined) return [];
+        const preserved = normalizeMarkerLines(body.slice(markerIndex));
+        return preserved ? [preserved] : [];
+      }
+      if (/^戰況摘要[:：]/u.test(line)) {
+        return [];
+      }
+      const normalized = normalizeMarkerLines(line);
+      return normalized ? [normalized] : [];
+    });
+
+  return lines.join('\n').trim();
+}
 
 function createEventHandlerUtils(deps = {}) {
   const {
@@ -182,6 +214,29 @@ function storyMentionsLoot(storyMarkerName = '', tradeGood = {}) {
   const markedName = normalizeLootName(storyMarkerName);
   if (!itemName || !markedName) return false;
   return markedName === itemName || markedName.includes(itemName) || itemName.includes(markedName);
+}
+
+function storyExplicitlyShowsLootAcquisition(storyText = '', lootName = '') {
+  const safeLootName = normalizeLootName(lootName);
+  if (!safeLootName) return false;
+  const story = sanitizeStoryTurnMarkerLine(storyText);
+  if (!story) return false;
+
+  const sentences = String(story || '')
+    .split(/[\n。！？!?；;]+/u)
+    .map((row) => String(row || '').trim())
+    .filter(Boolean);
+
+  const acquireVerbPattern = /(取得|拿到|獲得|获得|入手|拾起|撿起|捡起|取出|拿出|翻出|發現|发现|摸出|掏出|塞給|递给|遞給|交給|交给|收下|收進|收入|裝入|装入|帶走|带走)/u;
+  const rejectPattern = /(想要|如果|可能|也許|或許|打算|準備|准備|交換|交易|展示|看見|看到|提到|線索|候選|掉寶標記)/u;
+
+  return sentences.some((sentence) => {
+    const normalizedSentence = normalizeLootName(sentence);
+    if (!normalizedSentence.includes(safeLootName)) return false;
+    if (!acquireVerbPattern.test(sentence)) return false;
+    if (rejectPattern.test(sentence)) return false;
+    return true;
+  });
 }
 
 function inferStoryLootSourceType(storyText = '', fallbackContext = '') {
@@ -1541,15 +1596,16 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   
   // 發送一個「AI 正在思考」的訊息（帶上舊 story，讓 continuity 明顯）
   // choices 變數在 eventChoices 清除前就 capture 了，所以仍有效
-  const prevStory = player.currentStory || '(故事載入中...)';
+  const prevStory = formatBridgePreviewText(player.currentStory || '');
   const prevOptionsText = buildChoiceOptionsText(normalizeEventChoices(player, choices), { player, pet });
-
+  const prevStoryBlock = prevStory ? `\n\n**${uiText.sectionPrevStory}：**\n${prevStory}` : '';
+  const upcomingChoicesBlock = prevOptionsText ? `\n\n**${uiText.sectionUpcomingChoices}：**${prevOptionsText}` : '';
   const loadingMsg = await interaction.channel.send({
     content: null,
     embeds: [{
       title: `⚔️ ${player.name} - ${pet.name}`,
       color: getAlignmentColor(player.alignment),
-      description: `**${uiText.statusLabel}：【${statusBar}】**${eventMainlineLine ? `\n${eventMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*\n\n**${uiText.sectionPrevStory}：**\n${prevStory}${prevOptionsText ? `\n\n**${uiText.sectionUpcomingChoices}：**${prevOptionsText}` : ''}`
+      description: `**${uiText.statusLabel}：【${statusBar}】**${eventMainlineLine ? `\n${eventMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*${prevStoryBlock}${upcomingChoicesBlock}`
     }]
   });
 
@@ -1620,10 +1676,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const declaredLootName = sanitizeLootMarkerName(extractLootGrantMarker(rawStoryText));
       let lootGranted = false;
       if (declaredLootName) {
+        const storyHasLootAcquisition = storyExplicitlyShowsLootAcquisition(rawStoryText, declaredLootName);
         let grantedLoot = null;
-        if (pendingStoryLoot && storyMentionsLoot(declaredLootName, pendingStoryLoot)) {
+        if (storyHasLootAcquisition && pendingStoryLoot && storyMentionsLoot(declaredLootName, pendingStoryLoot)) {
           grantedLoot = { ...pendingStoryLoot };
-        } else {
+        } else if (storyHasLootAcquisition) {
           const fallbackContext = [
             selectedChoice,
             event?.choice,
@@ -1653,6 +1710,30 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
             tags: ['loot', String(grantedLoot.category || 'goods')]
           });
         }
+
+        await appendLootAudit({
+          playerId: String(player?.id || user?.id || '').trim(),
+          playerName: String(player?.name || '').trim(),
+          location: String(player?.location || '').trim(),
+          selectedChoice: String(selectedChoice || '').trim(),
+          eventAction: String(event?.action || '').trim(),
+          declaredLootName,
+          pendingLootName: String(pendingStoryLoot?.name || '').trim(),
+          storyHasLootAcquisition,
+          status: lootGranted ? 'granted' : 'blocked',
+          reason: lootGranted
+            ? 'marker_and_story_body_confirmed'
+            : (storyHasLootAcquisition ? 'grant_construction_failed' : 'marker_without_acquisition_in_story_body'),
+          grantedLoot: lootGranted
+            ? {
+              name: String(grantedLoot?.name || '').trim(),
+              rarity: String(grantedLoot?.rarity || '').trim(),
+              category: String(grantedLoot?.category || '').trim(),
+              value: Math.max(1, Math.floor(Number(grantedLoot?.value || 0)))
+            }
+            : null,
+          storyPreview: sanitizeStoryTurnMarkerLine(rawStoryText).slice(-600)
+        });
       }
       if (lootGranted) {
         player.noLootStreak = 0;

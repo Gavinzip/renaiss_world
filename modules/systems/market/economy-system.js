@@ -8,10 +8,10 @@
 const { getLocationDifficulty } = require('../../content/world-map');
 const PET = require('../pet/pet-system');
 const https = require('https');
-const fs = require('fs');
 const path = require('path');
 const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
 const { createGlobalLanguageResources } = require('../runtime/utils/global-language-resources');
+const { createSqliteMirroredSingletonStore } = require('../data/sqlite-mirrored-state');
 
 const PROTECTED_ITEMS = new Set(['乾糧一包', '水囊']);
 
@@ -65,6 +65,46 @@ const MAX_MARKET_NOTE_LEN = 80;
 const FAIR_STATION_SELL_RATE = 0.8;
 const DIGITAL_STATION_DISPLAY_RATE = 0.9;
 const DIGITAL_STATION_ACTUAL_RATE = 0.6;
+
+function normalizeMarketBoardPayload(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    version: 1,
+    updatedAt: Number(source.updatedAt || Date.now()),
+    listings: Array.isArray(source.listings) ? source.listings : []
+  };
+}
+
+function normalizeScratchStatePayload(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    jackpotPool: Math.max(0, Number(source.jackpotPool || 0)),
+    plays: Math.max(0, Number(source.plays || 0)),
+    wins: Math.max(0, Number(source.wins || 0)),
+    losses: Math.max(0, Number(source.losses || 0)),
+    updatedAt: Number(source.updatedAt || Date.now())
+  };
+}
+
+const MARKET_BOARD_STORE = createSqliteMirroredSingletonStore({
+  namespace: 'market_board',
+  mirrorFilePath: PLAYER_MARKET_FILE,
+  defaultValueFactory: () => ({ version: 1, updatedAt: Date.now(), listings: [] }),
+  normalize: normalizeMarketBoardPayload,
+  onWriteError: (error) => {
+    console.error('[MarketBoard] save failed:', error?.message || error);
+  }
+});
+
+const SCRATCH_STATE_STORE = createSqliteMirroredSingletonStore({
+  namespace: 'scratch_lottery',
+  mirrorFilePath: SCRATCH_STATE_FILE,
+  defaultValueFactory: () => ({ jackpotPool: 0, plays: 0, wins: 0, losses: 0, updatedAt: Date.now() }),
+  normalize: normalizeScratchStatePayload,
+  onWriteError: (error) => {
+    console.error('[Scratch] save failed:', error?.message || error);
+  }
+});
 
 const LANGUAGE_RESOURCES = createGlobalLanguageResources({
   normalizeLangCode: (lang = 'zh-TW') => {
@@ -178,28 +218,30 @@ function consumeFinanceNotices(player, limit = 3) {
 }
 
 function loadMarketBoard() {
-  if (!fs.existsSync(PLAYER_MARKET_FILE)) {
-    return { version: 1, updatedAt: Date.now(), listings: [] };
-  }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(PLAYER_MARKET_FILE, 'utf8'));
-    if (!parsed || typeof parsed !== 'object') throw new Error('invalid board');
-    if (!Array.isArray(parsed.listings)) parsed.listings = [];
-    return parsed;
-  } catch {
-    return { version: 1, updatedAt: Date.now(), listings: [] };
-  }
+  return MARKET_BOARD_STORE.read();
 }
 
 function saveMarketBoard(board) {
-  const safe = board && typeof board === 'object' ? board : { version: 1, listings: [] };
-  if (!Array.isArray(safe.listings)) safe.listings = [];
-  safe.version = 1;
-  safe.updatedAt = Date.now();
-  const dir = path.dirname(PLAYER_MARKET_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(PLAYER_MARKET_FILE, JSON.stringify(safe, null, 2));
+  const safe = normalizeMarketBoardPayload({
+    ...(board && typeof board === 'object' ? board : {}),
+    updatedAt: Date.now()
+  });
+  MARKET_BOARD_STORE.replace(safe);
   return safe;
+}
+
+function updateMarketBoard(updater) {
+  let snapshot = null;
+  MARKET_BOARD_STORE.update((board) => {
+    const nextBoard = typeof updater === 'function' ? updater(board) : board;
+    const safe = normalizeMarketBoardPayload({
+      ...(nextBoard && typeof nextBoard === 'object' ? nextBoard : board),
+      updatedAt: Date.now()
+    });
+    snapshot = safe;
+    return safe;
+  });
+  return snapshot || loadMarketBoard();
 }
 
 function createListingId() {
@@ -466,13 +508,8 @@ function getMarketListingsView(options = {}) {
 
 function createSellListing(player, marketType = 'renaiss', payload = {}) {
   ensurePlayerEconomy(player);
-  const board = loadMarketBoard();
   const ownerId = normalizeText(player?.id || '', 36);
   if (!ownerId) return { success: false, reason: '找不到玩家 ID。' };
-  const openCount = countOpenListingsByOwner(board, ownerId);
-  if (openCount >= MAX_MARKET_OPEN_LISTINGS_PER_PLAYER) {
-    return { success: false, reason: `你的掛單已達上限 ${MAX_MARKET_OPEN_LISTINGS_PER_PLAYER}。` };
-  }
 
   const itemRef = payload?.itemRef && typeof payload.itemRef === 'object' ? payload.itemRef : null;
   const isPetMoveListing = String(itemRef?.kind || '').trim() === 'pet_move';
@@ -508,20 +545,27 @@ function createSellListing(player, marketType = 'renaiss', payload = {}) {
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
-  board.listings.unshift(listing);
-  saveMarketBoard(board);
+  let blockedReason = '';
+  updateMarketBoard((board) => {
+    const openCount = countOpenListingsByOwner(board, ownerId);
+    if (openCount >= MAX_MARKET_OPEN_LISTINGS_PER_PLAYER) {
+      blockedReason = `你的掛單已達上限 ${MAX_MARKET_OPEN_LISTINGS_PER_PLAYER}。`;
+      return board;
+    }
+    board.listings.unshift(listing);
+    return board;
+  });
+  if (blockedReason) {
+    restoreReservedItemsToOwner(player, reserve.reserved);
+    return { success: false, reason: blockedReason };
+  }
   return { success: true, listing };
 }
 
 function createBuyListing(player, marketType = 'renaiss', payload = {}) {
   ensurePlayerEconomy(player);
-  const board = loadMarketBoard();
   const ownerId = normalizeText(player?.id || '', 36);
   if (!ownerId) return { success: false, reason: '找不到玩家 ID。' };
-  const openCount = countOpenListingsByOwner(board, ownerId);
-  if (openCount >= MAX_MARKET_OPEN_LISTINGS_PER_PLAYER) {
-    return { success: false, reason: `你的掛單已達上限 ${MAX_MARKET_OPEN_LISTINGS_PER_PLAYER}。` };
-  }
 
   const itemName = normalizeText(payload.itemName || '', 120);
   const qty = Math.max(1, Math.floor(Number(payload.quantity || payload.qty || 1)));
@@ -534,13 +578,6 @@ function createBuyListing(player, marketType = 'renaiss', payload = {}) {
   if (currentGold < totalPrice) {
     return { success: false, reason: `Rns 不足。你需要 ${totalPrice}，目前只有 ${currentGold}。` };
   }
-  player.stats.財富 = currentGold - totalPrice;
-  appendFinanceLedger(player, {
-    amount: -totalPrice,
-    category: 'market_buy_order_lock',
-    source: `掛買單保證金：${itemName} x${qty}`,
-    marketType: normalizeMarketType(marketType)
-  });
 
   const listing = {
     id: createListingId(),
@@ -559,8 +596,26 @@ function createBuyListing(player, marketType = 'renaiss', payload = {}) {
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
-  board.listings.unshift(listing);
-  saveMarketBoard(board);
+  let blockedReason = '';
+  updateMarketBoard((board) => {
+    const openCount = countOpenListingsByOwner(board, ownerId);
+    if (openCount >= MAX_MARKET_OPEN_LISTINGS_PER_PLAYER) {
+      blockedReason = `你的掛單已達上限 ${MAX_MARKET_OPEN_LISTINGS_PER_PLAYER}。`;
+      return board;
+    }
+    board.listings.unshift(listing);
+    return board;
+  });
+  if (blockedReason) {
+    return { success: false, reason: blockedReason };
+  }
+  player.stats.財富 = currentGold - totalPrice;
+  appendFinanceLedger(player, {
+    amount: -totalPrice,
+    category: 'market_buy_order_lock',
+    source: `掛買單保證金：${itemName} x${qty}`,
+    marketType: normalizeMarketType(marketType)
+  });
   return { success: true, listing };
 }
 
@@ -572,91 +627,107 @@ function buyFromSellListing(buyer, listingId, options = {}) {
     return { success: false, reason: '缺少玩家讀寫函式。' };
   }
 
-  const board = loadMarketBoard();
-  const listing = getOpenListingById(board, listingId);
-  if (!listing || listing.type !== 'sell') return { success: false, reason: '賣單不存在或已下架。' };
   const buyerId = normalizeText(buyer?.id || '', 36);
   if (!buyerId) return { success: false, reason: '找不到購買者。' };
-  if (String(listing.ownerId || '') === buyerId) return { success: false, reason: '不能購買自己的賣單。' };
-
-  const total = Math.max(1, Number(listing.totalPrice || 0));
-  const buyerGold = Math.floor(Number(buyer?.stats?.財富 || 0));
-  if (buyerGold < total) return { success: false, reason: `Rns 不足，需 ${total}。` };
-
-  const seller = loadPlayerById(listing.ownerId);
-  if (!seller) return { success: false, reason: '賣家目前不存在，請稍後重試。' };
-  ensurePlayerEconomy(seller);
-  const isDigitalTrap = String(listing.marketType || '').trim() === 'digital';
-
-  buyer.stats.財富 = buyerGold - total;
   let transferNotes = [];
-  if (isDigitalTrap) {
-    // 神秘鑑價站陷阱：買方被承諾延後配送，但實際不配送；賣方不入帳。
-    transferNotes = ['櫃檯回覆：商品將於下一回合配送。'];
-  } else {
-    seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + total;
-    transferNotes = transferReservedItemsToBuyer(buyer, listing.reservedItems || []);
-  }
-  listing.reservedItems = [];
-  listing.status = 'filled';
-  listing.updatedAt = Date.now();
-  listing.filledAt = Date.now();
-  listing.buyerId = buyerId;
-  listing.buyerName = normalizeText(buyer.name || `玩家${buyerId.slice(-4)}`, 36);
+  let seller = null;
+  let result = null;
+  updateMarketBoard((board) => {
+    const listing = getOpenListingById(board, listingId);
+    if (!listing || listing.type !== 'sell') {
+      result = { success: false, reason: '賣單不存在或已下架。' };
+      return board;
+    }
+    if (String(listing.ownerId || '') === buyerId) {
+      result = { success: false, reason: '不能購買自己的賣單。' };
+      return board;
+    }
 
-  if (isDigitalTrap) {
-    appendFinanceLedger(buyer, {
-      amount: -total,
-      category: 'market_buy_digital_trap',
-      source: `神秘鑑價站購買 ${listing.itemName} x${listing.quantity}（延後配送）`,
-      marketType: listing.marketType,
-      counterpartyId: listing.ownerId,
-      counterpartyName: listing.ownerName,
-      refId: listing.id
-    });
-    pushFinanceNotice(
-      seller,
-      `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，但神秘鑑價站代收款項，未撥款入帳。`
-    );
-  } else {
-    appendFinanceLedger(buyer, {
-      amount: -total,
-      category: 'market_buy',
-      source: `購買 ${listing.itemName} x${listing.quantity}`,
-      marketType: listing.marketType,
-      counterpartyId: listing.ownerId,
-      counterpartyName: listing.ownerName,
-      refId: listing.id
-    });
-    appendFinanceLedger(seller, {
-      amount: total,
-      category: 'market_sell',
-      source: `售出 ${listing.itemName} x${listing.quantity}`,
-      marketType: listing.marketType,
-      counterpartyId: buyerId,
-      counterpartyName: normalizeText(buyer.name || '', 36),
-      refId: listing.id
-    });
-    pushFinanceNotice(
-      seller,
-      `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，入帳 +${total} Rns（買家：${normalizeText(buyer.name || '匿名玩家', 24)}）`
-    );
-  }
+    const total = Math.max(1, Number(listing.totalPrice || 0));
+    const buyerGold = Math.floor(Number(buyer?.stats?.財富 || 0));
+    if (buyerGold < total) {
+      result = { success: false, reason: `Rns 不足，需 ${total}。` };
+      return board;
+    }
 
+    seller = loadPlayerById(listing.ownerId);
+    if (!seller) {
+      result = { success: false, reason: '賣家目前不存在，請稍後重試。' };
+      return board;
+    }
+    ensurePlayerEconomy(seller);
+    const isDigitalTrap = String(listing.marketType || '').trim() === 'digital';
+
+    buyer.stats.財富 = buyerGold - total;
+    if (isDigitalTrap) {
+      transferNotes = ['櫃檯回覆：商品將於下一回合配送。'];
+    } else {
+      seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + total;
+      transferNotes = transferReservedItemsToBuyer(buyer, listing.reservedItems || []);
+    }
+    listing.reservedItems = [];
+    listing.status = 'filled';
+    listing.updatedAt = Date.now();
+    listing.filledAt = Date.now();
+    listing.buyerId = buyerId;
+    listing.buyerName = normalizeText(buyer.name || `玩家${buyerId.slice(-4)}`, 36);
+
+    if (isDigitalTrap) {
+      appendFinanceLedger(buyer, {
+        amount: -total,
+        category: 'market_buy_digital_trap',
+        source: `神秘鑑價站購買 ${listing.itemName} x${listing.quantity}（延後配送）`,
+        marketType: listing.marketType,
+        counterpartyId: listing.ownerId,
+        counterpartyName: listing.ownerName,
+        refId: listing.id
+      });
+      pushFinanceNotice(
+        seller,
+        `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，但神秘鑑價站代收款項，未撥款入帳。`
+      );
+    } else {
+      appendFinanceLedger(buyer, {
+        amount: -total,
+        category: 'market_buy',
+        source: `購買 ${listing.itemName} x${listing.quantity}`,
+        marketType: listing.marketType,
+        counterpartyId: listing.ownerId,
+        counterpartyName: listing.ownerName,
+        refId: listing.id
+      });
+      appendFinanceLedger(seller, {
+        amount: total,
+        category: 'market_sell',
+        source: `售出 ${listing.itemName} x${listing.quantity}`,
+        marketType: listing.marketType,
+        counterpartyId: buyerId,
+        counterpartyName: normalizeText(buyer.name || '', 36),
+        refId: listing.id
+      });
+      pushFinanceNotice(
+        seller,
+        `📬 你的賣單已成交：${listing.itemName} x${listing.quantity}，入帳 +${total} Rns（買家：${normalizeText(buyer.name || '匿名玩家', 24)}）`
+      );
+    }
+
+    result = {
+      success: true,
+      listingId: listing.id,
+      marketType: listing.marketType,
+      itemName: listing.itemName,
+      quantity: Number(listing.quantity || 1),
+      totalPrice: total,
+      sellerName: listing.ownerName,
+      deliveryNotes: Array.isArray(transferNotes) ? transferNotes : [],
+      deliveryDeferred: isDigitalTrap
+    };
+    return board;
+  });
+
+  if (!result?.success) return result || { success: false, reason: '賣單不存在或已下架。' };
   savePlayerById(seller);
-  saveMarketBoard(board);
-
-  return {
-    success: true,
-    listingId: listing.id,
-    marketType: listing.marketType,
-    itemName: listing.itemName,
-    quantity: Number(listing.quantity || 1),
-    totalPrice: total,
-    sellerName: listing.ownerName,
-    deliveryNotes: Array.isArray(transferNotes) ? transferNotes : [],
-    deliveryDeferred: isDigitalTrap
-  };
+  return result;
 }
 
 function fulfillBuyListing(seller, listingId, options = {}) {
@@ -667,102 +738,130 @@ function fulfillBuyListing(seller, listingId, options = {}) {
     return { success: false, reason: '缺少玩家讀寫函式。' };
   }
 
-  const board = loadMarketBoard();
-  const listing = getOpenListingById(board, listingId);
-  if (!listing || listing.type !== 'buy') return { success: false, reason: '買單不存在或已下架。' };
   const sellerId = normalizeText(seller?.id || '', 36);
   if (!sellerId) return { success: false, reason: '找不到出售者。' };
-  if (String(listing.ownerId || '') === sellerId) return { success: false, reason: '不能成交自己的買單。' };
+  let buyer = null;
+  let result = null;
+  updateMarketBoard((board) => {
+    const listing = getOpenListingById(board, listingId);
+    if (!listing || listing.type !== 'buy') {
+      result = { success: false, reason: '買單不存在或已下架。' };
+      return board;
+    }
+    if (String(listing.ownerId || '') === sellerId) {
+      result = { success: false, reason: '不能成交自己的買單。' };
+      return board;
+    }
 
-  const buyer = loadPlayerById(listing.ownerId);
-  if (!buyer) return { success: false, reason: '買家目前不存在，請稍後重試。' };
-  ensurePlayerEconomy(buyer);
+    buyer = loadPlayerById(listing.ownerId);
+    if (!buyer) {
+      result = { success: false, reason: '買家目前不存在，請稍後重試。' };
+      return board;
+    }
+    ensurePlayerEconomy(buyer);
 
-  const reserve = reserveItemsForListing(seller, listing.itemName, Number(listing.quantity || 1));
-  if (!reserve.success) return reserve;
+    const reserve = reserveItemsForListing(seller, listing.itemName, Number(listing.quantity || 1));
+    if (!reserve.success) {
+      result = reserve;
+      return board;
+    }
 
-  transferReservedItemsToBuyer(buyer, reserve.reserved);
-  const isDigitalTrap = String(listing.marketType || '').trim() === 'digital';
-  const payout = isDigitalTrap ? 0 : Math.max(0, Number(listing.reservedGold || listing.totalPrice || 0));
-  seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + payout;
-  listing.reservedGold = 0;
-  listing.reservedItems = reserve.reserved;
-  listing.status = 'filled';
-  listing.updatedAt = Date.now();
-  listing.filledAt = Date.now();
-  listing.sellerId = sellerId;
-  listing.sellerName = normalizeText(seller.name || `玩家${sellerId.slice(-4)}`, 36);
+    transferReservedItemsToBuyer(buyer, reserve.reserved);
+    const isDigitalTrap = String(listing.marketType || '').trim() === 'digital';
+    const payout = isDigitalTrap ? 0 : Math.max(0, Number(listing.reservedGold || listing.totalPrice || 0));
+    seller.stats.財富 = Math.floor(Number(seller?.stats?.財富 || 0)) + payout;
+    listing.reservedGold = 0;
+    listing.reservedItems = reserve.reserved;
+    listing.status = 'filled';
+    listing.updatedAt = Date.now();
+    listing.filledAt = Date.now();
+    listing.sellerId = sellerId;
+    listing.sellerName = normalizeText(seller.name || `玩家${sellerId.slice(-4)}`, 36);
 
-  if (payout > 0) {
-    appendFinanceLedger(seller, {
-      amount: payout,
-      category: 'market_sell_to_buy_order',
-      source: `完成買單：${listing.itemName} x${listing.quantity}`,
+    if (payout > 0) {
+      appendFinanceLedger(seller, {
+        amount: payout,
+        category: 'market_sell_to_buy_order',
+        source: `完成買單：${listing.itemName} x${listing.quantity}`,
+        marketType: listing.marketType,
+        counterpartyId: listing.ownerId,
+        counterpartyName: listing.ownerName,
+        refId: listing.id
+      });
+    } else if (isDigitalTrap) {
+      pushFinanceNotice(seller, `📬 你完成了神秘鑑價站買單「${listing.itemName}」，但對方平台未撥款。`);
+    }
+    pushFinanceNotice(
+      buyer,
+      `📬 你的買單已完成：${listing.itemName} x${listing.quantity}（成交價 ${payout} Rns，賣家：${normalizeText(seller.name || '匿名玩家', 24)}）`
+    );
+
+    result = {
+      success: true,
+      listingId: listing.id,
       marketType: listing.marketType,
-      counterpartyId: listing.ownerId,
-      counterpartyName: listing.ownerName,
-      refId: listing.id
-    });
-  } else if (isDigitalTrap) {
-    pushFinanceNotice(seller, `📬 你完成了神秘鑑價站買單「${listing.itemName}」，但對方平台未撥款。`);
-  }
-  pushFinanceNotice(
-    buyer,
-    `📬 你的買單已完成：${listing.itemName} x${listing.quantity}（成交價 ${payout} Rns，賣家：${normalizeText(seller.name || '匿名玩家', 24)}）`
-  );
+      itemName: listing.itemName,
+      quantity: Number(listing.quantity || 1),
+      totalPrice: payout,
+      buyerName: listing.ownerName
+    };
+    return board;
+  });
 
+  if (!result?.success) return result || { success: false, reason: '買單不存在或已下架。' };
   savePlayerById(buyer);
-  saveMarketBoard(board);
-  return {
-    success: true,
-    listingId: listing.id,
-    marketType: listing.marketType,
-    itemName: listing.itemName,
-    quantity: Number(listing.quantity || 1),
-    totalPrice: payout,
-    buyerName: listing.ownerName
-  };
+  return result;
 }
 
 function cancelMyListing(player, listingId) {
   ensurePlayerEconomy(player);
-  const board = loadMarketBoard();
-  const listing = getOpenListingById(board, listingId);
-  if (!listing) return { success: false, reason: '掛單不存在或已結束。' };
   const ownerId = normalizeText(player?.id || '', 36);
-  if (!ownerId || String(listing.ownerId || '') !== ownerId) {
-    return { success: false, reason: '只能取消自己的掛單。' };
-  }
+  if (!ownerId) return { success: false, reason: '只能取消自己的掛單。' };
 
-  if (listing.type === 'sell') {
-    restoreReservedItemsToOwner(player, listing.reservedItems || []);
-    listing.reservedItems = [];
-  } else if (listing.type === 'buy') {
-    const refund = Math.max(0, Number(listing.reservedGold || 0));
-    if (refund > 0) {
-      player.stats.財富 = Math.floor(Number(player?.stats?.財富 || 0)) + refund;
-      appendFinanceLedger(player, {
-        amount: refund,
-        category: 'market_buy_order_refund',
-        source: `取消買單退款：${listing.itemName} x${listing.quantity}`,
-        marketType: listing.marketType,
-        refId: listing.id
-      });
+  let result = null;
+  updateMarketBoard((board) => {
+    const listing = getOpenListingById(board, listingId);
+    if (!listing) {
+      result = { success: false, reason: '掛單不存在或已結束。' };
+      return board;
     }
-    listing.reservedGold = 0;
-  }
+    if (String(listing.ownerId || '') !== ownerId) {
+      result = { success: false, reason: '只能取消自己的掛單。' };
+      return board;
+    }
 
-  listing.status = 'cancelled';
-  listing.updatedAt = Date.now();
-  saveMarketBoard(board);
-  return {
-    success: true,
-    listingId: listing.id,
-    marketType: listing.marketType,
-    type: listing.type,
-    itemName: listing.itemName,
-    quantity: Number(listing.quantity || 1)
-  };
+    if (listing.type === 'sell') {
+      restoreReservedItemsToOwner(player, listing.reservedItems || []);
+      listing.reservedItems = [];
+    } else if (listing.type === 'buy') {
+      const refund = Math.max(0, Number(listing.reservedGold || 0));
+      if (refund > 0) {
+        player.stats.財富 = Math.floor(Number(player?.stats?.財富 || 0)) + refund;
+        appendFinanceLedger(player, {
+          amount: refund,
+          category: 'market_buy_order_refund',
+          source: `取消買單退款：${listing.itemName} x${listing.quantity}`,
+          marketType: listing.marketType,
+          refId: listing.id
+        });
+      }
+      listing.reservedGold = 0;
+    }
+
+    listing.status = 'cancelled';
+    listing.updatedAt = Date.now();
+    result = {
+      success: true,
+      listingId: listing.id,
+      marketType: listing.marketType,
+      type: listing.type,
+      itemName: listing.itemName,
+      quantity: Number(listing.quantity || 1)
+    };
+    return board;
+  });
+
+  return result || { success: false, reason: '掛單不存在或已結束。' };
 }
 
 function isDigitalMaskPhase(player) {
@@ -817,55 +916,38 @@ function appendAppraisalHistory(player, entry) {
 }
 
 function loadScratchState() {
-  if (!fs.existsSync(SCRATCH_STATE_FILE)) {
-    return {
-      jackpotPool: 0,
-      plays: 0,
-      wins: 0,
-      losses: 0,
-      updatedAt: Date.now()
-    };
-  }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(SCRATCH_STATE_FILE, 'utf8'));
-    return {
-      jackpotPool: Math.max(0, Number(parsed?.jackpotPool || 0)),
-      plays: Math.max(0, Number(parsed?.plays || 0)),
-      wins: Math.max(0, Number(parsed?.wins || 0)),
-      losses: Math.max(0, Number(parsed?.losses || 0)),
-      updatedAt: Number(parsed?.updatedAt || Date.now())
-    };
-  } catch {
-    return {
-      jackpotPool: 0,
-      plays: 0,
-      wins: 0,
-      losses: 0,
-      updatedAt: Date.now()
-    };
-  }
+  return SCRATCH_STATE_STORE.read();
 }
 
 function saveScratchState(state) {
-  const dir = path.dirname(SCRATCH_STATE_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const safe = {
-    jackpotPool: Math.max(0, Number(state?.jackpotPool || 0)),
-    plays: Math.max(0, Number(state?.plays || 0)),
-    wins: Math.max(0, Number(state?.wins || 0)),
-    losses: Math.max(0, Number(state?.losses || 0)),
+  const safe = normalizeScratchStatePayload({
+    ...(state && typeof state === 'object' ? state : {}),
     updatedAt: Date.now()
-  };
-  fs.writeFileSync(SCRATCH_STATE_FILE, JSON.stringify(safe, null, 2));
+  });
+  SCRATCH_STATE_STORE.replace(safe);
   return safe;
+}
+
+function updateScratchState(updater) {
+  let snapshot = null;
+  SCRATCH_STATE_STORE.update((state) => {
+    const nextState = typeof updater === 'function' ? updater(state) : state;
+    const safe = normalizeScratchStatePayload({
+      ...(nextState && typeof nextState === 'object' ? nextState : state),
+      updatedAt: Date.now()
+    });
+    snapshot = safe;
+    return safe;
+  });
+  return snapshot || loadScratchState();
 }
 
 function playScratchLottery(player, options = {}) {
   ensurePlayerEconomy(player);
-  const state = loadScratchState();
   const currentGold = Number(player?.stats?.財富 || 0);
   const marketType = String(options?.marketType || '').trim().toLowerCase() === 'digital' ? 'digital' : 'renaiss';
   const forceLose = marketType === 'digital' || options?.forceLose === true;
+  const state = loadScratchState();
 
   if (currentGold < SCRATCH_COST) {
     return {
@@ -880,20 +962,24 @@ function playScratchLottery(player, options = {}) {
   }
 
   player.stats.財富 = currentGold - SCRATCH_COST;
-  state.plays += 1;
 
   const win = !forceLose && Math.random() < SCRATCH_WIN_RATE;
   let reward = 0;
   if (win) {
     reward = SCRATCH_WIN_REWARD;
     player.stats.財富 += reward;
-    state.wins += 1;
-  } else {
-    state.losses += 1;
-    state.jackpotPool += SCRATCH_COST;
   }
 
-  const saved = saveScratchState(state);
+  const saved = updateScratchState((scratch) => {
+    scratch.plays += 1;
+    if (win) {
+      scratch.wins += 1;
+    } else {
+      scratch.losses += 1;
+      scratch.jackpotPool += SCRATCH_COST;
+    }
+    return scratch;
+  });
   const net = reward - SCRATCH_COST;
   return {
     success: true,
@@ -910,6 +996,15 @@ function playScratchLottery(player, options = {}) {
         ? `🎟️ 你在神秘鑑價站買的刮刮樂沒有中獎，本次投入 ${SCRATCH_COST} Rns 代幣已投入獎池。`
         : `🎟️ 未中獎。本次投入 ${SCRATCH_COST} Rns 代幣已投入獎池。`)
   };
+}
+
+function resetScratchState() {
+  return saveScratchState({
+    jackpotPool: 0,
+    plays: 0,
+    wins: 0,
+    losses: 0
+  });
 }
 
 function randInt(min, max) {
@@ -1606,5 +1701,6 @@ module.exports = {
   createHuntLoot,
   createTreasureLoot,
   sellPlayerAtMarket,
-  playScratchLottery
+  playScratchLottery,
+  resetScratchState
 };

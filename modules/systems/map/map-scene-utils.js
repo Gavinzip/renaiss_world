@@ -19,7 +19,7 @@ function createMapSceneUtils(deps = {}) {
     getLocationProfile = () => null,
     getLocationStoryContext = () => '',
     joinByLang = () => '',
-    renderRegionMapImageBuffer = () => ({ buffer: null, error: '' }),
+    renderRegionMapImageBuffer = async () => ({ buffer: null, error: '' }),
     formatPortalDestinationDisplay = (v) => String(v || ''),
     getLocationPortalHub = () => '',
     getRegionPortalHubs = () => [],
@@ -157,7 +157,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const mapImageStatus = tx.mapLegendImage;
   const shouldRenderImage = !useWideAnsiMap;
   const mapRenderResult = shouldRenderImage && regionSnapshot
-    ? renderRegionMapImageBuffer(regionSnapshot, mapImageStatus, uiLang)
+    ? await renderRegionMapImageBuffer(regionSnapshot, mapImageStatus, uiLang)
     : { buffer: null, error: shouldRenderImage ? '缺少區域地圖資料' : '' };
   const renderedMapImage = mapRenderResult?.buffer || null;
   const hasRenderedMapImage = shouldRenderImage && Boolean(renderedMapImage);

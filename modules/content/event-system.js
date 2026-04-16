@@ -3,11 +3,11 @@
  * 50+ 事件 + AI 動態生成
  */
 
-const fs = require('fs');
 const path = require('path');
 const { getLocationProfile, getNearbyPoints } = require('./world-map');
 const { sanitizeWorldText, sanitizeWorldObject } = require('../core/style-sanitizer');
 const { LEGACY_DATA_DIR } = require('../core/storage-paths');
+const { createSqliteMirroredSingletonStore } = require('../systems/data/sqlite-mirrored-state');
 
 // ============== 50+ 事件庫（長敘事版）==============
 const BASE_EVENTS = [
@@ -1041,39 +1041,53 @@ function executeEvent(event, player) {
 const WORLD_EVENTS_FILE = path.join(LEGACY_DATA_DIR, 'world_events.json');
 const WORLD_EVENTS_MAX = 5;
 
+function normalizeWorldEventsPayload(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    events: Array.isArray(source.events) ? source.events : [],
+    modifiedLocations: source.modifiedLocations && typeof source.modifiedLocations === 'object' && !Array.isArray(source.modifiedLocations)
+      ? source.modifiedLocations
+      : {}
+  };
+}
+
+const WORLD_EVENTS_STORE = createSqliteMirroredSingletonStore({
+  namespace: 'world_events',
+  mirrorFilePath: WORLD_EVENTS_FILE,
+  defaultValueFactory: () => ({ events: [], modifiedLocations: {} }),
+  normalize: normalizeWorldEventsPayload,
+  onWriteError: (error) => {
+    console.error('[WorldEvents] save failed:', error?.message || error);
+  }
+});
+
 function getWorldEvents() {
-  if (!fs.existsSync(WORLD_EVENTS_FILE)) {
-    return { events: [], modifiedLocations: {} };
-  }
-  try {
-    return JSON.parse(fs.readFileSync(WORLD_EVENTS_FILE, 'utf8'));
-  } catch (e) {
-    return { events: [], modifiedLocations: {} };
-  }
+  return WORLD_EVENTS_STORE.read();
 }
 
 function addWorldEvent(message, type = 'normal') {
-  const data = getWorldEvents();
-  data.events.unshift({
-    message: sanitizeWorldText(message),
-    type,
-    timestamp: Date.now()
+  WORLD_EVENTS_STORE.update((data) => {
+    data.events.unshift({
+      message: sanitizeWorldText(message),
+      type,
+      timestamp: Date.now()
+    });
+    data.events = data.events.slice(0, WORLD_EVENTS_MAX);
+    return data;
   });
-  // 只保留最近 5 條
-  data.events = data.events.slice(0, WORLD_EVENTS_MAX);
-  fs.writeFileSync(WORLD_EVENTS_FILE, JSON.stringify(data, null, 2));
 }
 
 function modifyLocation(location, change) {
-  const data = getWorldEvents();
-  if (!data.modifiedLocations[location]) {
-    data.modifiedLocations[location] = [];
-  }
-  data.modifiedLocations[location].push({
-    change,
-    timestamp: Date.now()
+  WORLD_EVENTS_STORE.update((data) => {
+    if (!data.modifiedLocations[location]) {
+      data.modifiedLocations[location] = [];
+    }
+    data.modifiedLocations[location].push({
+      change,
+      timestamp: Date.now()
+    });
+    return data;
   });
-  fs.writeFileSync(WORLD_EVENTS_FILE, JSON.stringify(data, null, 2));
 }
 
 function getLocationChanges(location) {
@@ -1083,7 +1097,7 @@ function getLocationChanges(location) {
 
 function clearWorldEvents() {
   const empty = { events: [], modifiedLocations: {} };
-  fs.writeFileSync(WORLD_EVENTS_FILE, JSON.stringify(empty, null, 2));
+  WORLD_EVENTS_STORE.replace(empty);
   return { cleared: true, events: 0, modifiedLocations: 0 };
 }
 

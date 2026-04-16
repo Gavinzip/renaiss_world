@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 
 function createMapRenderUtils(deps = {}) {
   const {
@@ -112,17 +112,81 @@ function createMapRenderUtils(deps = {}) {
     return `${tag} 渲染失敗`;
   }
 
-  function renderRegionMapImageBuffer(snapshot, statusText = '', lang = 'zh-TW') {
+  async function pathExists(targetPath) {
+    try {
+      await fs.promises.access(targetPath, fs.constants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function runProcess(command, args, options = {}) {
+    const cwd = options.cwd || rootDir;
+    const timeoutMs = Math.max(0, Number(options.timeoutMs || 0));
+
+    return new Promise((resolve) => {
+      let finished = false;
+      let timeoutError = null;
+      let stdout = '';
+      let stderr = '';
+      let timeoutId = null;
+      const child = spawn(command, args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      const finalize = (result) => {
+        if (finished) return;
+        finished = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        resolve({
+          error: result?.error || timeoutError,
+          signal: result?.signal || '',
+          status: Number.isFinite(result?.status) ? result.status : null,
+          stderr,
+          stdout
+        });
+      };
+
+      if (timeoutMs > 0) {
+        timeoutId = setTimeout(() => {
+          timeoutError = new Error('Process timed out');
+          child.kill('SIGTERM');
+          setTimeout(() => {
+            try { child.kill('SIGKILL'); } catch {}
+          }, 400).unref();
+        }, timeoutMs);
+      }
+
+      child.stdout.on('data', (chunk) => {
+        stdout += String(chunk || '');
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += String(chunk || '');
+      });
+      child.on('error', (error) => {
+        finalize({ error });
+      });
+      child.on('close', (status, signal) => {
+        finalize({ status, signal });
+      });
+    });
+  }
+
+  async function renderRegionMapImageBuffer(snapshot, statusText = '', lang = 'zh-TW') {
     if (!snapshot || !Array.isArray(snapshot.mapRows) || snapshot.mapRows.length === 0) {
       return { buffer: null, error: '地圖資料為空' };
     }
     const legacyScriptPath = getRegionMapRendererScriptPath();
     const posterScriptPath = getRegionPosterRendererScriptPath();
-    if (!fs.existsSync(posterScriptPath) && !fs.existsSync(legacyScriptPath)) {
+    const hasPosterScript = await pathExists(posterScriptPath);
+    const hasLegacyScript = await pathExists(legacyScriptPath);
+    if (!hasPosterScript && !hasLegacyScript) {
       return { buffer: null, error: '找不到地圖渲染腳本（新版/舊版）' };
     }
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'renaiss-map-'));
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'renaiss-map-'));
     const inPath = path.join(tempDir, 'map-input.json');
     const outPath = path.join(tempDir, 'map-output.png');
     const fontPath = path.join(rootDir, 'NotoSansMonoCJKtc-Regular.otf');
@@ -154,18 +218,18 @@ function createMapRenderUtils(deps = {}) {
     };
 
     try {
-      fs.writeFileSync(inPath, JSON.stringify(payload), 'utf8');
+      await fs.promises.writeFile(inPath, JSON.stringify(payload), 'utf8');
       const legacyArgs = [legacyScriptPath, '--input', inPath, '--output', outPath];
       const runners = ['python3', 'python'];
       const failReasons = [];
 
-      if (fs.existsSync(posterScriptPath)) {
+      if (hasPosterScript) {
         const posterArgs = [posterScriptPath, '--current', currentLocation || '廣州', '--lang', mapLang, '--output', outPath];
         for (const runner of runners) {
-          const run = spawnSync(runner, posterArgs, { cwd: rootDir, encoding: 'utf8', timeout: 12000 });
+          const run = await runProcess(runner, posterArgs, { cwd: rootDir, timeoutMs: 12000 });
           if (run.status === 0) {
-            if (fs.existsSync(outPath)) {
-              return { buffer: fs.readFileSync(outPath), error: '' };
+            if (await pathExists(outPath)) {
+              return { buffer: await fs.promises.readFile(outPath), error: '' };
             }
             failReasons.push(`${runner}(poster_v6) 執行成功但未產生 PNG`);
             continue;
@@ -174,14 +238,14 @@ function createMapRenderUtils(deps = {}) {
         }
       }
 
-      if (fs.existsSync(legacyScriptPath)) {
-        if (fs.existsSync(fontPath)) legacyArgs.push('--font', fontPath);
+      if (hasLegacyScript) {
+        if (await pathExists(fontPath)) legacyArgs.push('--font', fontPath);
         let run = null;
         for (const runner of runners) {
-          run = spawnSync(runner, legacyArgs, { cwd: rootDir, encoding: 'utf8', timeout: 12000 });
+          run = await runProcess(runner, legacyArgs, { cwd: rootDir, timeoutMs: 12000 });
           if (run.status === 0) {
-            if (fs.existsSync(outPath)) {
-              return { buffer: fs.readFileSync(outPath), error: '' };
+            if (await pathExists(outPath)) {
+              return { buffer: await fs.promises.readFile(outPath), error: '' };
             }
             failReasons.push(`${runner}(legacy) 執行成功但未產生 PNG`);
             continue;
@@ -203,9 +267,7 @@ function createMapRenderUtils(deps = {}) {
       console.log('[MapRender] exception:', e?.message || e);
       return { buffer: null, error: `程式例外：${String(e?.message || e).slice(0, 140)}` };
     } finally {
-      try { if (fs.existsSync(inPath)) fs.unlinkSync(inPath); } catch {}
-      try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch {}
-      try { fs.rmdirSync(tempDir); } catch {}
+      try { await fs.promises.rm(tempDir, { recursive: true, force: true }); } catch {}
     }
   }
 

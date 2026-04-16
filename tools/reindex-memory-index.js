@@ -1,15 +1,6 @@
-const fs = require('fs');
-const path = require('path');
+const { loadProjectEnv } = require('../modules/core/load-env');
 
-const envPath = path.join(__dirname, '..', '.env');
-if (fs.existsSync(envPath)) {
-  fs.readFileSync(envPath, 'utf-8').split('\n').forEach((line) => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
-}
+loadProjectEnv();
 
 const CORE = require('../modules/core/game-core');
 

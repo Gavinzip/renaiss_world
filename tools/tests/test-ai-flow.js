@@ -5,25 +5,12 @@
 
 const path = require('path');
 const fs = require('fs');
+const { loadEnvFromCandidates } = require('../../modules/core/load-env');
 
-function loadEnvFromCandidates() {
-  const candidates = [
-    path.join(__dirname, '.env'),
-    path.join(__dirname, '..', '..', '.env')
-  ];
-  for (const envPath of candidates) {
-    if (!fs.existsSync(envPath)) continue;
-    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-      const raw = String(line || '').trim();
-      if (!raw || raw.startsWith('#')) return;
-      const [key, ...valueParts] = raw.split('=');
-      if (key && valueParts.length > 0) {
-        process.env[key.trim()] = valueParts.join('=').trim();
-      }
-    });
-  }
-}
-loadEnvFromCandidates();
+loadEnvFromCandidates([
+  path.join(__dirname, '.env'),
+  path.join(__dirname, '..', '..', '.env')
+]);
 
 const STORY = require('../../modules/content/storyteller.js');
 const EVENTS = require('../../modules/content/event-system.js');
@@ -101,10 +88,22 @@ async function runTest() {
   }
 
   // 清理
-  const playerFile = path.join(WORLD_DATA_ROOT, 'players', TEST_USER_ID + '.json');
-  if (fs.existsSync(playerFile)) fs.unlinkSync(playerFile);
+  if (typeof CORE.deletePlayerStorage === 'function') {
+    CORE.deletePlayerStorage(TEST_USER_ID);
+    if (typeof CORE.flushPlayerStorage === 'function') {
+      await CORE.flushPlayerStorage();
+    }
+  } else {
+    const playerFile = path.join(WORLD_DATA_ROOT, 'players', TEST_USER_ID + '.json');
+    if (fs.existsSync(playerFile)) fs.unlinkSync(playerFile);
+  }
   const petFile = path.join(WORLD_DATA_ROOT, 'pets.json');
-  if (fs.existsSync(petFile)) {
+  if (typeof PET.deletePetByOwner === 'function') {
+    PET.deletePetByOwner(TEST_USER_ID);
+    if (typeof PET.flushPetStore === 'function') {
+      await PET.flushPetStore();
+    }
+  } else if (fs.existsSync(petFile)) {
     const pets = JSON.parse(fs.readFileSync(petFile, 'utf-8'));
     delete pets['pet_' + TEST_USER_ID + '_' + egg.createdAt];
     fs.writeFileSync(petFile, JSON.stringify(pets, null, 2));

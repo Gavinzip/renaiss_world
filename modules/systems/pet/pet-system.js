@@ -3,9 +3,9 @@
  * 世界觀改版：原創「生態共鳴 + 數據進化」風格
  */
 
-const fs = require('fs');
 const path = require('path');
 const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
+const { createSqliteMirroredObjectRepository } = require('../data/sqlite-mirrored-state');
 
 const PET_FILE = path.join(LEGACY_DATA_DIR, 'pets.json');
 const PET_RECOVER_TURNS = 2; // 戰敗後 2 回合復活
@@ -1107,13 +1107,46 @@ function normalizePetVitalsForStorage(pet) {
   pet.hp = hp;
 }
 
+function normalizePetStorePayload(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  for (const [petId, petValue] of Object.entries(value)) {
+    if (!petValue || typeof petValue !== 'object' || Array.isArray(petValue)) continue;
+    const pet = { ...petValue };
+    normalizePetMoves(pet);
+    normalizePetVitalsForStorage(pet);
+    const resolvedId = String(pet.id || petId || '').trim();
+    if (!resolvedId) continue;
+    pet.id = resolvedId;
+    out[resolvedId] = pet;
+  }
+  return out;
+}
+
+const PET_STORE = createSqliteMirroredObjectRepository({
+  namespace: 'pet_state',
+  mirrorFilePath: PET_FILE,
+  defaultValueFactory: () => ({}),
+  normalizeAll: normalizePetStorePayload,
+  normalizeEntry: (pet) => {
+    if (!pet || typeof pet !== 'object' || Array.isArray(pet)) return null;
+    const nextPet = { ...pet };
+    normalizePetMoves(nextPet);
+    normalizePetVitalsForStorage(nextPet);
+    return nextPet;
+  },
+  onWriteError: (error) => {
+    console.error('[寵物] 儲存失敗:', error?.message || error);
+  }
+});
+
 // ============== 存讀檔 ==============
 function savePet(pet) {
-  const pets = loadAllPets();
-  normalizePetMoves(pet);
-  normalizePetVitalsForStorage(pet);
-  pets[pet.id] = pet;
-  fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
+  if (!pet || typeof pet !== 'object') return;
+  const nextPet = { ...pet };
+  normalizePetMoves(nextPet);
+  normalizePetVitalsForStorage(nextPet);
+  PET_STORE.setEntry(nextPet.id, nextPet);
 }
 
 function loadPet(playerId) {
@@ -1135,13 +1168,9 @@ function deletePetByOwner(playerId) {
   let changed = false;
   for (const [petId, pet] of Object.entries(pets)) {
     if (pet?.ownerId === playerId) {
-      delete pets[petId];
+      PET_STORE.deleteEntry(petId);
       changed = true;
     }
-  }
-
-  if (changed) {
-    fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
   }
 
   return changed;
@@ -1167,26 +1196,21 @@ function getAllPetsByOwner(playerId) {
     }
   }
   if (changed) {
-    fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
+    PET_STORE.replaceAll(pets);
   }
   return owned;
 }
 
 function loadAllPets() {
-  if (!fs.existsSync(PET_FILE)) return {};
-  try {
-    const pets = JSON.parse(fs.readFileSync(PET_FILE, 'utf8'));
-    let changed = false;
-    for (const pet of Object.values(pets)) {
-      if (normalizePetMoves(pet)) changed = true;
-    }
-    if (changed) {
-      fs.writeFileSync(PET_FILE, JSON.stringify(pets, null, 2));
-    }
-    return pets;
-  } catch (e) {
-    return {};
-  }
+  return PET_STORE.getAll();
+}
+
+function replaceAllPets(pets) {
+  return PET_STORE.replaceAll(pets);
+}
+
+async function flushPetStore() {
+  await PET_STORE.flush();
 }
 
 module.exports = {
@@ -1215,5 +1239,7 @@ module.exports = {
   getAllPetsByOwner,
   deletePetByOwner,
   loadAllPets,
-  getPetById
+  getPetById,
+  replaceAllPets,
+  flushPetStore
 };

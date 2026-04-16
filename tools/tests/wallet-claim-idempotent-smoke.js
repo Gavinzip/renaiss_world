@@ -7,19 +7,29 @@ async function run() {
   const originalRaw = fs.readFileSync(walletPath, 'utf8');
   const original = JSON.parse(originalRaw);
   const testId = '__wallet_claim_idempotent_test__';
+  let WALLET = null;
 
   try {
-    original[testId] = {
+    const seeded = {
+      ...original,
+      [testId]: {
       walletAddress: '0x1111111111111111111111111111111111111111',
       boundAt: new Date().toISOString(),
       pendingRNS: 0,
       walletRnsClaimed: 1000,
       walletRnsLastSyncedAt: null
+      }
     };
-    fs.writeFileSync(walletPath, JSON.stringify(original, null, 2));
+    fs.writeFileSync(walletPath, JSON.stringify(seeded, null, 2));
 
     delete require.cache[modulePath];
-    const WALLET = require('../../modules/systems/player/wallet-system');
+    WALLET = require('../../modules/systems/player/wallet-system');
+    if (typeof WALLET.replaceWalletSettings === 'function') {
+      WALLET.replaceWalletSettings(seeded);
+      if (typeof WALLET.flushWalletSettings === 'function') {
+        await WALLET.flushWalletSettings();
+      }
+    }
 
     const step1 = WALLET.applyWalletRnsDelta(testId, 900);
     if (!step1.success || step1.delta !== 0 || step1.claimedAfter !== 1000) {
@@ -43,6 +53,12 @@ async function run() {
 
     console.log('OK wallet-claim-idempotent-smoke');
   } finally {
+    if (WALLET && typeof WALLET.replaceWalletSettings === 'function') {
+      WALLET.replaceWalletSettings(original);
+      if (typeof WALLET.flushWalletSettings === 'function') {
+        await WALLET.flushWalletSettings();
+      }
+    }
     fs.writeFileSync(walletPath, originalRaw);
     delete require.cache[modulePath];
   }

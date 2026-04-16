@@ -69,7 +69,9 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     }
 
     const player = CORE.loadPlayer(discordUserId);
-    const walletDataBefore = WALLET.getWalletData(discordUserId) || {};
+    const walletDataBefore = (typeof WALLET.getWalletData === 'function')
+      ? (WALLET.getWalletData(discordUserId) || {})
+      : {};
     let ledger = null;
     if (player) {
       ledger = WALLET.applyWalletRnsDelta(discordUserId, assets.rns, {

@@ -1,16 +1,6 @@
-const path = require('path');
-const fs = require('fs');
+const { loadProjectEnv } = require('../modules/core/load-env');
 
-const envPath = path.join(__dirname, '..', '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-  envContent.split('\n').forEach((line) => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
-}
+loadProjectEnv();
 
 const { setupWorldStorage } = require('../modules/core/storage-paths');
 const { runWorldBackup } = require('../modules/systems/data/world-backup');

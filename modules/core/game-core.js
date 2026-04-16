@@ -9,6 +9,12 @@ const path = require('path');
 const https = require('https');
 
 const MEMORY_INDEX = require('../systems/data/memory-index');
+const {
+  deepCloneJson,
+  safeReadJsonFileSync
+} = require('../systems/data/queued-json-store');
+const { createPlayerStateRepository } = require('../systems/data/player-state-repository');
+const { createSqliteMirroredSingletonStore } = require('../systems/data/sqlite-mirrored-state');
 const FACTION_DIRECTOR = require('./faction-war-director');
 const { sanitizeWorldText } = require('./style-sanitizer');
 const PET = require('../systems/pet/pet-system');
@@ -32,6 +38,9 @@ const NPC_QUOTES_FILE = path.join(DATA_DIR, 'npc_quote_memory.json');
 const NPC_QUOTE_PLAYER_LIMIT = Math.max(120, Math.min(5000, Number(process.env.NPC_QUOTE_PLAYER_LIMIT || 1200)));
 const NPC_QUOTE_DEFAULT_LIMIT = Math.max(5, Math.min(80, Number(process.env.NPC_QUOTE_DEFAULT_LIMIT || 16)));
 const NPC_QUOTE_INDEX_NAMESPACE_ALL = 'npc_quote:all';
+let worldStateStore = null;
+let playerStateRepository = null;
+let npcQuoteStoreState = null;
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(PLAYERS_DIR)) fs.mkdirSync(PLAYERS_DIR, { recursive: true });
@@ -573,22 +582,44 @@ function sanitizeQuoteId(input = '') {
     .slice(0, 72);
 }
 
+function normalizeNpcQuoteStorePayload(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const rawQuotes = source.quotesByPlayer && typeof source.quotesByPlayer === 'object' && !Array.isArray(source.quotesByPlayer)
+    ? source.quotesByPlayer
+    : {};
+  const quotesByPlayer = {};
+  for (const [playerId, entries] of Object.entries(rawQuotes)) {
+    const safePlayerId = String(playerId || '').trim();
+    if (!safePlayerId) continue;
+    quotesByPlayer[safePlayerId] = (Array.isArray(entries) ? entries : [])
+      .map((entry) => normalizeNpcQuoteEntry(entry, safePlayerId))
+      .filter(Boolean);
+  }
+  return {
+    version: Math.max(1, Number(source.version || 1)),
+    quotesByPlayer
+  };
+}
+
+function getNpcQuoteStore() {
+  if (npcQuoteStoreState) return npcQuoteStoreState;
+  npcQuoteStoreState = createSqliteMirroredSingletonStore({
+    namespace: 'npc_quotes',
+    mirrorFilePath: NPC_QUOTES_FILE,
+    defaultValueFactory: () => ({ version: 1, quotesByPlayer: {} }),
+    normalize: normalizeNpcQuoteStorePayload,
+    onWriteError: (error) => {
+      console.error('[NPC Quote] save failed:', error?.message || error);
+    }
+  });
+  return npcQuoteStoreState;
+}
+
 function ensureNpcQuoteStoreLoaded() {
   if (npcQuoteStoreLoaded) return;
   npcQuoteStoreLoaded = true;
   try {
-    if (!fs.existsSync(NPC_QUOTES_FILE)) {
-      npcQuoteStore = { version: 1, quotesByPlayer: {} };
-      return;
-    }
-    const parsed = JSON.parse(fs.readFileSync(NPC_QUOTES_FILE, 'utf8'));
-    const byPlayer = parsed && typeof parsed === 'object' && parsed.quotesByPlayer && typeof parsed.quotesByPlayer === 'object'
-      ? parsed.quotesByPlayer
-      : {};
-    npcQuoteStore = {
-      version: Number(parsed?.version || 1),
-      quotesByPlayer: byPlayer
-    };
+    npcQuoteStore = getNpcQuoteStore().read();
   } catch (e) {
     console.error('[NPC Quote] load failed:', e?.message || e);
     npcQuoteStore = { version: 1, quotesByPlayer: {} };
@@ -598,8 +629,7 @@ function ensureNpcQuoteStoreLoaded() {
 function saveNpcQuoteStore() {
   ensureNpcQuoteStoreLoaded();
   try {
-    fs.mkdirSync(path.dirname(NPC_QUOTES_FILE), { recursive: true });
-    fs.writeFileSync(NPC_QUOTES_FILE, JSON.stringify(npcQuoteStore, null, 2));
+    npcQuoteStore = getNpcQuoteStore().replace(npcQuoteStore);
   } catch (e) {
     console.error('[NPC Quote] save failed:', e?.message || e);
   }
@@ -670,44 +700,50 @@ function appendNpcQuoteMemory(playerId, payload = {}) {
   const entry = normalizeNpcQuoteEntry(payload, playerId);
   if (!entry) return null;
   ensureNpcQuoteStoreLoaded();
-  const byPlayer = npcQuoteStore.quotesByPlayer || {};
-  const list = Array.isArray(byPlayer[entry.playerId]) ? byPlayer[entry.playerId] : [];
+  let finalEntry = null;
+  npcQuoteStore = getNpcQuoteStore().update((store) => {
+    const byPlayer = store.quotesByPlayer || {};
+    const list = Array.isArray(byPlayer[entry.playerId]) ? byPlayer[entry.playerId] : [];
 
-  // 去重：同玩家同 NPC 同內容，15 分鐘內視為同一句
-  const normText = normalizeQuoteComparableText(entry.text);
-  for (let i = list.length - 1; i >= 0; i--) {
-    const item = list[i];
-    if (!item || typeof item !== 'object') continue;
-    if (String(item.npcId || '') !== String(entry.npcId || '')) continue;
-    const cmp = normalizeQuoteComparableText(item.text || '');
-    if (!cmp || cmp !== normText) continue;
-    const delta = Math.abs(Number(entry.at || 0) - Number(item.at || 0));
-    if (delta <= 15 * 60 * 1000) {
-      return item;
+    const normText = normalizeQuoteComparableText(entry.text);
+    for (let i = list.length - 1; i >= 0; i--) {
+      const item = list[i];
+      if (!item || typeof item !== 'object') continue;
+      if (String(item.npcId || '') !== String(entry.npcId || '')) continue;
+      const cmp = normalizeQuoteComparableText(item.text || '');
+      if (!cmp || cmp !== normText) continue;
+      const delta = Math.abs(Number(entry.at || 0) - Number(item.at || 0));
+      if (delta <= 15 * 60 * 1000) {
+        finalEntry = item;
+        return store;
+      }
     }
-  }
 
-  list.push(entry);
-  if (list.length > NPC_QUOTE_PLAYER_LIMIT) {
-    list.splice(0, list.length - NPC_QUOTE_PLAYER_LIMIT);
-  }
-  byPlayer[entry.playerId] = list;
-  npcQuoteStore.quotesByPlayer = byPlayer;
-  saveNpcQuoteStore();
+    list.push(entry);
+    if (list.length > NPC_QUOTE_PLAYER_LIMIT) {
+      list.splice(0, list.length - NPC_QUOTE_PLAYER_LIMIT);
+    }
+    byPlayer[entry.playerId] = list;
+    store.quotesByPlayer = byPlayer;
+    finalEntry = entry;
+    return store;
+  });
 
-  const ownerId = buildNpcQuoteOwnerId(entry.playerId);
+  if (!finalEntry) return null;
+
+  const ownerId = buildNpcQuoteOwnerId(finalEntry.playerId);
   if (ownerId) {
     const memoryPayload = {
       type: 'npc_quote',
-      content: `${entry.speaker}：「${entry.text}」`,
-      outcome: `source=${entry.source}${entry.location ? `|loc=${entry.location}` : ''}`,
-      location: entry.location,
-      timestamp: entry.at,
-      tags: ['npc_quote', entry.npcId, entry.source],
+      content: `${finalEntry.speaker}：「${finalEntry.text}」`,
+      outcome: `source=${finalEntry.source}${finalEntry.location ? `|loc=${finalEntry.location}` : ''}`,
+      location: finalEntry.location,
+      timestamp: finalEntry.at,
+      tags: ['npc_quote', finalEntry.npcId, finalEntry.source],
       importance: 2
     };
     MEMORY_INDEX.rememberEntityMemory(ownerId, memoryPayload, {
-      namespace: buildNpcQuoteNamespace(entry.npcId)
+      namespace: buildNpcQuoteNamespace(finalEntry.npcId)
     }).catch((e) => {
       console.log('[NPC Quote][Index] remember failed:', e?.message || e);
     });
@@ -718,7 +754,7 @@ function appendNpcQuoteMemory(playerId, payload = {}) {
     });
   }
 
-  return entry;
+  return finalEntry;
 }
 
 function getPlayerNpcQuoteEvidence(playerId, options = {}) {
@@ -773,10 +809,12 @@ function clearPlayerNpcQuoteMemory(playerId = '') {
   if (!pid) return 0;
   ensureNpcQuoteStoreLoaded();
   const current = Array.isArray(npcQuoteStore?.quotesByPlayer?.[pid]) ? npcQuoteStore.quotesByPlayer[pid].length : 0;
-  if (npcQuoteStore?.quotesByPlayer && Object.prototype.hasOwnProperty.call(npcQuoteStore.quotesByPlayer, pid)) {
-    delete npcQuoteStore.quotesByPlayer[pid];
-    saveNpcQuoteStore();
-  }
+  npcQuoteStore = getNpcQuoteStore().update((store) => {
+    if (store?.quotesByPlayer && Object.prototype.hasOwnProperty.call(store.quotesByPlayer, pid)) {
+      delete store.quotesByPlayer[pid];
+    }
+    return store;
+  });
   return current;
 }
 
@@ -787,8 +825,7 @@ function clearAllNpcQuoteMemory() {
     const len = Array.isArray(npcQuoteStore.quotesByPlayer[key]) ? npcQuoteStore.quotesByPlayer[key].length : 0;
     total += len;
   }
-  npcQuoteStore = { version: 1, quotesByPlayer: {} };
-  saveNpcQuoteStore();
+  npcQuoteStore = getNpcQuoteStore().replace({ version: 1, quotesByPlayer: {} });
   return total;
 }
 
@@ -2967,29 +3004,59 @@ function recordWorldEvent(message, type = 'player_action', extra = {}) {
   return eventObj;
 }
 
+function normalizeWorldStatePayload(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    world: source.world && typeof source.world === 'object' && !Array.isArray(source.world)
+      ? source.world
+      : buildDefaultWorldState(),
+    agents: Array.isArray(source.agents) ? source.agents : [],
+    agentMemories: source.agentMemories && typeof source.agentMemories === 'object' && !Array.isArray(source.agentMemories)
+      ? source.agentMemories
+      : {},
+    agentInventories: source.agentInventories && typeof source.agentInventories === 'object' && !Array.isArray(source.agentInventories)
+      ? source.agentInventories
+      : {}
+  };
+}
+
+function getWorldStateStore() {
+  if (worldStateStore) return worldStateStore;
+  worldStateStore = createSqliteMirroredSingletonStore({
+    namespace: 'world_state',
+    mirrorFilePath: WORLD_FILE,
+    defaultValueFactory: () => normalizeWorldStatePayload({ world, agents, agentMemories, agentInventories }),
+    normalize: normalizeWorldStatePayload,
+    onWriteError: (error) => {
+      console.error('[World] save failed:', error?.message || error);
+    }
+  });
+  return worldStateStore;
+}
+
 function saveWorld() {
-  fs.writeFileSync(WORLD_FILE, JSON.stringify({ 
+  getWorldStateStore().replace({
     world, 
     agents,
     agentMemories,
     agentInventories
-  }, null, 2));
+  });
 }
 
 function loadWorld() {
   let changed = false;
-  if (fs.existsSync(WORLD_FILE)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8'));
-      world = data.world || world;
-      agents = data.agents || agents;
-      if (!Array.isArray(agents)) {
-        agents = NPC_AGENTS.map(a => ({ ...a, alive: true, exp: 0, party: null, status: "自由" }));
-        changed = true;
-      }
-      agentMemories = data.agentMemories || {};
-      agentInventories = data.agentInventories || {};
-    } catch (e) {}
+  try {
+    const data = getWorldStateStore().read();
+    world = data.world || world;
+    agents = data.agents || agents;
+    if (!Array.isArray(agents)) {
+      agents = NPC_AGENTS.map(a => ({ ...a, alive: true, exp: 0, party: null, status: "自由" }));
+      changed = true;
+    }
+    agentMemories = data.agentMemories || {};
+    agentInventories = data.agentInventories || {};
+  } catch (e) {
+    console.error('[World] load failed:', e?.message || e);
   }
   if (ensureMentorMasters(agents)) changed = true;
   if (ensureLocationNpcCoverage(agents)) changed = true;
@@ -3269,29 +3336,56 @@ function normalizeFriendSocialSchema(player) {
   delete player.friendRequestsOutgoing;
 }
 
+function normalizePlayerForStorage(player) {
+  if (!player || typeof player !== 'object') return null;
+  const next = deepCloneJson(player);
+  next.alignment = normalizeAlignmentValue(next.alignment);
+  normalizeEnergyStatSchema(next);
+  normalizeFriendSocialSchema(next);
+  normalizePlayerMemorySchema(next);
+  ensureLongTermMemoryDigest(next, true);
+  return next;
+}
+
+function normalizePlayerForRuntime(player) {
+  if (!player || typeof player !== 'object') return null;
+  const next = deepCloneJson(player);
+  next.alignment = normalizeAlignmentValue(next.alignment);
+  normalizeEnergyStatSchema(next);
+  normalizeFriendSocialSchema(next);
+  normalizePlayerMemorySchema(next);
+  ensureLongTermMemoryDigest(next, false);
+  return next;
+}
+
+function getPlayerStateRepository() {
+  if (playerStateRepository) return playerStateRepository;
+  playerStateRepository = createPlayerStateRepository({
+    namespace: 'player_state',
+    mirrorDirPath: PLAYERS_DIR,
+    normalizeStorage: normalizePlayerForStorage,
+    normalizeRuntime: normalizePlayerForRuntime,
+    onWriteError: (error) => {
+      console.error('[PlayerStorage] write failed:', error?.message || error);
+    }
+  });
+
+  return playerStateRepository;
+}
+
 function savePlayer(player) {
-  const playerDir = path.join(DATA_DIR, 'players');
-  if (!fs.existsSync(playerDir)) fs.mkdirSync(playerDir, { recursive: true });
-  if (player && typeof player === 'object') {
-    player.alignment = normalizeAlignmentValue(player.alignment);
-    normalizeEnergyStatSchema(player);
-    normalizeFriendSocialSchema(player);
+  const storedPlayer = getPlayerStateRepository().save(player);
+  if (storedPlayer && player && typeof player === 'object') {
+    Object.assign(player, storedPlayer);
   }
-  normalizePlayerMemorySchema(player);
-  ensureLongTermMemoryDigest(player, true);
-  fs.writeFileSync(path.join(playerDir, `${player.id}.json`), JSON.stringify(player, null, 2));
-  ensurePlayerMemoryIndexed(player);
+  if (player && typeof player === 'object') {
+    ensurePlayerMemoryIndexed(player);
+  }
 }
 
 function loadPlayer(discordId) {
-  const playerFile = path.join(DATA_DIR, 'players', `${discordId}.json`);
-  if (fs.existsSync(playerFile)) {
-    const player = JSON.parse(fs.readFileSync(playerFile, 'utf8'));
-    player.alignment = normalizeAlignmentValue(player.alignment);
-    normalizeEnergyStatSchema(player);
-    normalizeFriendSocialSchema(player);
-    normalizePlayerMemorySchema(player);
-    ensureLongTermMemoryDigest(player, false);
+  const player = getPlayerStateRepository().get(discordId);
+  if (player) {
     ensurePlayerMemoryIndexed(player);
     return player;
   }
@@ -3299,18 +3393,11 @@ function loadPlayer(discordId) {
 }
 
 function getAllPlayers() {
-  const playerDir = path.join(DATA_DIR, 'players');
-  if (!fs.existsSync(playerDir)) return [];
-  const files = fs.readdirSync(playerDir).filter(f => f.endsWith('.json'));
-  return files.map(f => {
-    const player = normalizePlayerMemorySchema(JSON.parse(fs.readFileSync(path.join(playerDir, f), 'utf8')));
-    player.alignment = normalizeAlignmentValue(player.alignment);
-    normalizeEnergyStatSchema(player);
-    normalizeFriendSocialSchema(player);
-    ensureLongTermMemoryDigest(player, false);
+  const players = getPlayerStateRepository().listAll();
+  for (const player of players) {
     ensurePlayerMemoryIndexed(player);
-    return player;
-  });
+  }
+  return players;
 }
 
 // ============== 天氣系統 ==============
@@ -3513,25 +3600,55 @@ function checkSurrender(message) {
   return SURRENDER_WORDS.some(word => lowerMsg.includes(word));
 }
 
-function resetPlayerGame(playerId) {
-  const playerDir = path.join(DATA_DIR, 'players');
-  const playerFile = path.join(playerDir, `${playerId}.json`);
-  
-  // 刪除玩家資料
-  if (fs.existsSync(playerFile)) {
-    fs.unlinkSync(playerFile);
+function deletePlayerStorage(playerId) {
+  const report = getPlayerStateRepository().deleteById(playerId);
+  const memoryFile = path.join(DATA_DIR, 'players', `${playerId}_memory.json`);
+  let removedLegacyMemoryFile = false;
+  if (fs.existsSync(memoryFile)) {
+    fs.unlinkSync(memoryFile);
+    removedLegacyMemoryFile = true;
   }
+  return {
+    removedPlayerFile: Boolean(report?.removedPlayerFile),
+    removedLegacyMemoryFile
+  };
+}
+
+function clearAllPlayerStorage() {
+  const report = getPlayerStateRepository().clearAll();
+  let removedLegacyMemoryFiles = 0;
+  if (fs.existsSync(PLAYERS_DIR)) {
+    const legacyFiles = fs.readdirSync(PLAYERS_DIR).filter((name) => name.endsWith('_memory.json'));
+    for (const fileName of legacyFiles) {
+      fs.unlinkSync(path.join(PLAYERS_DIR, fileName));
+      removedLegacyMemoryFiles += 1;
+    }
+  }
+  return {
+    removedPlayerFiles: Number(report?.removedPlayerFiles || 0),
+    removedLegacyMemoryFiles
+  };
+}
+
+function rebuildPlayerStorageFromMirrors(options = {}) {
+  return getPlayerStateRepository().rebuildFromMirrors(options);
+}
+
+function inspectPlayerStorage() {
+  return getPlayerStateRepository().inspect();
+}
+
+async function flushPlayerStorage() {
+  await getPlayerStateRepository().flush();
+}
+
+function resetPlayerGame(playerId) {
+  deletePlayerStorage(playerId);
   
   // 刪除寵物資料
   const petSystem = require('../systems/pet/pet-system');
   if (typeof petSystem.deletePetByOwner === 'function') {
     petSystem.deletePetByOwner(playerId);
-  }
-  
-  // 刪除記憶
-  const memoryFile = path.join(DATA_DIR, 'players', `${playerId}_memory.json`);
-  if (fs.existsSync(memoryFile)) {
-    fs.unlinkSync(memoryFile);
   }
   
   return {
@@ -3589,6 +3706,11 @@ module.exports = {
   
   // 玩家
   createPlayer,
+  deletePlayerStorage,
+  clearAllPlayerStorage,
+  rebuildPlayerStorageFromMirrors,
+  inspectPlayerStorage,
+  flushPlayerStorage,
   loadPlayer,
   savePlayer,
   getAllPlayers,

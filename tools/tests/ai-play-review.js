@@ -4,25 +4,12 @@
 
 const path = require('path');
 const fs = require('fs');
+const { loadEnvFromCandidates } = require('../../modules/core/load-env');
 
-function loadEnvFromCandidates() {
-  const candidates = [
-    path.join(__dirname, '.env'),
-    path.join(__dirname, '..', '..', '.env')
-  ];
-  for (const envPath of candidates) {
-    if (!fs.existsSync(envPath)) continue;
-    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-      const raw = String(line || '').trim();
-      if (!raw || raw.startsWith('#')) return;
-      const [key, ...valueParts] = raw.split('=');
-      if (key && valueParts.length > 0) {
-        process.env[key.trim()] = valueParts.join('=').trim();
-      }
-    });
-  }
-}
-loadEnvFromCandidates();
+loadEnvFromCandidates([
+  path.join(__dirname, '.env'),
+  path.join(__dirname, '..', '..', '.env')
+]);
 
 const CORE = require('../../modules/core/game-core');
 const PET = require('../../modules/systems/pet/pet-system');
@@ -157,9 +144,22 @@ async function aiPlayGame(playerName, faction, roundCount = 20) {
     console.log('Location: ' + finalPlayer.location);
     console.log('Pet HP: ' + finalPet.hp + '/' + finalPet.maxHp);
     
-    const playerPath = path.join(__dirname, 'data', 'players', userId + '.json');
-    if (fs.existsSync(playerPath)) {
-      fs.unlinkSync(playerPath);
+    if (typeof CORE.deletePlayerStorage === 'function') {
+      CORE.deletePlayerStorage(userId);
+      if (typeof CORE.flushPlayerStorage === 'function') {
+        await CORE.flushPlayerStorage();
+      }
+    } else {
+      const playerPath = path.join(__dirname, 'data', 'players', userId + '.json');
+      if (fs.existsSync(playerPath)) {
+        fs.unlinkSync(playerPath);
+      }
+    }
+    if (typeof PET.deletePetByOwner === 'function') {
+      PET.deletePetByOwner(userId);
+      if (typeof PET.flushPetStore === 'function') {
+        await PET.flushPetStore();
+      }
     }
     
     return true;

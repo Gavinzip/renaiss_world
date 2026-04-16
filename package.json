@@ -9,6 +9,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "reindex:memory": "node tools/reindex-memory-index.js",
     "backup:world": "node tools/run-world-backup.js",
+    "storage:rebuild": "node tools/rebuild-runtime-storage.js",
+    "storage:inspect": "node tools/inspect-runtime-storage.js",
     "audit:root-js": "node tools/audit-root-js-layout.js",
     "test:battle-balance": "node tools/tests/battle-balance-full.js",
     "test:start-mainmenu": "node tools/tests/start-mainmenu-smoke.js",

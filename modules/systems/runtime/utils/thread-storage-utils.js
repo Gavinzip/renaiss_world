@@ -1,48 +1,53 @@
-const fs = require('fs');
-const path = require('path');
+const {
+  createQueuedJsonObjectRegistry,
+  normalizeObjectRecord
+} = require('../../data/queued-json-store');
+const { createSqliteMirroredObjectRepository } = require('../../data/sqlite-mirrored-state');
 
 function createThreadStorageUtils(deps = {}) {
   const playerThreadsFile = String(deps.playerThreadsFile || '').trim();
+  const JSON_OBJECT_REGISTRY = createQueuedJsonObjectRegistry();
+  const playerThreadsStore = playerThreadsFile
+    ? createSqliteMirroredObjectRepository({
+      namespace: String(deps.namespace || 'player_threads'),
+      mirrorFilePath: playerThreadsFile,
+      defaultValueFactory: () => ({}),
+      normalizeAll: normalizeObjectRecord,
+      normalizeEntry: (value) => {
+        if (value === null || value === undefined) return null;
+        const safe = String(value || '').trim();
+        return safe || null;
+      }
+    })
+    : null;
 
   function loadPlayerThreads() {
-    if (!playerThreadsFile || !fs.existsSync(playerThreadsFile)) return {};
-    try {
-      return JSON.parse(fs.readFileSync(playerThreadsFile, 'utf8'));
-    } catch {
-      return {};
-    }
+    return playerThreadsStore ? playerThreadsStore.getAll() : {};
   }
 
   function savePlayerThreads(threads) {
-    if (!playerThreadsFile) return;
-    fs.writeFileSync(playerThreadsFile, JSON.stringify(threads, null, 2));
+    if (!playerThreadsStore) return {};
+    return playerThreadsStore.replaceAll(threads);
   }
 
   function loadJsonObject(filePath) {
-    try {
-      if (!fs.existsSync(filePath)) return {};
-      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-      return parsed;
-    } catch {
-      return {};
-    }
+    return JSON_OBJECT_REGISTRY.loadJsonObject(filePath);
   }
 
   function saveJsonObject(filePath, data) {
-    const safe = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(safe, null, 2));
+    return JSON_OBJECT_REGISTRY.saveJsonObject(filePath, data);
   }
 
   function setPlayerThread(userId, threadId) {
-    const threads = loadPlayerThreads();
+    if (!playerThreadsStore) return {};
+    const safeUserId = String(userId || '').trim();
+    if (!safeUserId) return loadPlayerThreads();
     if (threadId === null || threadId === undefined) {
-      delete threads[userId];
-    } else {
-      threads[userId] = threadId;
+      playerThreadsStore.deleteEntry(safeUserId);
+      return loadPlayerThreads();
     }
-    savePlayerThreads(threads);
+    playerThreadsStore.setEntry(safeUserId, threadId);
+    return loadPlayerThreads();
   }
 
   function getPlayerThread(userId) {

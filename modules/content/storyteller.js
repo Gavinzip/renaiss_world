@@ -2,8 +2,10 @@
  * 📖 AI 故事生成器 v6 - 記憶+風險標籤+NPC狀態
  */
 
-const fs = require('fs');
-const path = require('path');
+const { loadProjectEnv } = require('../core/load-env');
+
+loadProjectEnv();
+
 const {
   LOCATION_DESCRIPTIONS,
   getPortalDestinations,
@@ -15,7 +17,6 @@ const ISLAND_STORY = require('./story/island-story');
 const MAIN_STORY = require('./story/main-story');
 const WORLD_LORE = require('../core/world-lore');
 const CORE = require('../core/game-core');
-const { PROJECT_ROOT } = require('../core/storage-paths');
 const { createGlobalLanguageResources } = require('../systems/runtime/utils/global-language-resources');
 const {
   getLocationPlaystyleProfile,
@@ -41,17 +42,6 @@ function getAiLanguageDirective(lang = 'zh-TW', tone = 'output') {
   if (tone === 'narrate') return table.narrate || '請用繁體中文講述';
   if (tone === 'outputFullstop') return table.outputFullstop || '請用繁體中文輸出。';
   return table.output || '請用繁體中文輸出';
-}
-
-const envPath = path.join(PROJECT_ROOT, '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-  envContent.split('\n').forEach(line => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
 }
 
 const API_KEY = process.env.MINIMAX_API_KEY || '';
@@ -2235,6 +2225,14 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
       `${pendingLootCategory ? `類別：${pendingLootCategory}\n` : ''}` +
       `若本回合確實取得，請在故事最後一行加：🧰 掉寶標記: ${pendingLootName}`
     : '';
+  const lootConsistencySection = pendingLootName
+    ? `\n【掉寶一致性硬規則（必須遵守）】\n` +
+      `- ${pendingLootName} 只有在正文明確完成「來源揭露 -> 玩家取得動作 -> 收進手上/行囊」三步時，才算真正入手。\n` +
+      `- 只看到封存艙、抱著封存艙、猜測艙內有東西、聽到別人提到、準備交換、打算取得，都不算入手。\n` +
+      `- 若本回合沒有真的入手 ${pendingLootName}，禁止輸出「🧰 掉寶標記: ${pendingLootName}」，也不要把它寫成已經在玩家手上。\n` +
+      `- 錯誤示例：只寫「抱著封存艙」或「察覺艙內可能有 ${pendingLootName}」，最後卻輸出掉寶標記。\n` +
+      `- 正確示例：先寫打開/取出來源，再寫玩家把 ${pendingLootName} 拿到手或收進行囊，最後一行才輸出掉寶標記。`
+    : '';
   const turnMoveSection = turnMoveSummary
     ? `\n【本回移動摘要（供敘事連貫參考）】\n${turnMoveSummary}`
     : '';
@@ -2344,6 +2342,7 @@ ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationInstruction ? `\n【導航約束】\n${navigationInstruction}` : ''}
 ${openingBeatSection}
 ${mainlineBridgeSection}
+${lootConsistencySection}
 
 【上一個行動】
 動作代碼：${previousActionCode || '（無）'}
@@ -2397,12 +2396,13 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 38. 若存在【主線橋接鎖定】，開場 1-2 段必須優先承接該目標，且給出「現在就能做」的行動落點
 39. 主線橋接鎖定只能當「本回合先落地」的方向，不可直接照抄成模板句或條列宣告
 40. 若「動作代碼」是 portal_jump_followup 或 device_jump_followup，開場必須採三段銜接：先交代原地點最後情勢（1-2句）→ 再寫啟動傳送與過程（1-2句）→ 最後落在新地點且立刻有可互動對象/環境回應（至少2句），禁止只寫「已抵達」空句
-41. 若有【本回候選戰利品】，請優先嘗試自然寫出取得過程；若當下情境真的不合理，可以不掉寶，禁止硬塞。
-42. 即使沒有候選戰利品，若你判斷本回合劇情自然會拿到寶物，也可以新增一個合理寶物；但必須符合地區與場景，不可突兀亂給。
-43. 只要本回合確實有拿到寶物（候選或你新增），必須同時滿足：故事正文有取得動作 + 明確出現該物件名稱 + 最後一行輸出「🧰 掉寶標記: 寶物名稱」。
-44. 若本回合沒有取得任何寶物，禁止輸出「🧰 掉寶標記」。
-45. 若有【本回移動摘要】，可在故事內容自然描述，不要輸出機械標記格式。
-46. 禁止輸出任何「🧾 回合標記」或同義的系統欄位行；僅允許第43條的「🧰 掉寶標記」作為隱藏結算標記。
+41. 若有【本回候選戰利品】，先判斷本回合是否真的完成「來源揭露 -> 玩家取得動作 -> 收進手上/行囊」三步；缺任何一步都視為未取得。
+42. 若物品仍在封存艙、貨架、地面、NPC 手上，或只是看見/聽說/推測/準備交換/打算取得，全部視為未取得。
+43. 只有在正文至少有一句同時滿足「明確出現物件名稱 + 玩家取得動作 + 玩家持有結果」時，才允許最後一行輸出「🧰 掉寶標記: 寶物名稱」。
+44. 若本回合沒有取得任何寶物，禁止輸出「🧰 掉寶標記」；不要因為有候選戰利品就硬塞標記。
+45. 即使沒有候選戰利品，若你判斷本回合劇情自然會拿到寶物，也可以新增一個合理寶物；但必須符合地區與場景，不可突兀亂給。
+46. 若有【本回移動摘要】，可在故事內容自然描述，不要輸出機械標記格式。
+47. 禁止輸出任何「🧾 回合標記」或同義的系統欄位行；僅允許第43條的「🧰 掉寶標記」作為隱藏結算標記。
 
 直接開始講：`;
 

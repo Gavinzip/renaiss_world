@@ -3,21 +3,10 @@
  * 規則：不白給，所有願望都會有代價或反轉
  */
 
-const fs = require('fs');
-const path = require('path');
 const https = require('https');
-const { PROJECT_ROOT } = require('../core/storage-paths');
+const { loadProjectEnv } = require('../core/load-env');
 
-const envPath = path.join(PROJECT_ROOT, '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-  envContent.split('\n').forEach(line => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
-}
+loadProjectEnv();
 
 const API_KEY = process.env.MINIMAX_API_KEY || '';
 const MODEL = 'MiniMax-M2.5';

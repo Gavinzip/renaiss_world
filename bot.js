@@ -15,25 +15,17 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
+const { loadProjectEnv } = require('./modules/core/load-env');
 const { getRuntimeConstants } = require('./modules/systems/runtime/runtime-constants');
 
-// 讀取 .env 檔案
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-  envContent.split('\n').forEach(line => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
-}
+loadProjectEnv();
 
 // ============== 設定 ==============
 const CONFIG = {
   DISCORD_TOKEN: process.env.DISCORD_TOKEN || '',
   LANGUAGE: 'zh-TW' // 預設語言
 };
+const DISCORD_LOGIN_DISABLED = String(process.env.DISCORD_LOGIN_DISABLED || '0').trim().toLowerCase() === '1';
 const WORLD_BACKUP_NOTIFY_CHANNEL_ID = 1473923458751660063;
 
 const { setupWorldStorage } = require('./modules/core/storage-paths');
@@ -1073,6 +1065,7 @@ const ADMIN_RUNTIME_SYSTEMS = initAdminRuntimeSystems({
   CORE,
   PET,
   ECON,
+  WALLET,
   MEMORY_INDEX,
   EVENTS,
   STORAGE,
@@ -1565,10 +1558,16 @@ registerRuntimeHandlers(CLIENT, {
 
 // ============== 啟動 ==============
 if (require.main === module) {
-  CLIENT.login(CONFIG.DISCORD_TOKEN).catch(err => {
-    console.error('[Bot]', err.message);
-  });
   console.log('[Renaiss World] 🌟 系統啟動中...');
+  if (DISCORD_LOGIN_DISABLED) {
+    console.log('[Renaiss World] 🛠️ Discord login disabled by DISCORD_LOGIN_DISABLED=1');
+    // Keep the process alive for maintenance tasks such as storage rebuilds on platforms like Zeabur.
+    setInterval(() => {}, 60 * 60 * 1000);
+  } else {
+    CLIENT.login(CONFIG.DISCORD_TOKEN).catch(err => {
+      console.error('[Bot]', err.message);
+    });
+  }
 }
 
 module.exports = {

@@ -10,25 +10,12 @@
 
 const path = require('path');
 const fs = require('fs');
+const { loadEnvFromCandidates } = require('../../modules/core/load-env');
 
-function loadEnvFromCandidates() {
-  const candidates = [
-    path.join(__dirname, '.env'),
-    path.join(__dirname, '..', '..', '.env')
-  ];
-  for (const envPath of candidates) {
-    if (!fs.existsSync(envPath)) continue;
-    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-      const raw = String(line || '').trim();
-      if (!raw || raw.startsWith('#')) return;
-      const [key, ...valueParts] = raw.split('=');
-      if (key && valueParts.length > 0) {
-        process.env[key.trim()] = valueParts.join('=').trim();
-      }
-    });
-  }
-}
-loadEnvFromCandidates();
+loadEnvFromCandidates([
+  path.join(__dirname, '.env'),
+  path.join(__dirname, '..', '..', '.env')
+]);
 
 const CORE = require('../../modules/core/game-core');
 const PET = require('../../modules/systems/pet/pet-system');
@@ -295,7 +282,7 @@ async function runFullTest() {
   
   printTestReport();
   
-  cleanup();
+  await cleanup();
   
   return testResults;
 }
@@ -360,7 +347,7 @@ function printTestReport() {
   console.log('='.repeat(60) + '\n');
 }
 
-function cleanup() {
+async function cleanup() {
   log('\n🧹 清理測試資料...');
 
   if (!fs.existsSync(PLAYERS_DIR)) {
@@ -372,8 +359,16 @@ function cleanup() {
   const testFiles = files.filter(f => f.startsWith('test_player_'));
   for (const file of testFiles) {
     try {
-      fs.unlinkSync(path.join(PLAYERS_DIR, file));
+      const userId = String(file || '').replace(/\.json$/, '').trim();
+      if (typeof CORE.deletePlayerStorage === 'function') {
+        CORE.deletePlayerStorage(userId);
+      } else {
+        fs.unlinkSync(path.join(PLAYERS_DIR, file));
+      }
     } catch (e) {}
+  }
+  if (typeof CORE.flushPlayerStorage === 'function') {
+    await CORE.flushPlayerStorage();
   }
 
   log(`清理完成（刪除 ${testFiles.length} 個測試玩家檔）`);

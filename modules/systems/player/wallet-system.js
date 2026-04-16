@@ -5,22 +5,14 @@
  * - 從 BSCScan 讀取開包數量、總花費
  */
 
-const CORE = require('../../core/game-core');
-const fs = require('fs');
 const path = require('path');
-const { PROJECT_ROOT, LEGACY_DATA_DIR } = require('../../core/storage-paths');
+const { loadProjectEnv } = require('../../core/load-env');
 
-// 讀取 .env（讓單獨執行 wallet-system 測試時也能拿到 API Key）
-const envPath = path.join(PROJECT_ROOT, '.env');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-  envContent.split('\n').forEach(line => {
-    const [key, ...valueParts] = line.split('=');
-    if (key && valueParts.length > 0) {
-      process.env[key.trim()] = valueParts.join('=').trim();
-    }
-  });
-}
+loadProjectEnv();
+
+const CORE = require('../../core/game-core');
+const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
+const { createWalletSettingsRepository } = require('../data/wallet-settings-repository');
 
 // ============== Renaiss API 配置 ==============
 const RENAISS_CONFIG = {
@@ -47,30 +39,30 @@ const BSC_CONFIG = {
 // ============== 用戶錢包設定檔路徑 ==============
 const WALLET_DATA_DIR = LEGACY_DATA_DIR;
 const WALLET_DATA_FILE = path.join(WALLET_DATA_DIR, 'user_wallets.json');
+const WALLET_SETTINGS_REPO = createWalletSettingsRepository({
+  filePath: WALLET_DATA_FILE
+});
 
 // ============== 讀取/寫入錢包設定 ==============
 function loadWalletSettings() {
-  try {
-    if (!fs.existsSync(WALLET_DATA_FILE)) {
-      return {};
-    }
-    const data = fs.readFileSync(WALLET_DATA_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch (e) {
-    console.error('[錢包] 讀取失敗:', e.message);
-    return {};
-  }
+  return WALLET_SETTINGS_REPO.getAll();
 }
 
 function saveWalletSettings(settings) {
-  try {
-    fs.mkdirSync(WALLET_DATA_DIR, { recursive: true });
-    fs.writeFileSync(WALLET_DATA_FILE, JSON.stringify(settings, null, 2));
-    return true;
-  } catch (e) {
-    console.error('[錢包] 儲存失敗:', e.message);
-    return false;
-  }
+  WALLET_SETTINGS_REPO.replaceAll(settings);
+  return true;
+}
+
+function replaceWalletSettings(settings) {
+  return WALLET_SETTINGS_REPO.replaceAll(settings);
+}
+
+function deleteWalletBinding(discordUserId) {
+  return WALLET_SETTINGS_REPO.deleteWallet(discordUserId);
+}
+
+async function flushWalletSettings() {
+  await WALLET_SETTINGS_REPO.flush();
 }
 
 // ============== 綁定錢包地址 ==============
@@ -81,13 +73,12 @@ function bindWallet(discordUserId, walletAddress) {
     return { success: false, reason: '無效的 BSC 錢包地址格式！' };
   }
   
-  const settings = loadWalletSettings();
-  const existed = settings[discordUserId]?.walletAddress;
+  const existed = WALLET_SETTINGS_REPO.getWalletAddress(discordUserId);
   if (existed) {
     return { success: false, reason: `你已綁定錢包：${existed}，目前不允許重綁。` };
   }
 
-  settings[discordUserId] = {
+  WALLET_SETTINGS_REPO.setWallet(discordUserId, {
     walletAddress: normalizedAddress,
     boundAt: new Date().toISOString(),
     pendingRNS: 0,
@@ -97,19 +88,14 @@ function bindWallet(discordUserId, walletAddress) {
     walletRnsCreditedTotal: 0,
     walletRnsLastCredited: 0,
     walletRnsLastCreditedAt: null
-  };
-  
-  if (saveWalletSettings(settings)) {
-    return { success: true, address: normalizedAddress };
-  }
-  
-  return { success: false, reason: '儲存失敗！' };
+  });
+
+  return { success: true, address: normalizedAddress };
 }
 
 // ============== 取得用戶錢包地址 ==============
 function getWalletAddress(discordUserId) {
-  const settings = loadWalletSettings();
-  return settings[discordUserId]?.walletAddress || null;
+  return WALLET_SETTINGS_REPO.getWalletAddress(discordUserId);
 }
 
 function extractCollectibleRows(result) {
@@ -517,8 +503,7 @@ async function getPlayerWalletAssets(discordUserId) {
   }
   
   const assets = await calculateTotalAssets(walletAddress);
-  const settings = loadWalletSettings();
-  const cached = settings[discordUserId] || {};
+  const cached = WALLET_SETTINGS_REPO.getWallet(discordUserId) || {};
 
   const cachedCount = Math.max(0, Number(cached.cardCount || 0));
   const cachedFMV = Math.max(0, Number(cached.cardFMV || 0));
@@ -548,8 +533,7 @@ function getMaxPetsByFMV(cardFMV) {
 
 // ============== 取得玩家當前可擁有寵物數（含歷史最高解鎖，不回退） ==============
 function getMaxPetsForUser(discordUserId) {
-  const settings = loadWalletSettings();
-  const userData = settings[discordUserId] || {};
+  const userData = WALLET_SETTINGS_REPO.getWallet(discordUserId) || {};
   const byFMV = getMaxPetsByFMV(userData.cardFMV || 0);
   const unlocked = Math.max(1, Math.floor(Number(userData.maxPetsUnlocked || 1)));
   return Math.max(byFMV, unlocked);
@@ -577,23 +561,23 @@ function isWalletBound(discordUserId) {
 
 // ============== 取得暫時 RNS ==============
 function getPendingRNS(discordUserId) {
-  const settings = loadWalletSettings();
-  return Math.max(0, Math.floor(Number(settings[discordUserId]?.pendingRNS || 0)));
+  const walletData = WALLET_SETTINGS_REPO.getWallet(discordUserId) || {};
+  return Math.max(0, Math.floor(Number(walletData.pendingRNS || 0)));
 }
 
 // ============== 更新暫時 RNS ==============
 function updatePendingRNS(discordUserId, rns) {
-  const settings = loadWalletSettings();
-  if (settings[discordUserId]) {
-    settings[discordUserId].pendingRNS = Math.max(0, Math.floor(Number(rns || 0)));
-    saveWalletSettings(settings);
-  }
+  const walletData = WALLET_SETTINGS_REPO.getWallet(discordUserId);
+  if (!walletData) return;
+  WALLET_SETTINGS_REPO.updateWallet(discordUserId, (draft) => ({
+    ...draft,
+    pendingRNS: Math.max(0, Math.floor(Number(rns || 0)))
+  }));
 }
 
 // ============== 同步錢包 RNS（只入帳新增差額） ==============
 function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
-  const settings = loadWalletSettings();
-  const userData = settings[discordUserId];
+  const userData = WALLET_SETTINGS_REPO.getWallet(discordUserId);
   if (!userData) {
     return { success: false, reason: '尚未綁定錢包！' };
   }
@@ -618,11 +602,12 @@ function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
   const delta = Math.max(0, claimedAfter - claimedBefore);
   const pendingAfter = pendingBefore + delta;
 
-  userData.walletRnsClaimed = claimedAfter;
-  userData.walletRnsLastSyncedAt = new Date().toISOString();
-  userData.pendingRNS = pendingAfter;
-  settings[discordUserId] = userData;
-  saveWalletSettings(settings);
+  WALLET_SETTINGS_REPO.updateWallet(discordUserId, (draft) => ({
+    ...draft,
+    walletRnsClaimed: claimedAfter,
+    walletRnsLastSyncedAt: new Date().toISOString(),
+    pendingRNS: pendingAfter
+  }));
 
   return {
     success: true,
@@ -639,36 +624,34 @@ function applyWalletRnsDelta(discordUserId, latestRns, options = {}) {
 
 // ============== 更新錢包完整資料 ==============
 function updateWalletData(discordUserId, data) {
-  const settings = loadWalletSettings();
-  if (settings[discordUserId]) {
-    const userData = settings[discordUserId];
-    const prevCount = Math.max(0, Number(userData.cardCount || 0));
-    const prevFMV = Math.max(0, Number(userData.cardFMV || 0));
-    const nextCountRaw = Math.max(0, Number(data.cardCount || 0));
-    const nextFMVRaw = Math.max(0, Number(data.cardFMV || 0));
-    const likelyTransientFmvMiss = nextCountRaw <= 0 && nextFMVRaw <= 0 && prevCount > 0 && prevFMV > 0;
+  const userData = WALLET_SETTINGS_REPO.getWallet(discordUserId);
+  if (!userData) return;
+  const prevCount = Math.max(0, Number(userData.cardCount || 0));
+  const prevFMV = Math.max(0, Number(userData.cardFMV || 0));
+  const nextCountRaw = Math.max(0, Number(data.cardCount || 0));
+  const nextFMVRaw = Math.max(0, Number(data.cardFMV || 0));
+  const likelyTransientFmvMiss = nextCountRaw <= 0 && nextFMVRaw <= 0 && prevCount > 0 && prevFMV > 0;
 
-    const safeCardCount = likelyTransientFmvMiss ? prevCount : nextCountRaw;
-    const safeCardFMV = likelyTransientFmvMiss ? prevFMV : nextFMVRaw;
+  const safeCardCount = likelyTransientFmvMiss ? prevCount : nextCountRaw;
+  const safeCardFMV = likelyTransientFmvMiss ? prevFMV : nextFMVRaw;
+  const prevUnlocked = Math.max(1, Math.floor(Number(userData.maxPetsUnlocked || 1)));
+  const unlockedByNow = getMaxPetsByFMV(safeCardFMV);
 
-    userData.cardFMV = safeCardFMV;
-    userData.cardCount = safeCardCount;
-    settings[discordUserId].packTxCount = data.packTxCount;
-    settings[discordUserId].packSpentUSDT = data.packSpentUSDT;
-    settings[discordUserId].tradeSpentUSDT = data.tradeSpentUSDT;
-    settings[discordUserId].totalSpentUSDT = data.totalSpentUSDT;
-    const prevUnlocked = Math.max(1, Math.floor(Number(userData.maxPetsUnlocked || 1)));
-    const unlockedByNow = getMaxPetsByFMV(safeCardFMV);
-    userData.maxPetsUnlocked = Math.max(prevUnlocked, unlockedByNow);
-    settings[discordUserId] = userData;
-    saveWalletSettings(settings);
-  }
+  WALLET_SETTINGS_REPO.updateWallet(discordUserId, (draft) => ({
+    ...draft,
+    cardFMV: safeCardFMV,
+    cardCount: safeCardCount,
+    packTxCount: data.packTxCount,
+    packSpentUSDT: data.packSpentUSDT,
+    tradeSpentUSDT: data.tradeSpentUSDT,
+    totalSpentUSDT: data.totalSpentUSDT,
+    maxPetsUnlocked: Math.max(prevUnlocked, unlockedByNow)
+  }));
 }
 
 // ============== 記錄同步實際入帳 ==============
 function recordWalletCredit(discordUserId, amount) {
-  const settings = loadWalletSettings();
-  const userData = settings[discordUserId];
+  const userData = WALLET_SETTINGS_REPO.getWallet(discordUserId);
   if (!userData) {
     return { success: false, reason: '尚未綁定錢包！' };
   }
@@ -683,29 +666,35 @@ function recordWalletCredit(discordUserId, amount) {
     };
   }
   const totalBefore = Math.max(0, Math.floor(Number(userData.walletRnsCreditedTotal || 0)));
-  userData.walletRnsCreditedTotal = totalBefore + credited;
-  userData.walletRnsLastCredited = credited;
-  userData.walletRnsLastCreditedAt = new Date().toISOString();
-  settings[discordUserId] = userData;
-  saveWalletSettings(settings);
+  const lastCreditedAt = new Date().toISOString();
+  WALLET_SETTINGS_REPO.updateWallet(discordUserId, (draft) => ({
+    ...draft,
+    walletRnsCreditedTotal: totalBefore + credited,
+    walletRnsLastCredited: credited,
+    walletRnsLastCreditedAt: lastCreditedAt
+  }));
   return {
     success: true,
     creditedNow: credited,
-    creditedTotal: userData.walletRnsCreditedTotal,
-    lastCredited: userData.walletRnsLastCredited,
-    lastCreditedAt: userData.walletRnsLastCreditedAt
+    creditedTotal: totalBefore + credited,
+    lastCredited: credited,
+    lastCreditedAt
   };
 }
 
 // ============== 取得錢包完整資料 ==============
 function getWalletData(discordUserId) {
-  const settings = loadWalletSettings();
-  return settings[discordUserId] || null;
+  return WALLET_SETTINGS_REPO.getWallet(discordUserId) || null;
 }
 
 module.exports = {
   RENAISS_CONFIG,
   BSC_CONFIG,
+  loadWalletSettings,
+  saveWalletSettings,
+  replaceWalletSettings,
+  deleteWalletBinding,
+  flushWalletSettings,
   bindWallet,
   getWalletAddress,
   fetchCardFMV,

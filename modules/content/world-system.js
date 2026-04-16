@@ -3,9 +3,12 @@
  * Renaiss星球 - 以現實時間為一天的系統
  */
 
-const fs = require('fs');
 const path = require('path');
 const { LEGACY_DATA_DIR } = require('../core/storage-paths');
+const {
+  safeReadJsonFileSync
+} = require('../systems/data/queued-json-store');
+const { createSqliteMirroredSingletonStore } = require('../systems/data/sqlite-mirrored-state');
 
 // ============== 地點與區域 ==============
 const LOCATIONS = {
@@ -287,9 +290,21 @@ const TIME_SYSTEM = {
   LAST_TICK_FILE: path.join(LEGACY_DATA_DIR, 'last_tick.json')
 };
 
+const LAST_TICK_STORE = createSqliteMirroredSingletonStore({
+  namespace: 'last_tick',
+  mirrorFilePath: TIME_SYSTEM.LAST_TICK_FILE,
+  defaultValueFactory: () => ({ date: '2000-01-01', timestamp: 0 }),
+  normalize: (value) => ({
+    date: String(value?.date || '2000-01-01'),
+    timestamp: Math.max(0, Number(value?.timestamp || 0))
+  }),
+  onWriteError: (error) => {
+    console.error('[WorldTick] save failed:', error?.message || error);
+  }
+});
+
 // 檢查是否需要更新天數（每天只能更新一次）
 function shouldAdvanceDay() {
-  const fs = require('fs');
   const lastTick = loadLastTick();
   const now = new Date();
   
@@ -305,41 +320,27 @@ function getDateString(date) {
 }
 
 function updateLastTick() {
-  const fs = require('fs');
   const now = new Date();
   const data = {
     date: getDateString(now),
     timestamp: now.getTime()
   };
-  fs.writeFileSync(TIME_SYSTEM.LAST_TICK_FILE, JSON.stringify(data));
+  LAST_TICK_STORE.replace(data);
 }
 
 function loadLastTick() {
-  const fs = require('fs');
-  if (!fs.existsSync(TIME_SYSTEM.LAST_TICK_FILE)) {
-    return { date: '2000-01-01', timestamp: 0 };
-  }
-  try {
-    return JSON.parse(fs.readFileSync(TIME_SYSTEM.LAST_TICK_FILE, 'utf8'));
-  } catch (e) {
-    return { date: '2000-01-01', timestamp: 0 };
-  }
+  return LAST_TICK_STORE.read();
 }
 
 // 獲取當前遊戲天數
 function getCurrentGameDay() {
-  const lastTick = loadLastTick();
   const worldFile = path.join(LEGACY_DATA_DIR, 'world.json');
-  
-  if (fs.existsSync(worldFile)) {
-    try {
-      const world = JSON.parse(fs.readFileSync(worldFile, 'utf8'));
-      return world.day || 1;
-    } catch (e) {
-      return 1;
-    }
-  }
-  return 1;
+  const world = safeReadJsonFileSync(
+    worldFile,
+    () => ({ day: 1 }),
+    (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : { day: 1 })
+  );
+  return Number(world.day || 1) || 1;
 }
 
 // ===== 地點資源 =====

@@ -1,25 +1,11 @@
 const https = require('https');
-const fs = require('fs');
 const path = require('path');
+const { loadEnvFromCandidates } = require('../../modules/core/load-env');
 
-function loadEnvFromCandidates() {
-  const candidates = [
-    path.join(__dirname, '.env'),
-    path.join(__dirname, '..', '..', '.env')
-  ];
-  for (const envPath of candidates) {
-    if (!fs.existsSync(envPath)) continue;
-    fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-      const raw = String(line || '').trim();
-      if (!raw || raw.startsWith('#')) return;
-      const [key, ...valueParts] = raw.split('=');
-      if (key && valueParts.length > 0) {
-        process.env[key.trim()] = valueParts.join('=').trim();
-      }
-    });
-  }
-}
-loadEnvFromCandidates();
+loadEnvFromCandidates([
+  path.join(__dirname, '.env'),
+  path.join(__dirname, '..', '..', '.env')
+]);
 
 const API_KEY = process.env.MINIMAX_API_KEY || '';
 

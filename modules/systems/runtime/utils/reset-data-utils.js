@@ -17,7 +17,12 @@ function createResetDataUtils(deps = {}) {
   const memoryClearAllMemories = deps.memoryClearAllMemories;
   const coreClearPlayerNpcQuoteMemory = deps.coreClearPlayerNpcQuoteMemory;
   const coreClearAllNpcQuoteMemory = deps.coreClearAllNpcQuoteMemory;
+  const coreDeletePlayerStorage = deps.coreDeletePlayerStorage;
+  const coreClearAllPlayerStorage = deps.coreClearAllPlayerStorage;
   const coreResetWorldState = deps.coreResetWorldState;
+  const walletDeleteWallet = deps.walletDeleteWallet;
+  const walletReplaceAll = deps.walletReplaceAll;
+  const scratchResetState = deps.scratchResetState;
   const eventsClearWorldEvents = deps.eventsClearWorldEvents;
   const releaseStoryLock = deps.releaseStoryLock;
   const purgePlayerFromAllFriendLists = deps.purgePlayerFromAllFriendLists;
@@ -42,13 +47,19 @@ function createResetDataUtils(deps = {}) {
     const playerFile = path.join(playersDir, `${id}.json`);
     const legacyMemoryFile = path.join(playersDir, `${id}_memory.json`);
 
-    if (fs.existsSync(playerFile)) {
-      fs.unlinkSync(playerFile);
-      report.removedPlayerFile = true;
-    }
-    if (fs.existsSync(legacyMemoryFile)) {
-      fs.unlinkSync(legacyMemoryFile);
-      report.removedLegacyMemoryFile = true;
+    if (typeof coreDeletePlayerStorage === 'function') {
+      const storageReport = coreDeletePlayerStorage(id) || {};
+      report.removedPlayerFile = Boolean(storageReport.removedPlayerFile);
+      report.removedLegacyMemoryFile = Boolean(storageReport.removedLegacyMemoryFile);
+    } else {
+      if (fs.existsSync(playerFile)) {
+        fs.unlinkSync(playerFile);
+        report.removedPlayerFile = true;
+      }
+      if (fs.existsSync(legacyMemoryFile)) {
+        fs.unlinkSync(legacyMemoryFile);
+        report.removedLegacyMemoryFile = true;
+      }
     }
 
     if (typeof petDeletePetByOwner === 'function') {
@@ -62,11 +73,15 @@ function createResetDataUtils(deps = {}) {
       report.removedThread = true;
     }
 
-    const wallets = typeof loadJsonObject === 'function' ? loadJsonObject(userWalletsFile) : {};
-    if (Object.prototype.hasOwnProperty.call(wallets, id)) {
-      delete wallets[id];
-      if (typeof saveJsonObject === 'function') saveJsonObject(userWalletsFile, wallets);
-      report.removedWallet = true;
+    if (typeof walletDeleteWallet === 'function') {
+      report.removedWallet = Boolean(walletDeleteWallet(id));
+    } else {
+      const wallets = typeof loadJsonObject === 'function' ? loadJsonObject(userWalletsFile) : {};
+      if (Object.prototype.hasOwnProperty.call(wallets, id)) {
+        delete wallets[id];
+        if (typeof saveJsonObject === 'function') saveJsonObject(userWalletsFile, wallets);
+        report.removedWallet = true;
+      }
     }
 
     if (typeof memoryClearPlayerRelatedMemories === 'function') {
@@ -133,24 +148,33 @@ function createResetDataUtils(deps = {}) {
       resetWorldBoard: false
     };
 
-    fs.mkdirSync(playersDir, { recursive: true });
-    const names = fs.readdirSync(playersDir);
-    for (const name of names) {
-      if (!name.endsWith('.json')) continue;
-      const target = path.join(playersDir, name);
-      fs.unlinkSync(target);
-      if (name.endsWith('_memory.json')) report.removedLegacyMemoryFiles += 1;
-      else report.removedPlayerFiles += 1;
+    if (typeof coreClearAllPlayerStorage === 'function') {
+      const storageReport = coreClearAllPlayerStorage() || {};
+      report.removedPlayerFiles = Number(storageReport.removedPlayerFiles || 0);
+      report.removedLegacyMemoryFiles = Number(storageReport.removedLegacyMemoryFiles || 0);
+    } else {
+      fs.mkdirSync(playersDir, { recursive: true });
+      const names = fs.readdirSync(playersDir);
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue;
+        const target = path.join(playersDir, name);
+        fs.unlinkSync(target);
+        if (name.endsWith('_memory.json')) report.removedLegacyMemoryFiles += 1;
+        else report.removedPlayerFiles += 1;
+      }
     }
 
     if (typeof saveJsonObject === 'function') {
       saveJsonObject(petsFile, {});
       report.resetPets = true;
-      saveJsonObject(playerThreadsFile, {});
+      if (typeof savePlayerThreads === 'function') savePlayerThreads({});
+      else saveJsonObject(playerThreadsFile, {});
       report.resetThreads = true;
-      saveJsonObject(userWalletsFile, {});
+      if (typeof walletReplaceAll === 'function') walletReplaceAll({});
+      else saveJsonObject(userWalletsFile, {});
       report.resetWallets = true;
-      saveJsonObject(scratchLotteryFile, {});
+      if (typeof scratchResetState === 'function') scratchResetState();
+      else saveJsonObject(scratchLotteryFile, {});
       report.resetScratchLottery = true;
     }
 
