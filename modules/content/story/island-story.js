@@ -361,16 +361,16 @@ function buildIslandGuidancePrompt(player, location = '') {
     const rid = String(meta?.regionId || '').trim();
     if (!rid || rid === 'hidden_deeps') return '';
     if (rid === 'central_core') {
-      return `本島關鍵任務（唯一來源）：僅能在「洛陽城」接觸灰帳記錄員取得「雙鑑衝突原始單」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+      return `本島關鍵任務：你要拿到「雙鑑衝突原始單」；只能在「洛陽城」停留至少 5 回合後，向灰帳記錄員取得。｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
     }
     if (rid === 'west_desert') {
-      return `本島關鍵任務（唯一來源）：僅能在「敦煌」接觸轉運站調度員取得「異常轉運時間鏈」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+      return `本島關鍵任務：你要拿到「轉運站時間紀錄表（含異常批次流向）」；只能在「喀什爾」停留至少 5 回合後，向轉運站調度員取得。｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
     }
     if (rid === 'southern_delta') {
-      return `本島關鍵任務（唯一來源）：僅能在「廣州」接觸工坊試樣師取得「偽造樣本與製程片段」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+      return `本島關鍵任務：你要拿到「偽造樣本與製程片段」；只能在「廣州」停留至少 5 回合後，向工坊試樣師取得。｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
     }
     if (rid === 'northern_highland') {
-      return `本島關鍵任務（唯一來源）：僅能在「雪白山莊」接觸滲透聯絡員取得「夜冕主宰鏈路密鑰」｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
+      return `本島關鍵任務：你要拿到「夜冕主宰鏈路密鑰」；只能在「雪白山莊」停留至少 5 回合後，向滲透聯絡員取得。｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;
     }
     if (rid === KING_GATE_REGION_ID) {
       return `本島關鍵任務：擊敗四巨頭全員，拼出核心憑證鏈｜狀態：${missionRow?.keyFound ? '已完成' : '未完成'}`;

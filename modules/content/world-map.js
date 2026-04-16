@@ -4,6 +4,7 @@
  */
 
 const { getLocationCollectibleFlavor } = require('./collectible-culture');
+const { getLocationWeatherSummary, getLocationWeatherProfile } = require('./location-weather');
 
 const ISLAND_MAP_TEXT = `                     ~ ~ ~ 雲海航道 ~ ~ ~
                    ╭─────〔 星環海域 〕─────╮
@@ -11,17 +12,17 @@ const ISLAND_MAP_TEXT = `                     ~ ~ ~ 雲海航道 ~ ~ ~
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ~                               RENAISS 星域                            ~
 ~                                                                      ~
-~  【北境高原 D4】              【中原核心 D1】                           ~
+~  【北境高原 D3】              【中原核心 D1】                           ~
 ~   雪白山莊─霜狼哨站            河港鎮─襄陽城─洛陽城─大都─青石關          ~
 ~      │      │                    │        │       │                  ~
 ~   玄冰裂谷  草原部落            龍脊山道  墨林古道  皇城內廷              ~
 ~                                                                      ~
-~  【西域沙海 D2】               【南疆水網 D1】                           ~
+~  【西域沙海 D1】               【南疆水網 D2】                           ~
 ~   敦煌─喀什爾─赤沙前哨          廣州─鏡湖渡口─大理─雲棧茶嶺─南疆苗疆      ~
 ~      │         │                   │                 │               ~
 ~   鳴沙廢城   砂輪遺站             海潮碼頭           霧雨古祭壇            ~
 ~                                                                      ~
-~  【群島航線 D3】               【隱秘深域 D5】                           ~
+~  【群島航線 D4】               【隱秘深域 D5】                           ~
 ~   星潮港─珊瑚環礁─桃花島─潮汐試煉島    光明頂─無光礦坑─黑木崖─天機遺都          ~
 ~          \        \      /             \                 /           ~
 ~            ~~~ 蓬萊觀測島 ~~~               ~~~ 死亡之海 ~~~             ~
@@ -40,32 +41,32 @@ const REGION_CATALOG = [
   {
     id: 'west_desert',
     name: '西域沙海',
-    difficultyRange: 'D2',
-    difficulty: 2,
+    difficultyRange: 'D1',
+    difficulty: 1,
     theme: '綠洲據點與古遺跡，風沙掩埋祕密',
     locations: ['敦煌', '喀什爾', '赤沙前哨', '砂輪遺站', '鳴沙廢城']
   },
   {
     id: 'southern_delta',
     name: '南疆水網',
-    difficultyRange: 'D1',
-    difficulty: 1,
+    difficultyRange: 'D2',
+    difficulty: 2,
     theme: '港埠、山城與雨林祭壇並存的多生態帶',
     locations: ['廣州', '海潮碼頭', '鏡湖渡口', '大理', '雲棧茶嶺', '南疆苗疆', '霧雨古祭壇']
   },
   {
     id: 'northern_highland',
     name: '北境高原',
-    difficultyRange: 'D4',
-    difficulty: 4,
+    difficultyRange: 'D3',
+    difficulty: 3,
     theme: '寒原、部落與冰封裂谷，生存壓力極高',
     locations: ['草原部落', '霜狼哨站', '雪白山莊', '玄冰裂谷']
   },
   {
     id: 'island_routes',
     name: '群島航線',
-    difficultyRange: 'D3',
-    difficulty: 3,
+    difficultyRange: 'D4',
+    difficulty: 4,
     theme: '海路跳島、機關島鏈與觀測節點',
     locations: ['星潮港', '珊瑚環礁', '桃花島', '潮汐試煉島', '蓬萊觀測島']
   },
@@ -790,8 +791,10 @@ function getLocationStoryContext(location) {
   const resourceLine = profile.resources.slice(0, 4).join('、') || '未知';
   const portals = getPortalDestinations(location).slice(0, 3).join('、') || '附近無穩定門';
   const flavor = getLocationCollectibleFlavor(location);
+  const weatherSummary = getLocationWeatherSummary(location, 'zh-TW');
   return [
     `區域：${profile.region}｜難度：D${profile.difficulty}`,
+    `天候主調：${weatherSummary}`,
     `附近：${nearby.join('、') || '未知'}`,
     `特產：${resourceLine}`,
     `收藏口味：${flavor.title}｜${flavor.style}`,
@@ -807,7 +810,7 @@ function getBeginnerSpawnLocations() {
     // 新玩家出生地硬限制：只能在第一島（中原核心）任意可出生點，避免跳到第二關。
     if (String(profile.region || '') !== '中原核心') return false;
     if (profile.starterEligible === false) return false;
-    return Number(getLocationDifficulty(loc) || 3) <= 2;
+    return Number(getLocationDifficulty(loc) || 3) <= 1;
   });
 }
 
@@ -832,6 +835,7 @@ module.exports = {
   LOCATION_PROFILES,
   REGION_CATALOG,
   REGION_PORTAL_HUBS,
+  getLocationWeatherProfile,
   getLocationRegionId,
   getLocationProfile,
   getLocationDifficulty,

@@ -56,6 +56,10 @@ npm install
 2. 設定環境變數（`.env`）
 - `DISCORD_TOKEN`
 - `MINIMAX_API_KEY`
+- `AI_GLOBAL_CONCURRENCY`
+- `AI_RATE_LIMIT_RETRIES`
+- `AI_RATE_LIMIT_RETRY_DELAY_MS`
+- `SQLITE_BUSY_TIMEOUT_MS`
 3. 啟動
 ```bash
 node bot.js

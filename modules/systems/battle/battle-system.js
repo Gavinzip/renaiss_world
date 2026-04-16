@@ -85,10 +85,10 @@ const KING_MOVE_IDS = Object.freeze({
   HomX: ['ultimate_dark', 'silver_snake', 'hell_fire', 'iron_thorn', 'arhat_kick']
 });
 const KING_STATS = Object.freeze({
-  NemoX: { hp: 560, attack: 96, defense: 8, speed: 26, reward: { gold: [360, 560] } },
-  WolfX: { hp: 590, attack: 102, defense: 9, speed: 31, reward: { gold: [420, 620] } },
-  AdalocX: { hp: 620, attack: 100, defense: 10, speed: 24, reward: { gold: [460, 680] } },
-  HomX: { hp: 680, attack: 108, defense: 11, speed: 22, reward: { gold: [520, 760] } }
+  NemoX: { hp: 560, attack: 64, defense: 8, speed: 26, reward: { gold: [360, 560] } },
+  WolfX: { hp: 590, attack: 67, defense: 9, speed: 31, reward: { gold: [420, 620] } },
+  AdalocX: { hp: 620, attack: 70, defense: 10, speed: 24, reward: { gold: [460, 680] } },
+  HomX: { hp: 680, attack: 72, defense: 11, speed: 22, reward: { gold: [520, 760] } }
 });
 const ENEMY_MOVE_MAX = 6;
 

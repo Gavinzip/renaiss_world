@@ -4,6 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
 
 const DB_FILE = path.join(LEGACY_DATA_DIR, 'runtime_state.sqlite');
+const SQLITE_BUSY_TIMEOUT_MS = Math.max(1000, Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 5000));
 
 let db = null;
 
@@ -13,6 +14,7 @@ function ensureDb() {
   db = new DatabaseSync(DB_FILE);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA synchronous = NORMAL;');
+  db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};`);
   db.exec(`
     CREATE TABLE IF NOT EXISTS runtime_state_entries (
       namespace TEXT NOT NULL,
@@ -40,6 +42,25 @@ function normalizeNamespace(namespace) {
   const safe = String(namespace || '').trim();
   if (!safe) throw new Error('runtime state namespace is required');
   return safe;
+}
+
+function runTransaction(work, mode = 'IMMEDIATE') {
+  const callback = typeof work === 'function' ? work : null;
+  if (!callback) throw new Error('transaction callback is required');
+  const normalizedMode = String(mode || 'IMMEDIATE').trim().toUpperCase();
+  const safeMode = ['DEFERRED', 'IMMEDIATE', 'EXCLUSIVE'].includes(normalizedMode)
+    ? normalizedMode
+    : 'IMMEDIATE';
+  const database = ensureDb();
+  database.exec(`BEGIN ${safeMode}`);
+  try {
+    const result = callback(database);
+    database.exec('COMMIT');
+    return result;
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function normalizeKey(key) {
@@ -109,18 +130,15 @@ function countNamespaceEntries(namespace) {
 function replaceNamespaceObject(namespace, entries = {}) {
   const safeNamespace = normalizeNamespace(namespace);
   const safeEntries = entries && typeof entries === 'object' && !Array.isArray(entries) ? entries : {};
-  const database = ensureDb();
-  const deleteStmt = database.prepare('DELETE FROM runtime_state_entries WHERE namespace = ?');
-  const upsertStmt = database.prepare(`
-    INSERT INTO runtime_state_entries (namespace, entry_key, json_value, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(namespace, entry_key) DO UPDATE SET
-      json_value = excluded.json_value,
-      updated_at = excluded.updated_at
-  `);
-
-  database.exec('BEGIN IMMEDIATE');
-  try {
+  runTransaction((database) => {
+    const deleteStmt = database.prepare('DELETE FROM runtime_state_entries WHERE namespace = ?');
+    const upsertStmt = database.prepare(`
+      INSERT INTO runtime_state_entries (namespace, entry_key, json_value, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(namespace, entry_key) DO UPDATE SET
+        json_value = excluded.json_value,
+        updated_at = excluded.updated_at
+    `);
     deleteStmt.run(safeNamespace);
     const now = Date.now();
     for (const [rawKey, value] of Object.entries(safeEntries)) {
@@ -128,11 +146,7 @@ function replaceNamespaceObject(namespace, entries = {}) {
       if (!safeKey) continue;
       upsertStmt.run(safeNamespace, safeKey, JSON.stringify(value), now);
     }
-    database.exec('COMMIT');
-  } catch (error) {
-    database.exec('ROLLBACK');
-    throw error;
-  }
+  }, 'IMMEDIATE');
 }
 
 function upsertNamespaceEntry(namespace, key, value) {
@@ -170,6 +184,7 @@ function clearNamespace(namespace) {
 
 module.exports = {
   DB_FILE,
+  SQLITE_BUSY_TIMEOUT_MS,
   clearNamespace,
   countNamespaceEntries,
   readNamespaceObject,
@@ -178,6 +193,7 @@ module.exports = {
   listNamespaceKeys,
   replaceNamespaceObject,
   replaceSingletonValue,
+  runTransaction,
   upsertNamespaceEntry,
   deleteNamespaceEntry
 };

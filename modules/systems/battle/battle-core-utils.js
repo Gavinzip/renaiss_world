@@ -644,6 +644,18 @@ function createBattleCoreUtils(deps = {}) {
     return Number.isFinite(difficulty) ? difficulty : 3;
   }
 
+  const FIRST_STAGE_REGION_NAMES = new Set(['中原核心', '西域沙海']);
+
+  function isFirstStageProtectedRegion(player) {
+    const profile = typeof getLocationProfile === 'function'
+      ? getLocationProfile(player?.location)
+      : null;
+    const regionName = String(profile?.region || '').trim();
+    if (FIRST_STAGE_REGION_NAMES.has(regionName)) return true;
+    // Fallback for unknown locations: keep D1 as beginner-protected.
+    return getLocationDifficultyForPlayer(player) <= 1;
+  }
+
   function isLikelyHumanoidEnemyName(name = '') {
     const n = String(name || '').trim();
     if (!n) return false;
@@ -661,8 +673,7 @@ function createBattleCoreUtils(deps = {}) {
 
   function buildNpcCompanionPet(enemy, player) {
     const existing = enemy?.companionPet;
-    const difficulty = getLocationDifficultyForPlayer(player);
-    const newbieZone = difficulty <= 2;
+    const newbieZone = isFirstStageProtectedRegion(player);
     const petNamePool = newbieZone
       ? ['街貓', '灰羽雀', '小山犬', '竹影狸']
       : ['影牙獵犬', '鐵羽鷹', '霧爪豹', '赤瞳狼'];
@@ -694,7 +705,7 @@ function createBattleCoreUtils(deps = {}) {
     if (enemy.name === '哥布林' || enemy.name === '狼人') return enemy;
 
     const npcPet = buildNpcCompanionPet(enemy, player);
-    const newbieZone = getLocationDifficultyForPlayer(player) <= 2;
+    const newbieZone = isFirstStageProtectedRegion(player);
     const atkGain = Math.max(1, Math.floor(npcPet.attack * (newbieZone ? 0.6 : 0.68)));
     const hpGain = Math.max(1, Math.floor(npcPet.maxHp * (newbieZone ? 0.45 : 0.5)));
 
@@ -805,20 +816,19 @@ function createBattleCoreUtils(deps = {}) {
 
   function applyBeginnerZoneEnemyBalance(enemy, player) {
     if (!enemy || !player) return enemy;
+    if (!isFirstStageProtectedRegion(player)) return enemy;
     const difficulty = getLocationDifficultyForPlayer(player);
-    const playerLevel = Math.max(1, Number(player?.level || 1));
-    if (difficulty > 2 || playerLevel > 6) return enemy;
 
     const hpScale = difficulty <= 1 ? 1.08 : 1.12;
     const atkScale = difficulty <= 1 ? 1.10 : 1.14;
-    const minHp = Math.max(56, 66 + playerLevel * 12 + difficulty * 7);
-    const minAtk = Math.max(18, 22 + playerLevel * 2 + (difficulty - 1) * 3);
+    const minHp = Math.max(56, 82 + difficulty * 12);
+    const minAtk = Math.max(18, 24 + (difficulty - 1) * 4);
     const maxHp = difficulty <= 1
-      ? Math.max(108, 126 + playerLevel * 14)
-      : Math.max(146, 156 + playerLevel * 17);
+      ? Math.max(108, 142)
+      : Math.max(146, 178);
     const maxAtk = difficulty <= 1
-      ? Math.max(30, 36 + playerLevel * 3)
-      : Math.max(36, 40 + playerLevel * 3);
+      ? Math.max(30, 40)
+      : Math.max(36, 46);
 
     const scaledHp = Math.max(minHp, Math.floor((enemy.hp || 1) * hpScale));
     enemy.hp = Math.min(maxHp, scaledHp);
@@ -831,9 +841,8 @@ function createBattleCoreUtils(deps = {}) {
 
   function applyBeginnerZoneDangerVariant(enemy, player) {
     if (!enemy || !player) return enemy;
+    if (!isFirstStageProtectedRegion(player)) return enemy;
     const difficulty = getLocationDifficultyForPlayer(player);
-    const playerLevel = Math.max(1, Number(player?.level || 1));
-    if (difficulty > 2 || playerLevel > 8) return enemy;
     if (Math.random() > 0.26) return enemy;
 
     const powerScale = difficulty <= 1 ? 1.14 : 1.18;
@@ -842,6 +851,37 @@ function createBattleCoreUtils(deps = {}) {
     enemy.attack = Math.max(1, Math.floor((enemy.attack || 1) * (powerScale + 0.03)));
     enemy.defense = Math.max(0, Math.floor(Number(enemy.defense || 0) + (difficulty <= 1 ? 0 : 1)));
     enemy.beginnerDanger = true;
+    return enemy;
+  }
+
+  function isDigitalKingLikeName(name = '') {
+    return /^(NemoX|WolfX|AdalocX|HomX|Nemo|Wolf|Adaloc|Hom)$/i.test(String(name || '').trim());
+  }
+
+  function getEnemyAttackCapByDifficulty(difficulty = 3) {
+    const safeDifficulty = clampInt(difficulty, 1, 8, 3);
+    const caps = {
+      1: 34,
+      2: 42,
+      3: 50,
+      4: 55,
+      5: 60,
+      6: 60,
+      7: 60,
+      8: 60
+    };
+    return Number(caps[safeDifficulty] || 50);
+  }
+
+  function applyEnemyAttackCap(enemy, player) {
+    if (!enemy) return enemy;
+    const difficulty = getLocationDifficultyForPlayer(player);
+    let cap = getEnemyAttackCapByDifficulty(difficulty);
+    if (isDigitalKingLikeName(enemy?.name || enemy?.id)) {
+      cap = Math.max(cap, 80);
+    }
+    enemy.attack = Math.max(1, Math.min(cap, Math.floor(Number(enemy.attack || 1))));
+    enemy.attackCap = cap;
     return enemy;
   }
 
@@ -956,6 +996,7 @@ function createBattleCoreUtils(deps = {}) {
     if (!skipDanger) applyBeginnerZoneDangerVariant(enemy, player);
     applyApexEnemyEscalation(enemy);
     applyRegionalEnemyVariance(enemy, player);
+    applyEnemyAttackCap(enemy, player);
     return enemy;
   }
 

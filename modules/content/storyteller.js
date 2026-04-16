@@ -26,6 +26,10 @@ const {
 const {
   getCollectibleCulturePrompt
 } = require('./collectible-culture');
+const {
+  getLocationWeatherPrompt,
+  getLocationWeatherProfile
+} = require('./location-weather');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
 
 const LANGUAGE_RESOURCES = createGlobalLanguageResources({
@@ -97,6 +101,9 @@ const CHOICE_GEN_RETRIES = Math.max(1, Math.min(2, Number(process.env.CHOICE_GEN
 const CHOICE_VALIDATION_PASSES = Math.max(1, Math.min(3, Number(process.env.CHOICE_VALIDATION_PASSES || 1)));
 const CHOICE_MAX_TOKENS = Math.max(500, Number(process.env.CHOICE_MAX_TOKENS || 1200));
 const CHOICE_OUTPUT_COUNT = 5;
+const AI_GLOBAL_CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.AI_GLOBAL_CONCURRENCY || 20)));
+const AI_RATE_LIMIT_RETRIES = Math.max(0, Math.min(5, Number(process.env.AI_RATE_LIMIT_RETRIES || 5)));
+const AI_RATE_LIMIT_RETRY_DELAY_MS = Math.max(200, Math.min(5000, Number(process.env.AI_RATE_LIMIT_RETRY_DELAY_MS || 1000)));
 const BATTLE_CADENCE_TURNS = Math.max(3, Math.min(10, Number(process.env.BATTLE_CADENCE_TURNS || 5)));
 const WANTED_AMBUSH_MIN_LEVEL = Math.max(1, Math.min(10, Number(process.env.WANTED_AMBUSH_MIN_LEVEL || 1)));
 const RIVAL_NAME_REVEAL_ACT = Math.max(1, Math.min(6, Number(process.env.RIVAL_NAME_REVEAL_ACT || 3)));
@@ -108,6 +115,15 @@ const AI_PERF = {
   story: [],
   choices: [],
   initialChoices: []
+};
+
+const AI_QUEUE = [];
+let AI_ACTIVE_REQUESTS = 0;
+const AI_RUNTIME = {
+  currentQueued: 0,
+  maxQueued: 0,
+  maxActive: 0,
+  totalRateLimitRetries: 0
 };
 
 const FACTION_DISPLAY_MAP = Object.freeze({
@@ -171,6 +187,65 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function buildAIError(message = 'AI request failed', meta = {}) {
+  const error = new Error(String(message || 'AI request failed'));
+  Object.assign(error, meta);
+  return error;
+}
+
+function isAIRateLimitError(error) {
+  if (!error) return false;
+  if (error.isRateLimit) return true;
+  const statusCode = Number(error.statusCode || 0);
+  if (statusCode === 429) return true;
+  const raw = `${String(error.message || '')}\n${String(error.responseText || '')}`.toLowerCase();
+  return /rate limit|too many requests|429|quota/i.test(raw);
+}
+
+function updateAIQueueMetrics() {
+  AI_RUNTIME.currentQueued = AI_QUEUE.length;
+  if (AI_RUNTIME.currentQueued > AI_RUNTIME.maxQueued) {
+    AI_RUNTIME.maxQueued = AI_RUNTIME.currentQueued;
+  }
+  if (AI_ACTIVE_REQUESTS > AI_RUNTIME.maxActive) {
+    AI_RUNTIME.maxActive = AI_ACTIVE_REQUESTS;
+  }
+}
+
+function releaseAISlot() {
+  if (AI_QUEUE.length > 0) {
+    const next = AI_QUEUE.shift();
+    updateAIQueueMetrics();
+    if (typeof next === 'function') next();
+    return;
+  }
+  AI_ACTIVE_REQUESTS = Math.max(0, AI_ACTIVE_REQUESTS - 1);
+  updateAIQueueMetrics();
+}
+
+async function withAIConcurrency(task, label = 'requestAI') {
+  await new Promise((resolve) => {
+    if (AI_ACTIVE_REQUESTS < AI_GLOBAL_CONCURRENCY) {
+      AI_ACTIVE_REQUESTS += 1;
+      updateAIQueueMetrics();
+      resolve();
+      return;
+    }
+    AI_QUEUE.push(() => {
+      updateAIQueueMetrics();
+      resolve();
+    });
+    updateAIQueueMetrics();
+    console.log(`[AI][${label}] queued active=${AI_ACTIVE_REQUESTS}/${AI_GLOBAL_CONCURRENCY} waiting=${AI_QUEUE.length}`);
+  });
+
+  try {
+    return await task();
+  } finally {
+    releaseAISlot();
+  }
+}
+
 function recordAIPerf(kind = 'story', ms = 0) {
   const key = kind === 'choices' || kind === 'initialChoices' ? kind : 'story';
   const value = Math.max(0, Number(ms || 0));
@@ -196,6 +271,18 @@ function summarizeAIPerfBucket(list = []) {
 
 function getAIPerfStats() {
   return {
+    config: {
+      globalConcurrency: AI_GLOBAL_CONCURRENCY,
+      rateLimitRetries: AI_RATE_LIMIT_RETRIES,
+      rateLimitRetryDelayMs: AI_RATE_LIMIT_RETRY_DELAY_MS
+    },
+    runtime: {
+      active: AI_ACTIVE_REQUESTS,
+      queued: AI_RUNTIME.currentQueued,
+      maxActive: AI_RUNTIME.maxActive,
+      maxQueued: AI_RUNTIME.maxQueued,
+      totalRateLimitRetries: AI_RUNTIME.totalRateLimitRetries
+    },
     story: summarizeAIPerfBucket(AI_PERF.story),
     choices: summarizeAIPerfBucket(AI_PERF.choices),
     initialChoices: summarizeAIPerfBucket(AI_PERF.initialChoices)
@@ -1074,7 +1161,7 @@ function mapDynamicArchetypeToAction(archetype = '') {
   return 'explore';
 }
 
-function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
+function requestAIOnce(body, timeoutMs = AI_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const options = {
       hostname: 'api.minimax.io',
@@ -1093,14 +1180,22 @@ function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
       res.on('end', () => {
         if (res.statusCode !== 200) {
           console.log('[AI] HTTP 錯誤:', res.statusCode, data.substring(0, 300));
-          reject(new Error('HTTP ' + res.statusCode));
+          reject(buildAIError(`HTTP ${res.statusCode}`, {
+            statusCode: Number(res.statusCode || 0),
+            responseText: data.substring(0, 300),
+            isRateLimit: Number(res.statusCode || 0) === 429 || /rate limit|too many requests|quota/i.test(String(data || ''))
+          }));
           return;
         }
 
         try {
           const parsed = JSON.parse(data);
           if (parsed.error) {
-            reject(new Error(parsed.error.message || 'API Error'));
+            reject(buildAIError(parsed.error.message || 'API Error', {
+              statusCode: Number(parsed.error?.status || 0) || 0,
+              responseText: data.substring(0, 300),
+              isRateLimit: /rate limit|too many requests|quota|429/i.test(String(parsed.error.message || ''))
+            }));
             return;
           }
           // MiniMax 會在成功時回傳 base_resp.status_msg = "success"
@@ -1109,7 +1204,11 @@ function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
             const statusCode = Number(parsed.base_resp.status_code);
             const statusMsg = String(parsed.base_resp.status_msg || '');
             if (!Number.isNaN(statusCode) && statusCode !== 0) {
-              reject(new Error(statusMsg || `status_code=${statusCode}`));
+              reject(buildAIError(statusMsg || `status_code=${statusCode}`, {
+                statusCode,
+                responseText: data.substring(0, 300),
+                isRateLimit: /rate limit|too many requests|quota|429/i.test(statusMsg)
+              }));
               return;
             }
           }
@@ -1117,7 +1216,10 @@ function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
           const choice = parsed.choices?.[0];
           const rawContent = choice?.message?.content || '';
           if (!rawContent) {
-            reject(new Error('Empty AI content'));
+            reject(buildAIError('Empty AI content', {
+              statusCode: Number(res.statusCode || 0),
+              responseText: data.substring(0, 300)
+            }));
             return;
           }
 
@@ -1147,6 +1249,29 @@ function requestAI(body, timeoutMs = AI_TIMEOUT_MS) {
     req.write(body);
     req.end();
   });
+}
+
+async function requestAI(body, timeoutMs = AI_TIMEOUT_MS, options = {}) {
+  const label = String(options.label || 'requestAI');
+  const rateLimitRetries = Math.max(0, Math.min(5, Number(options.rateLimitRetries ?? AI_RATE_LIMIT_RETRIES)));
+  const rateLimitRetryDelayMs = Math.max(200, Math.min(5000, Number(options.rateLimitRetryDelayMs ?? AI_RATE_LIMIT_RETRY_DELAY_MS)));
+
+  for (let attempt = 0; attempt <= rateLimitRetries; attempt++) {
+    try {
+      return await withAIConcurrency(() => requestAIOnce(body, timeoutMs), label);
+    } catch (error) {
+      if (!isAIRateLimitError(error) || attempt >= rateLimitRetries) {
+        throw error;
+      }
+      AI_RUNTIME.totalRateLimitRetries += 1;
+      console.warn(
+        `[AI][${label}] rate limited; retry ${attempt + 1}/${rateLimitRetries} in ${rateLimitRetryDelayMs}ms`
+      );
+      await sleep(rateLimitRetryDelayMs);
+    }
+  }
+
+  throw new Error('AI request failed after rate limit retries');
 }
 
 function summarizeContext(rawText, maxChars = 240, maxLines = 3) {
@@ -2054,7 +2179,7 @@ async function callAI(prompt, temperature = 0.9, options = {}) {
           payload.max_tokens = Number(requestTokens);
         }
         const body = JSON.stringify(payload);
-        const { content, finishReason } = await requestAI(body, timeoutMs);
+        const { content, finishReason } = await requestAI(body, timeoutMs, { label });
         const cleaned = sanitizeAIContent(content);
         if (!cleaned || cleaned.length < 30) {
           throw new Error(`Empty cleaned content raw=${previewAIContent(content)}`);
@@ -2139,12 +2264,18 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const missionInfo = typeof MAIN_STORY.getCurrentRegionMission === 'function'
     ? MAIN_STORY.getCurrentRegionMission(player, location)
     : null;
+  const missionCityTurnsNarrative = Math.max(1, Number(arcMeta?.turnsInLocation || 1));
+  const missionNpcAppearTurns = Math.max(1, Number(missionInfo?.minTurnsInLocation || 5));
   const missionNarrativeRule = missionInfo && !missionInfo.keyFound
     ? (missionInfo.regionId === 'island_routes'
       ? '本區關鍵任務未完成：四巨頭尚未全滅前，不可把終章真相寫成已成立。'
       : (
         String(location || '').trim() === String(missionInfo.npcLocation || '').trim()
-          ? `本區關鍵任務未完成：你現在就在唯一來源城市，可鋪陳接觸「${missionInfo.npcName}」，但證據「${missionInfo.evidenceName}」只能由他交付。`
+          ? (
+            missionCityTurnsNarrative < missionNpcAppearTurns
+              ? `本區關鍵任務未完成：你現在在唯一來源城市，但僅第 ${missionCityTurnsNarrative} 回合；「${missionInfo.npcName}」在第 ${missionNpcAppearTurns} 回合前不可出場。此階段只能鋪陳打聽、堵點、追查路線，不能直接見到關鍵NPC或拿到證據「${missionInfo.evidenceName}」。`
+              : `本區關鍵任務未完成：你現在就在唯一來源城市，且已達第 ${missionNpcAppearTurns} 回合，可鋪陳接觸「${missionInfo.npcName}」，但本回合仍不可直接寫成證據「${missionInfo.evidenceName}」已到手。`
+          )
           : `本區關鍵任務未完成：證據「${missionInfo.evidenceName}」唯一來源是 ${missionInfo.npcLocation} 的 ${missionInfo.npcName}，本回合不可寫成已取得；且敘事必須自然引導玩家往「${missionInfo.npcLocation}」移動（透過在地口供/地標/路徑線索）。`
       ))
     : '';
@@ -2245,6 +2376,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const playerLang = player.language || 'zh-TW';
   const langInstruction = getAiLanguageDirective(playerLang, 'narrate');
   const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
+  const locationWeatherProfile = getLocationWeatherProfile(location);
+  const locationWeatherPrompt = getLocationWeatherPrompt(location, playerLang);
   
   // 上一段故事摘要（提升連貫性）
   const previousStorySummary = canonicalizeKingCodenamesText(
@@ -2306,6 +2439,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
 收藏文明口味：
 ${collectibleCulturePrompt}
+城市天候主調：
+${locationWeatherPrompt}
 地區篇章進度：第 ${Math.max(1, arcMeta.turnsInLocation)} / ${arcMeta.targetTurns} 段（階段：${arcMeta.phase}）
 已完成跨區篇章：${arcMeta.completedLocations}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
@@ -2356,6 +2491,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 1. 有具體的場景（光線、聲音、氣味、溫度、觸感）
 2. 有NPC或環境的互動
 3. 強調原創世界觀：收藏品真偽鑑識、封存艙/修復台、來源線索、夥伴協作
+3a. 場景需自然反映當地天候「${locationWeatherProfile?.name || '晴空'}」，且至少 1 個行動選擇要受天候影響（例如路線、接觸方式、風險判斷）
 4. 故事要有懸念，讓人想繼續看
 5. 嚴格使用對應語言，${langInstruction.replace('請用', '全部')}
 6. 若語言設定為 zh-TW，嚴禁使用簡體字
@@ -2525,6 +2661,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const playerLang = player?.language || 'zh-TW';
   const langInstruction = getAiLanguageDirective(playerLang, 'output');
   const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
+  const locationWeatherProfile = getLocationWeatherProfile(location);
+  const locationWeatherPrompt = getLocationWeatherPrompt(location, playerLang);
   const truthGatePrompt = typeof MAIN_STORY.getTruthGatePrompt === 'function'
     ? MAIN_STORY.getTruthGatePrompt(player, location)
     : '';
@@ -2538,17 +2676,19 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   );
   const missionCityTurns = missionInCity ? Math.max(1, Number(arcMeta?.turnsInLocation || 1)) : 0;
   const localTurns = Math.max(1, Number(arcMeta?.turnsInLocation || 1));
+  const missionNpcAppearTurnsForChoices = Math.max(1, Number(missionInfo?.minTurnsInLocation || 5));
   const missionApproachRule = (() => {
     if (!missionInfo || missionInfo.keyFound) return '';
     if (missionInfo.regionId === 'island_routes') {
       return '本區關鍵任務未完成：四巨頭未全滅前，只能鋪陳追蹤或備戰，不能寫成已拿到終章核心憑證。';
     }
     if (missionInCity) {
-      if (missionCityTurns <= 1) {
-        return `你已在任務城市（第${missionCityTurns}回合）：本回合至少 1 個選項要自然引出「${missionInfo.npcName}」的出沒線索（旁觀者口供、交易時間、常去地點等），語句不可像任務模板。`;
+      if (missionCityTurns < missionNpcAppearTurnsForChoices) {
+        const remainTurns = Math.max(0, missionNpcAppearTurnsForChoices - missionCityTurns);
+        return `你已在任務城市（第${missionCityTurns}回合）：關鍵NPC「${missionInfo.npcName}」在第 ${missionNpcAppearTurnsForChoices} 回合前不可直接出現（還需 ${remainTurns} 回合）。本回合至少 2 個選項要做前置追查（口供、堵點、追蹤路線、交易時間、常去地點），且不得直接寫成拿到「${missionInfo.evidenceName}」。`;
       }
-      if (missionCityTurns === 2) {
-        return `你已在任務城市（第2回合）：本回合至少 1 個選項要把線索收斂成可執行接觸（堵點、約見、尾隨、換取情報），但不得直接寫成證據到手。`;
+      if (missionCityTurns === missionNpcAppearTurnsForChoices) {
+        return `你已在任務城市（第${missionCityTurns}回合）：本回合可讓「${missionInfo.npcName}」首次出現，並提供可接觸的選項；但仍不可直接寫成已取得「${missionInfo.evidenceName}」。`;
       }
       return `你已在任務城市（第${missionCityTurns}回合）：本回合至少 1 個選項可直接接觸「${missionInfo.npcName}」或其代理人；仍不可直接寫成已取得「${missionInfo.evidenceName}」。`;
     }
@@ -2666,6 +2806,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
 收藏文明口味：
 ${collectibleCulturePrompt}
 地區玩法口味：${locationPlaystylePrompt}
+城市天候主調：
+${locationWeatherPrompt}
 島嶼劇情狀態：stage ${islandStage}/${islandStageCount}｜${islandCompleted ? '已完成（開放世界）' : '進行中（優先引導）'}
 戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格
 通緝熱度：${wantedPressure}
@@ -2738,6 +2880,7 @@ ${anchorText}
 12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
 13. 若島嶼劇情進行中，至少 1 個選項要明確推進島內主題（來自島內引導段），且不得超過 1 個主線強引導選項
 13a. 地區玩法口味必須落地：至少 ${Math.max(1, Number(locationPlaystyle?.minKeywordHits || 1))} 個選項要明顯反映「${locationPlaystyle?.name || '在地探索'}」（${Array.isArray(locationPlaystyle?.keywords) && locationPlaystyle.keywords.length > 0 ? locationPlaystyle.keywords.slice(0, 6).join('、') : '請使用在地語境關鍵詞'}）
+13b. 至少 1 個選項要反映當前天候「${locationWeatherProfile?.name || '晴空'}」帶來的行動差異（例如改走掩體、調整接觸策略、改變查驗方式），但不可模板化
 14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例
 15. 玩家名稱「${playerName}」只能指主角本人；禁止再創建同名 NPC
 16. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可直接當成已知真相寫進選項

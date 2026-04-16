@@ -31,6 +31,7 @@ const KING_ALIAS_TO_CANON = Object.freeze({
 const KING_ENCOUNTER_GAP_EVENTS = Math.max(1, Number(process.env.KING_ENCOUNTER_GAP_EVENTS || 2));
 const ASSASSIN_PRESSURE_GAP_EVENTS = Math.max(2, Number(process.env.ASSASSIN_PRESSURE_GAP_EVENTS || 4));
 const KING_CHASE_REGION_ID = 'island_routes';
+const MISSION_NPC_APPEAR_MIN_CITY_TURNS = Math.max(1, Number(process.env.MISSION_NPC_APPEAR_MIN_CITY_TURNS || 5));
 
 function normalizeKingName(raw = '') {
   const text = String(raw || '').trim();
@@ -77,17 +78,17 @@ const REGION_KEY_MISSIONS = Object.freeze({
     actionKeywords: ['雙鑑', '鑑定衝突', '正規鑑定', '低價鑑定', '原始單', '灰帳'],
     enemyAliases: ['灰帳記錄員'],
     minStoryTurns: 3,
-    minTurnsInLocation: 2,
+    minTurnsInLocation: 5,
     leadGraceTurns: 3
   },
   west_desert: {
     npcName: '轉運站調度員',
     npcLocation: '喀什爾',
-    evidenceName: '異常轉運時間鏈',
-    actionKeywords: ['轉運', '時間鏈', '貨流', '洗來源', '調度', '碼頭紀錄'],
+    evidenceName: '轉運站時間紀錄表（含異常批次流向）',
+    actionKeywords: ['轉運', '時間鏈', '時間紀錄', '貨流', '洗來源', '調度', '碼頭紀錄', '批次流向'],
     enemyAliases: ['轉運站調度員'],
     minStoryTurns: 8,
-    minTurnsInLocation: 2,
+    minTurnsInLocation: 5,
     leadGraceTurns: 3
   },
   southern_delta: {
@@ -97,7 +98,7 @@ const REGION_KEY_MISSIONS = Object.freeze({
     actionKeywords: ['偽造樣本', '製程片段', '試樣', '工坊', '仿品', '樣本'],
     enemyAliases: ['工坊試樣師'],
     minStoryTurns: 13,
-    minTurnsInLocation: 2,
+    minTurnsInLocation: 5,
     leadGraceTurns: 3
   },
   northern_highland: {
@@ -107,7 +108,7 @@ const REGION_KEY_MISSIONS = Object.freeze({
     actionKeywords: ['鏈路密鑰', '上級節點', '聯絡密鑰', '夜冕', '滲透聯絡'],
     enemyAliases: ['滲透聯絡員'],
     minStoryTurns: 18,
-    minTurnsInLocation: 2,
+    minTurnsInLocation: 5,
     leadGraceTurns: 3
   },
   island_routes: {
@@ -125,8 +126,8 @@ const MISSION_LEAD_LINES = Object.freeze({
     '洛陽城的攤販對你使了個眼色：雙鑑衝突原始單不在檯面上，只能找灰帳記錄員。'
   ],
   west_desert: [
-    '喀什爾轉運區有人壓低聲線告訴你：要看異常時間鏈，得直接問轉運站調度員。',
-    '喀什爾巴扎後巷傳來一句暗語：異常轉運時間鏈只在調度員手上，別找錯人。'
+    '喀什爾轉運區有人壓低聲線告訴你：你要找的是「轉運站時間紀錄表」，上面會有異常批次的流向時間。',
+    '喀什爾巴扎後巷傳來一句暗語：那份「轉運站時間紀錄表（含異常批次流向）」只在調度員手上，別找錯人。'
   ],
   southern_delta: [
     '鏡湖渡口有人遞來一句話：偽造樣本與製程片段，只有工坊試樣師敢拿出來。',
@@ -212,6 +213,13 @@ function getRegionIdByLocation(location = '') {
   if (!loc) return '';
   const meta = getLocationStoryMetadata(loc);
   return String(meta?.regionId || '').trim();
+}
+
+function getMissionMinTurnsInLocation(spec, regionId = '') {
+  const baseTurns = Math.max(0, Number(spec?.minTurnsInLocation || 0));
+  const rid = String(regionId || '').trim();
+  if (!rid || rid === 'island_routes' || rid === 'hidden_deeps') return baseTurns;
+  return Math.max(baseTurns, MISSION_NPC_APPEAR_MIN_CITY_TURNS);
 }
 
 function ensureMissionState(state) {
@@ -341,7 +349,7 @@ function inferMissionUnlockByAction(state, context = {}) {
   const storyTurns = Math.max(0, Number(context?.storyTurns ?? state?.eventCount ?? 0));
   const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
   const minStoryTurns = Math.max(0, Number(spec?.minStoryTurns || 0));
-  const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 0));
+  const minTurnsInLocation = getMissionMinTurnsInLocation(spec, regionId);
   const leadGraceTurns = Math.max(0, Math.min(6, Number(spec?.leadGraceTurns ?? 1)));
   if (storyTurns < minStoryTurns) return null;
   if (turnsInLocation < minTurnsInLocation) return null;
@@ -402,9 +410,9 @@ function maybeTriggerMissionNpcLead(player, context = {}) {
   const storyTurns = Math.max(0, Number(context?.storyTurns ?? player?.storyTurns ?? 0));
   const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
   const minStoryTurns = Math.max(0, Number(spec?.minStoryTurns || 2));
-  const minTurnsInLocation = Math.max(0, Number(spec?.minTurnsInLocation || 2));
+  const minTurnsInLocation = getMissionMinTurnsInLocation(spec, regionId);
   if (storyTurns < minStoryTurns) return null;
-  if (turnsInLocation < Math.max(1, minTurnsInLocation - 1)) return null;
+  if (turnsInLocation < minTurnsInLocation) return null;
   if (storyTurns - Number(row.lastLeadTurn || -999) < 1) return null;
 
   const baseChance = clamp(
@@ -478,6 +486,7 @@ function getCurrentRegionMission(player = null, location = '') {
     npcName: String(spec.npcName || '').trim(),
     npcLocation: String(spec.npcLocation || '').trim(),
     evidenceName: String(spec.evidenceName || '').trim(),
+    minTurnsInLocation: getMissionMinTurnsInLocation(spec, regionId),
     keyFound: Boolean(row?.keyFound),
     method: String(row?.method || '').trim()
   };
@@ -504,7 +513,7 @@ function suggestMissionAutoTravel(player = null, context = {}) {
 
   const storyTurns = Math.max(0, Number(context?.storyTurns ?? player?.storyTurns ?? state?.eventCount ?? 0));
   const turnsInLocation = Math.max(0, Number(context?.turnsInLocation || 0));
-  const minTurnsInLocation = Math.max(1, Number(spec?.minTurnsInLocation || 1));
+  const minTurnsInLocation = Math.max(1, getMissionMinTurnsInLocation(spec, String(mission.regionId || '').trim()));
   const leadShownCount = Math.max(0, Number(row?.leadShownCount || 0));
   const cooldownTurns = Math.max(3, Number(context?.cooldownTurns || 3));
   const lastAutoTurn = Number(state?.lastMissionAutoTravelTurn || -999);
@@ -538,12 +547,12 @@ function getTruthGatePrompt(player = null, location = '') {
   const allow = TRUTH_TIERS[Math.max(0, level - 1)] || TRUTH_TIERS[0];
   const next = TRUTH_TIERS[Math.min(TRUTH_TIERS.length - 1, level)] || null;
   const mission = getCurrentRegionMission(player, location || player?.location || '');
-  let missionLine = '本區關鍵任務：先用在地線索接近關鍵人物，再推進證據鏈。請以自然敘事表達，勿把規則句直接寫進故事或選項。';
+  let missionLine = '本區關鍵任務：先接近關鍵人物，拿到可驗證的文件或物證，再推進主線。請用自然敘事呈現，不要把規則句原文貼進故事或選項。';
   if (mission) {
     if (mission.regionId === 'island_routes') {
       missionLine = `本區關鍵任務：四巨頭戰線必須在「群島航線」完成；在此之前只能鋪陳追蹤/備戰，不能寫成已取得「${mission.evidenceName}」。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
     } else {
-      missionLine = `本區關鍵任務：僅在「${mission.npcLocation || '指定地點'}」與「${mission.npcName}」這條線能推進到「${mission.evidenceName}」；其他地點最多只能拿到過渡線索。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
+      missionLine = `本區關鍵任務：你現在要拿到的是「${mission.evidenceName}」。這份證據只能在「${mission.npcLocation || '指定地點'}」停留至少 ${Math.max(1, Number(mission.minTurnsInLocation || 5))} 回合後，向「${mission.npcName}」取得；其他地點最多只能拿到過渡線索。狀態：${mission.keyFound ? '已完成' : '未完成'}`;
     }
   }
   const nextLine = next ? `下一層僅可做懷疑預告：${next.allow}` : '你已在終局層，可進入平衡重建敘事。';

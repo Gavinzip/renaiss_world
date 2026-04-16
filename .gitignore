@@ -13,6 +13,7 @@ modules/systems/data/*.sqlite
 modules/systems/data/*.sqlite-*
 data_local_backup_*/
 *.log
+bot.pid
 package-lock.json
 dev/
 DEV/
