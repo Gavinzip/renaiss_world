@@ -304,6 +304,18 @@ function createBattleLayoutUtils(deps = {}) {
     return format1(value, fallback);
   }
 
+  function buildBattleHpBar(current = 0, max = 1, width = 12) {
+    const safeMax = Math.max(1, Number(max || 1));
+    const safeCurrent = Math.max(0, Math.min(safeMax, Number(current || 0)));
+    const safeWidth = Math.max(6, Math.min(20, Math.floor(Number(width) || 12)));
+    const ratio = safeCurrent / safeMax;
+    const filled = Math.max(0, Math.min(safeWidth, Math.round(ratio * safeWidth)));
+    const empty = Math.max(0, safeWidth - filled);
+    const bar = `${'█'.repeat(filled)}${'░'.repeat(empty)}`;
+    const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+    return { bar, percent };
+  }
+
   function buildBattleMobileCombinedLayout(enemy, combatant, state, actionView = {}) {
     const enemyElement = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
     const allyElement = combatant?.isHuman
@@ -323,12 +335,14 @@ function createBattleLayoutUtils(deps = {}) {
     const allyDamage = Number.isFinite(Number(ally?.damage)) ? format1(Math.max(0, Number(ally.damage))) : '—';
     const enemyExtra = enemyAction?.pending ? '—' : (enemyAction?.extra || '無');
     const allyExtra = ally?.pending ? '—' : (ally?.extra || '無');
+    const enemyHpBar = buildBattleHpBar(enemy?.hp, enemy?.maxHp, 12);
+    const allyHpBar = buildBattleHpBar(combatant?.hp, combatant?.maxHp, 12);
 
     return (
       `第 ${turn} 回合\n` +
       `👹 敵方：${enemy?.name || '敵人'}\n` +
       `屬性：${enemyElement}\n` +
-      `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ATK：${format1(enemy?.attack || 0)}\n\n` +
+      `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ${enemyHpBar.bar} ${enemyHpBar.percent}% ｜ ATK：${format1(enemy?.attack || 0)}\n\n` +
       `【敵方行動】\n` +
       `招式：${enemyMove}\n` +
       `對我造成：${enemyDamage}\n` +
@@ -337,7 +351,7 @@ function createBattleLayoutUtils(deps = {}) {
       `🐾 我方：${combatant?.name || '我方'}\n` +
       `屬性：${allyElement}\n` +
       `${relationText}\n` +
-      `HP：${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}\n` +
+      `HP：${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)} ｜ ${allyHpBar.bar} ${allyHpBar.percent}%\n` +
       `⚡ 能量：${energy}（每回 +2，可結轉）\n\n` +
       `【我方行動】\n` +
       `招式：${allyMove}\n` +
@@ -416,25 +430,39 @@ function createBattleLayoutUtils(deps = {}) {
     ).text.replace(/^([^\s]+\s)/u, '');
     const enemyHp = `${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)}`;
     const allyHp = `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`;
+    const enemyHpBar = buildBattleHpBar(enemy?.hp, enemy?.maxHp, 12);
+    const allyHpBar = buildBattleHpBar(combatant?.hp, combatant?.maxHp, 12);
     const turn = Number(state?.turn || 1);
     const energy = Number(state?.energy || 0);
     const roundText = `第 ${turn} 回合`;
     const enemyIndent = ' '.repeat(33);
     const roundLine = `${' '.repeat(Math.max(0, 58 - roundText.length))}${roundText}`;
+    const allyRelation = `克制：${relationText}`;
+    const boxInnerWidth = 23;
+    const enemyTop = `${enemyIndent}┌${'─'.repeat(boxInnerWidth + 2)}┐`;
+    const enemyBottom = `${enemyIndent}└${'─'.repeat(boxInnerWidth + 2)}┘`;
+    const allyTop = `┌${'─'.repeat(boxInnerWidth + 2)}┐`;
+    const allyBottom = `└${'─'.repeat(boxInnerWidth + 2)}┘`;
+    const enemyLine = (text = '') => `${enemyIndent}│ ${padBattleCellText(text, boxInnerWidth)} │`;
+    const allyLine = (text = '') => `│ ${padBattleCellText(text, boxInnerWidth)} │`;
     return (
       '```text\n' +
       `${roundLine}\n` +
-      `${enemyIndent}┌─【敵方】──────────────┐\n` +
-      `${enemyIndent}│ ${enemyName} HP ${enemyHp}\n` +
-      `${enemyIndent}│ 屬性 ${enemyElement}\n` +
-      `${enemyIndent}│ ATK ${enemy?.attack || 0}\n` +
-      `${enemyIndent}└───────────────────────┘\n\n` +
-      `┌─【我方】──────────────┐\n` +
-      `│ ${allyName} HP ${allyHp}\n` +
-      `│ 屬性 ${allyElement}\n` +
-      `│ ${relationText}\n` +
-      `│ ⚡ 能量 ${energy}（每回 +2，可結轉）\n` +
-      `└───────────────────────┘\n` +
+      `${enemyTop}\n` +
+      `${enemyLine('【敵方】')}\n` +
+      `${enemyLine(`${enemyName} HP ${enemyHp}`)}\n` +
+      `${enemyLine(`HPBAR ${enemyHpBar.bar} ${enemyHpBar.percent}%`)}\n` +
+      `${enemyLine(`屬性 ${enemyElement}`)}\n` +
+      `${enemyLine(`ATK ${enemy?.attack || 0}`)}\n` +
+      `${enemyBottom}\n\n` +
+      `${allyTop}\n` +
+      `${allyLine('【我方】')}\n` +
+      `${allyLine(`${allyName} HP ${allyHp}`)}\n` +
+      `${allyLine(`HPBAR ${allyHpBar.bar} ${allyHpBar.percent}%`)}\n` +
+      `${allyLine(`屬性 ${allyElement}`)}\n` +
+      `${allyLine(allyRelation)}\n` +
+      `${allyLine(`⚡ 能量 ${energy}（每回 +2，可結轉）`)}\n` +
+      `${allyBottom}\n` +
       '```'
     );
   }
@@ -448,15 +476,17 @@ function createBattleLayoutUtils(deps = {}) {
     ).text;
     const turn = Number(state?.turn || 1);
     const energy = Number(state?.energy || 0);
+    const enemyHpBar = buildBattleHpBar(enemy?.hp, enemy?.maxHp, 12);
+    const allyHpBar = buildBattleHpBar(combatant?.hp, combatant?.maxHp, 12);
     return (
       `第 ${turn} 回合\n` +
       `👹 敵方：${enemy?.name || '敵人'}\n` +
       `屬性：${enemyElement}\n` +
-      `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ATK：${format1(enemy?.attack || 0)}\n\n` +
+      `HP：${formatBattleHpValue(enemy?.hp, 0)}/${formatBattleHpValue(enemy?.maxHp, 1)} ｜ ${enemyHpBar.bar} ${enemyHpBar.percent}% ｜ ATK：${format1(enemy?.attack || 0)}\n\n` +
       `🐾 我方：${combatant?.name || '我方'}\n` +
       `屬性：${allyElement}\n` +
       `${relationText}\n` +
-      `HP：${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}\n` +
+      `HP：${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)} ｜ ${allyHpBar.bar} ${allyHpBar.percent}%\n` +
       `⚡ 能量：${energy}（每回 +2，可結轉）`
     );
   }
