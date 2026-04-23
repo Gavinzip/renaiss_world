@@ -12,6 +12,8 @@
     "storage:rebuild": "node tools/rebuild-runtime-storage.js",
     "storage:inspect": "node tools/inspect-runtime-storage.js",
     "audit:root-js": "node tools/audit-root-js-layout.js",
+    "audit:i18n-assets": "node tools/audit-localization-assets.js",
+    "migrate:i18n-assets": "node tools/migrate-localization-assets.js --write",
     "test:battle-balance": "node tools/tests/battle-balance-full.js",
     "test:start-mainmenu": "node tools/tests/start-mainmenu-smoke.js",
     "test:button-routes": "node tools/tests/button-route-smoke.js",

@@ -4,7 +4,11 @@ function createGlobalLanguageResources(deps = {}) {
   const {
     normalizeLangCode = (lang = 'zh-TW') => String(lang || 'zh-TW')
   } = deps;
+  const translateTextToKo = typeof CONTENT_LOCALIZATION.translateTextToKo === 'function'
+    ? CONTENT_LOCALIZATION.translateTextToKo
+    : (text = '') => String(text || '');
   let mapTextUtilsFactory = null;
+  const koreanSectionCache = new Map();
 
   function normalizeLang(lang = 'zh-TW') {
     const raw = String(normalizeLangCode(lang) || lang || '').trim();
@@ -25,7 +29,43 @@ function createGlobalLanguageResources(deps = {}) {
       lower === 'en-us' ||
       lower.startsWith('en-')
     ) return 'en';
+    if (
+      raw === 'ko' ||
+      raw === 'ko-KR' ||
+      lower === 'ko' ||
+      lower === 'ko-kr' ||
+      lower === 'kr' ||
+      lower === 'korean' ||
+      lower.includes('한국')
+    ) return 'ko';
     return 'zh-TW';
+  }
+
+  function localizeValueToKorean(value = null) {
+    if (value === null || value === undefined) return value;
+    if (typeof value === 'string') return translateTextToKo(value);
+    if (typeof value === 'function') {
+      return (...args) => translateTextToKo(String(value(...args) || ''));
+    }
+    if (Array.isArray(value)) return value.map((item) => localizeValueToKorean(item));
+    if (typeof value === 'object') {
+      const out = {};
+      for (const [key, row] of Object.entries(value)) {
+        out[key] = localizeValueToKorean(row);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  function getKoreanSection(section = '', rows = {}) {
+    const key = String(section || '').trim();
+    if (!key) return {};
+    if (koreanSectionCache.has(key)) return koreanSectionCache.get(key);
+    const source = rows?.ko || rows?.en || rows?.['zh-TW'] || {};
+    const localized = localizeValueToKorean(source);
+    koreanSectionCache.set(key, localized);
+    return localized;
   }
 
   function resolveMapText(lang = 'zh-TW', context = {}) {
@@ -1080,10 +1120,13 @@ function createGlobalLanguageResources(deps = {}) {
   function getSection(section = '', lang = 'zh-TW', context = null) {
     const code = normalizeLang(lang);
     if (String(section || '') === 'mapText') {
-      return resolveMapText(code, context || {});
+      const rows = resolveMapText(code, context || {});
+      if (code === 'ko') return localizeValueToKorean(rows);
+      return rows;
     }
     const rows = RESOURCES[String(section || '')] || null;
     if (!rows || typeof rows !== 'object') return {};
+    if (code === 'ko') return getKoreanSection(section, rows);
     return rows[code] || rows['zh-TW'] || {};
   }
 
@@ -1098,6 +1141,9 @@ function createGlobalLanguageResources(deps = {}) {
     const row = RESOURCES.mapRegionNames[source];
     if (!row) return source;
     const code = normalizeLang(lang);
+    if (code === 'ko') {
+      return row.ko || translateTextToKo(row.en || row['zh-TW'] || source);
+    }
     return row[code] || row['zh-TW'] || source;
   }
 

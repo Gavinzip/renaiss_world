@@ -15,6 +15,7 @@ const { createSqliteMirroredSingletonStore } = require('../data/sqlite-mirrored-
 const {
   localizeScriptOnly,
   buildItemNamePack,
+  buildItemDescPack,
   getSkillChipUiText,
   formatSkillChipDisplay,
   getMoveLocalization
@@ -133,29 +134,78 @@ function getAiLanguageDirective(lang = 'zh-TW', tone = 'outputFullstop') {
 }
 
 function ensurePlayerEconomy(player) {
-  if (!player || typeof player !== 'object') return;
-  if (!Array.isArray(player.tradeGoods)) player.tradeGoods = [];
+  if (!player || typeof player !== 'object') return false;
+  let changed = false;
+  if (!Array.isArray(player.tradeGoods)) {
+    player.tradeGoods = [];
+    changed = true;
+  }
+  const normalizedTradeGoods = [];
+  for (const row of player.tradeGoods) {
+    const normalized = normalizeTradeGoodLocalization(row);
+    if (!normalized) {
+      changed = true;
+      continue;
+    }
+    if (JSON.stringify(row) !== JSON.stringify(normalized)) changed = true;
+    normalizedTradeGoods.push(normalized);
+  }
+  if (JSON.stringify(player.tradeGoods) !== JSON.stringify(normalizedTradeGoods)) {
+    player.tradeGoods = normalizedTradeGoods;
+    changed = true;
+  }
   if (!player.marketState || typeof player.marketState !== 'object') {
     player.marketState = {
       lastSkillLicenseDay: 0,
       renaissVisits: 0,
       digitalVisits: 0
     };
+    changed = true;
   }
-  if (!Number.isFinite(Number(player.marketState.lastSkillLicenseDay))) player.marketState.lastSkillLicenseDay = 0;
-  if (!Number.isFinite(Number(player.marketState.renaissVisits))) player.marketState.renaissVisits = 0;
-  if (!Number.isFinite(Number(player.marketState.digitalVisits))) player.marketState.digitalVisits = 0;
-  if (!Number.isFinite(Number(player.marketState.digitalRiskScore))) player.marketState.digitalRiskScore = 0;
-  if (!Array.isArray(player.marketState.appraisalHistory)) player.marketState.appraisalHistory = [];
-  if (!player.stats) player.stats = {};
-  if (!Number.isFinite(Number(player.stats.財富))) player.stats.財富 = 0;
-  ensurePlayerFinanceLedger(player);
+  if (!Number.isFinite(Number(player.marketState.lastSkillLicenseDay))) {
+    player.marketState.lastSkillLicenseDay = 0;
+    changed = true;
+  }
+  if (!Number.isFinite(Number(player.marketState.renaissVisits))) {
+    player.marketState.renaissVisits = 0;
+    changed = true;
+  }
+  if (!Number.isFinite(Number(player.marketState.digitalVisits))) {
+    player.marketState.digitalVisits = 0;
+    changed = true;
+  }
+  if (!Number.isFinite(Number(player.marketState.digitalRiskScore))) {
+    player.marketState.digitalRiskScore = 0;
+    changed = true;
+  }
+  if (!Array.isArray(player.marketState.appraisalHistory)) {
+    player.marketState.appraisalHistory = [];
+    changed = true;
+  }
+  if (!player.stats) {
+    player.stats = {};
+    changed = true;
+  }
+  if (!Number.isFinite(Number(player.stats.財富))) {
+    player.stats.財富 = 0;
+    changed = true;
+  }
+  if (ensurePlayerFinanceLedger(player)) changed = true;
+  return changed;
 }
 
 function ensurePlayerFinanceLedger(player) {
-  if (!player || typeof player !== 'object') return;
-  if (!Array.isArray(player.financeLedger)) player.financeLedger = [];
-  if (!Array.isArray(player.financeNotices)) player.financeNotices = [];
+  if (!player || typeof player !== 'object') return false;
+  let changed = false;
+  if (!Array.isArray(player.financeLedger)) {
+    player.financeLedger = [];
+    changed = true;
+  }
+  if (!Array.isArray(player.financeNotices)) {
+    player.financeNotices = [];
+    changed = true;
+  }
+  return changed;
 }
 
 function clamp(value, min, max) {
@@ -1300,6 +1350,26 @@ function sanitizeLocalizedDescMap(value = {}, fallback = {}) {
   const zhCn = sanitizeLootDesc(source['zh-CN'] || localizeScriptOnly(zhTw, 'zh-CN') || safeFallback['zh-CN'] || zhTw);
   const en = sanitizeLootDesc(source.en || safeFallback.en || zhTw);
   return { 'zh-TW': zhTw, 'zh-CN': zhCn, en };
+}
+
+function normalizeTradeGoodLocalization(good = null) {
+  if (!good || typeof good !== 'object' || Array.isArray(good)) return null;
+  if (Object.keys(good).length <= 0) return null;
+
+  const fallbackNamePack = buildItemNamePack(good) || buildItemNamePack(String(good?.name || '').trim());
+  if (!fallbackNamePack || !String(fallbackNamePack['zh-TW'] || '').trim()) return null;
+  const safeNames = sanitizeLocalizedTextMap(good?.names || fallbackNamePack, fallbackNamePack);
+
+  const fallbackDescPack = buildItemDescPack(good) || buildItemDescPack({ desc: String(good?.desc || '').trim() }) || { 'zh-TW': String(good?.desc || '').trim() };
+  const safeDescs = sanitizeLocalizedDescMap(good?.descs || fallbackDescPack, fallbackDescPack);
+
+  return {
+    ...good,
+    name: safeNames['zh-TW'],
+    names: safeNames,
+    desc: safeDescs['zh-TW'] || '',
+    descs: safeDescs
+  };
 }
 
 function buildFallbackLootFlavor(meta = {}) {

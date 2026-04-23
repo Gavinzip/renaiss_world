@@ -642,7 +642,7 @@ function buildEquipmentSlotDetailLine(item = null, slot = 'helmet', uiLang = 'zh
   const eqTx = getEquipmentText(uiLang);
   if (!item || typeof item !== 'object') return `• ${getFusionSlotLabel(slot, uiLang)}：${eqTx.notEquipped || '未裝備'}`;
   const rarity = getFusionRarityLabel(item.rarity);
-  const name = String(item.name || eqTx.unnamedGear || '未命名裝備');
+  const name = getLocalizedItemName(item, uiLang) || String(item.name || eqTx.unnamedGear || '未命名裝備');
   const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
   const statText = formatEquipmentStatText(slot, stats);
   const value = Math.max(0, Number(item.value || 0));
@@ -711,7 +711,7 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
     .map((slot) => {
       const item = equipment?.[slot];
       if (!item || typeof item !== 'object') return '';
-      const lore = String(item.lore || '').trim();
+      const lore = getLocalizedItemDesc(item, uiLang) || String(item.lore || '').trim();
       if (!lore) return '';
       return `【${getFusionSlotLabel(slot, uiLang)}】${lore}`;
     })
@@ -724,7 +724,7 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
       const slot = String(item.slot || '').trim();
       if (!FUSION.EQUIPMENT_SLOTS.includes(slot)) return null;
       const rarity = getFusionRarityLabel(item.rarity);
-      const name = String(item.name || eqTx.unnamedGear || '未命名裝備').slice(0, 46);
+      const name = String(getLocalizedItemName(item, uiLang) || item.name || eqTx.unnamedGear || '未命名裝備').slice(0, 46);
       const value = Math.max(0, Number(item.value || 0));
       return {
         label: `【${getFusionSlotLabel(slot, uiLang)}】${rarity} ${name}`.slice(0, 100),
@@ -739,7 +739,7 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
       const item = equipment?.[slot];
       if (!item || typeof item !== 'object') return null;
       return {
-        label: `${getFusionSlotLabel(slot, uiLang)}｜${String(item.name || eqTx.unnamedGear || '未命名裝備')}`.slice(0, 100),
+        label: `${getFusionSlotLabel(slot, uiLang)}｜${String(getLocalizedItemName(item, uiLang) || item.name || eqTx.unnamedGear || '未命名裝備')}`.slice(0, 100),
         description: `${eqTx.unequipHint || '拆下後會回到裝備背包'}`.slice(0, 100),
         value: slot
       };
@@ -817,7 +817,7 @@ async function handlePetEquipmentEquipSelect(interaction, user, customId = '') {
   }
   CORE.savePlayer(player);
   const gearWord = eqTx.gearWord || 'Gear';
-  const equippedName = String(result?.equipped?.name || gearWord).trim() || gearWord;
+  const equippedName = String(getLocalizedItemName(result?.equipped, uiLang) || result?.equipped?.name || gearWord).trim() || gearWord;
   const successText = typeof eqTx.equipSuccess === 'function'
     ? eqTx.equipSuccess(selectedPet.name, equippedName)
     : `✅ Equipped ${equippedName} on ${selectedPet.name}`;
@@ -847,7 +847,7 @@ async function handlePetEquipmentUnequipSelect(interaction, user, customId = '')
   }
   CORE.savePlayer(player);
   const gearWord = eqTx.gearWord || 'Gear';
-  const unequippedName = String(result?.unequipped?.name || gearWord).trim() || gearWord;
+  const unequippedName = String(getLocalizedItemName(result?.unequipped, uiLang) || result?.unequipped?.name || gearWord).trim() || gearWord;
   const successText = typeof eqTx.unequipSuccess === 'function'
     ? eqTx.unequipSuccess(unequippedName)
     : `↩️ Unequipped: ${unequippedName}`;
@@ -1932,7 +1932,8 @@ function getPlayerEquipmentSummary(player = null, uiLang = 'zh-TW') {
     }
     const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
     const statText = formatEquipmentStatText(slot, stats);
-    return `• ${getFusionSlotLabel(slot, uiLang)}：${getFusionRarityLabel(item.rarity)} ${String(item.name || eqTx.unnamedGear || '未命名裝備')}｜${statText}`;
+    const displayName = getLocalizedItemName(item, uiLang) || String(item.name || eqTx.unnamedGear || '未命名裝備');
+    return `• ${getFusionSlotLabel(slot, uiLang)}：${getFusionRarityLabel(item.rarity)} ${displayName}｜${statText}`;
   });
   const bonus = FUSION.getEquippedBonuses(player, activePetId);
   return {
@@ -1975,7 +1976,7 @@ function buildEquipmentBagLine(item = null, index = 0, uiLang = 'zh-TW') {
   const slot = String(item?.slot || '').trim();
   if (!FUSION.EQUIPMENT_SLOTS.includes(slot)) return '';
   const rarity = getFusionRarityLabel(item.rarity);
-  const name = String(item.name || eqTx.unnamedGear || '未命名裝備').trim() || (eqTx.unnamedGear || '未命名裝備');
+  const name = String(getLocalizedItemName(item, uiLang) || item.name || eqTx.unnamedGear || '未命名裝備').trim() || (eqTx.unnamedGear || '未命名裝備');
   const stats = item.stats && typeof item.stats === 'object' ? item.stats : {};
   const statText = formatEquipmentStatText(slot, stats);
   const value = Math.max(0, Number(item.value || 0));
@@ -1996,11 +1997,13 @@ function getFusionCandidates(player = null, uiLang = 'zh-TW') {
     if (FUSION_BLOCKED_ITEMS.has(name)) continue;
     if (isSkillChipItemName(name)) continue;
     const refValue = Math.max(20, Math.floor(Number(estimateStoryReferencePriceByName(name) || 20)));
+    const displayName = getLocalizedItemName(name, uiLang) || name;
     out.push({
       token: `iv_${i}`,
       source: 'inventory',
       sourceLabel: sourceLabelInventory,
       name,
+      displayName,
       value: refValue,
       inventoryIndex: i
     });
@@ -2008,15 +2011,19 @@ function getFusionCandidates(player = null, uiLang = 'zh-TW') {
 
   for (const good of tradeGoods) {
     const id = String(good?.id || '').trim();
-    const name = String(good?.name || '').trim();
+    const name = String(good?.name || getLocalizedItemName(good, 'zh-TW') || '').trim();
     if (!id || !name) continue;
     const rarity = String(good?.rarity || '普通').trim();
     const value = Math.max(20, Math.floor(Number(good?.value || estimateStoryReferencePriceByName(name) || 20)));
+    const displayName = getLocalizedItemName(good, uiLang) || getLocalizedItemName(name, uiLang) || name;
     out.push({
       token: `tg_${id}`,
       source: 'tradeGoods',
       sourceLabel: sourceLabelGoods,
       name,
+      names: good?.names,
+      descs: good?.descs,
+      displayName,
       value,
       rarity,
       tradeGoodId: id
@@ -2026,7 +2033,7 @@ function getFusionCandidates(player = null, uiLang = 'zh-TW') {
   out.sort((a, b) => {
     const byValue = Number(b.value || 0) - Number(a.value || 0);
     if (byValue !== 0) return byValue;
-    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
+    return String(a.displayName || a.name || '').localeCompare(String(b.displayName || b.name || ''), 'zh-Hant');
   });
   return out;
 }
@@ -2128,6 +2135,8 @@ function consumeFusionMaterials(player, picks = []) {
       if (!id || !tradeIds.has(id)) return true;
       removed.push({
         name: String(good?.name || '未命名藏品'),
+        names: good?.names && typeof good.names === 'object' ? good.names : null,
+        descs: good?.descs && typeof good.descs === 'object' ? good.descs : null,
         value: Math.max(20, Math.floor(Number(good?.value || 20))),
         source: 'tradeGoods'
       });
@@ -2147,6 +2156,8 @@ function consumeFusionMaterials(player, picks = []) {
       player.inventory.splice(idx, 1);
       removed.push({
         name,
+        names: null,
+        descs: null,
         value: Math.max(20, Math.floor(Number(estimateStoryReferencePriceByName(name) || 20))),
         source: 'inventory'
       });
@@ -2163,14 +2174,14 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
     return;
   }
   const uiLang = getPlayerUILang(player);
-  ECON.ensurePlayerEconomy(player);
+  const economyChanged = ECON.ensurePlayerEconomy(player);
 
   const pruned = pruneEmptyTradeGoodsEntries(player);
   const changed = FUSION.ensurePlayerEquipmentState(player);
   const candidates = getFusionCandidates(player, uiLang);
   const validDraftTokens = getValidatedFusionDraftTokens(player, candidates);
   const draftChanged = setInventoryFusionDraftTokens(player, validDraftTokens);
-  if (pruned || changed || draftChanged) CORE.savePlayer(player);
+  if (economyChanged || pruned || changed || draftChanged) CORE.savePlayer(player);
 
   if (candidates.length < 3) {
     const embed = new EmbedBuilder()
@@ -2195,12 +2206,13 @@ async function showInventoryFusionLab(interaction, user, page = 0, notice = '') 
   const byToken = new Map(candidates.map((row) => [String(row?.token || '').trim(), row]));
   const draftRows = validDraftTokens.map((token) => byToken.get(token)).filter(Boolean);
   const draftSummary = draftRows.length > 0
-    ? draftRows.map((row) => `• ${String(row?.name || '未命名藏品')}`).join('\n')
+    ? draftRows.map((row) => `• ${String(row?.displayName || row?.name || '未命名藏品')}`).join('\n')
     : '（尚未選擇）';
   const options = (Array.isArray(pager?.items) ? pager.items : []).slice(0, 25).map((row, idx) => {
     const rarityMark = row?.rarity ? `｜${String(row.rarity)}` : '';
+    const displayName = String(row?.displayName || row?.name || '未命名藏品');
     return {
-      label: `${idx + 1}. ${String(row.name || '未命名藏品')}`.slice(0, 100),
+      label: `${idx + 1}. ${displayName}`.slice(0, 100),
       description: `${row.sourceLabel}${rarityMark}｜估值 ${Math.max(1, Number(row.value || 1))} Rns`.slice(0, 100),
       value: String(row.token || '').slice(0, 100),
       default: draftTokenSet.has(String(row.token || '').trim())
@@ -2264,10 +2276,10 @@ async function handleInventoryFusionSelect(interaction, user, customId = '') {
     return;
   }
   const uiLang = getPlayerUILang(player);
-  ECON.ensurePlayerEconomy(player);
+  const economyChanged = ECON.ensurePlayerEconomy(player);
   const pruned = pruneEmptyTradeGoodsEntries(player);
   const changed = FUSION.ensurePlayerEquipmentState(player);
-  if (pruned || changed) CORE.savePlayer(player);
+  if (economyChanged || pruned || changed) CORE.savePlayer(player);
 
   const currentPage = Math.max(0, Number(String(customId || '').split('_').pop() || 0));
   const selectedTokens = Array.isArray(interaction.values) ? interaction.values.map((v) => String(v || '').trim()).filter(Boolean) : [];
@@ -2291,7 +2303,7 @@ async function handleInventoryFusionSelect(interaction, user, customId = '') {
 
   setInventoryFusionDraftTokens(player, uniqueTokens);
   CORE.savePlayer(player);
-  const pickedNames = picks.map((row) => String(row?.name || '未命名藏品')).join(' + ');
+  const pickedNames = picks.map((row) => String(row?.displayName || row?.name || '未命名藏品')).join(' + ');
   const notice = uniqueTokens.length === 3
     ? `已選定 3 件藏品：${pickedNames}\n請按「🧪 開始融合」。`
     : `目前已選 ${uniqueTokens.length}/3：${pickedNames}`;
@@ -2318,10 +2330,10 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
     return;
   }
   const uiLang = getPlayerUILang(player);
-  ECON.ensurePlayerEconomy(player);
+  const economyChanged = ECON.ensurePlayerEconomy(player);
   const pruned = pruneEmptyTradeGoodsEntries(player);
   const changed = FUSION.ensurePlayerEquipmentState(player);
-  if (pruned || changed) CORE.savePlayer(player);
+  if (economyChanged || pruned || changed) CORE.savePlayer(player);
   const currentPage = Math.max(0, Number(String(customId || '').split('_').pop() || 0));
   const candidates = getFusionCandidates(player, uiLang);
   const byToken = new Map(candidates.map((row) => [String(row?.token || '').trim(), row]));
@@ -2341,7 +2353,7 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
   }
 
   await interaction.deferUpdate().catch(() => {});
-  const selectedNames = picks.map((row) => String(row?.name || '未命名藏品'));
+  const selectedNames = picks.map((row) => String(row?.displayName || row?.name || '未命名藏品'));
   await updateInteractionMessage(interaction, {
     embeds: [buildFusionProgressEmbed(selectedNames, 1, 4, '⚙️ 融合進行中', '正在校準封存艙與紋理資訊...')],
     components: []
@@ -2361,6 +2373,7 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
   try {
     const fusionInput = picks.map((row) => ({
       name: String(row?.name || '未知藏品'),
+      names: row?.names && typeof row.names === 'object' ? row.names : null,
       value: Math.max(1, Math.floor(Number(row?.value || 1))),
       source: String(row?.source || 'inventory')
     }));
@@ -2393,18 +2406,19 @@ async function handleInventoryFusionConfirm(interaction, user, customId = '') {
 
   const stats = equipment.stats && typeof equipment.stats === 'object' ? equipment.stats : {};
   const statText = formatEquipmentStatText(equipment.slot, stats);
-  const sourceText = consumed.map((row) => String(row?.name || '未知藏品')).join(' + ');
+  const sourceText = consumed.map((row) => String(getLocalizedItemName(row, uiLang) || row?.name || '未知藏品')).join(' + ');
   const equipNotice = equipResult?.equipped
     ? `已自動裝備到 ${getFusionSlotLabel(equipment.slot)}`
     : `已放入裝備背包（${getFusionSlotLabel(equipment.slot)}）`;
   const replaceNotice = equipResult?.replaced
-    ? `｜替換：${String(equipResult.replaced?.name || '舊裝備')}`
+    ? `｜替換：${String(getLocalizedItemName(equipResult.replaced, uiLang) || equipResult.replaced?.name || '舊裝備')}`
     : '';
+  const equipmentName = getLocalizedItemName(equipment, uiLang) || equipment.name || '未命名裝備';
   await showInventory(
     interaction,
     user,
     0,
-    `鍛造完成：${getFusionRarityLabel(equipment.rarity)}「${equipment.name}」｜${statText}\n藏品：${sourceText}\n${equipNotice}${replaceNotice}`,
+    `鍛造完成：${getFusionRarityLabel(equipment.rarity)}「${equipmentName}」｜${statText}\n藏品：${sourceText}\n${equipNotice}${replaceNotice}`,
     'equipment'
   );
 }
@@ -2417,10 +2431,10 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
   }
   const uiLang = getPlayerUILang(player);
   const invTx = getInventoryText(uiLang);
-  ECON.ensurePlayerEconomy(player);
+  const economyChanged = ECON.ensurePlayerEconomy(player);
   const pruned = pruneEmptyTradeGoodsEntries(player);
   const stateChanged = FUSION.ensurePlayerEquipmentState(player);
-  if (pruned || stateChanged) CORE.savePlayer(player);
+  if (economyChanged || pruned || stateChanged) CORE.savePlayer(player);
 
   const items = Array.isArray(player.inventory) ? player.inventory : [];
   const herbs = Array.isArray(player.herbs) ? player.herbs : [];

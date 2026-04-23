@@ -1,4 +1,10 @@
 const https = require('https');
+const {
+  buildItemNamePack,
+  buildItemDescPack,
+  getLocalizedTextFromPack,
+  normalizeLangCode
+} = require('../runtime/utils/global-language-resources');
 
 const MINIMAX_MODEL = String(process.env.EQUIPMENT_FUSION_MODEL || 'MiniMax-M2.5');
 const FUSION_TIMEOUT_RAW = Number(process.env.EQUIPMENT_FUSION_TIMEOUT_MS || 0);
@@ -125,6 +131,58 @@ function clampInt(value, min, max, fallback = min) {
 
 function normalizeText(text = '', maxLen = 80) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, Math.max(1, Number(maxLen) || 80));
+}
+
+function buildSourceMaterialEntry(row = {}) {
+  const sourceName = normalizeText(row?.name || '未知素材', 80);
+  const names = buildItemNamePack({
+    names: row?.names && typeof row.names === 'object' ? row.names : null,
+    name: sourceName
+  }) || buildItemNamePack(sourceName);
+  return {
+    name: getLocalizedTextFromPack(names, 'zh-TW') || sourceName,
+    names,
+    value: Math.max(1, Math.floor(Number(row?.value || 1))),
+    source: normalizeText(row?.source || 'inventory', 24)
+  };
+}
+
+function normalizeEquipmentLocalization(item = {}, slot = 'helmet', rarity = 'N', lang = 'zh-TW') {
+  const preferredLang = normalizeLangCode(lang || 'zh-TW');
+  const sourceName = normalizeText(item?.name || '', 24);
+  const sourceLore = normalizeText(item?.lore || item?.desc || '', 120);
+  const names = buildItemNamePack({
+    names: item?.names && typeof item.names === 'object' ? item.names : null,
+    itemNames: item?.itemNames && typeof item.itemNames === 'object' ? item.itemNames : null,
+    name: sourceName
+  }) || buildItemNamePack(sourceName);
+  const descs = buildItemDescPack({
+    descs: item?.descs && typeof item.descs === 'object' ? item.descs : null,
+    itemDescs: item?.itemDescs && typeof item.itemDescs === 'object' ? item.itemDescs : null,
+    lore: sourceLore,
+    desc: sourceLore
+  }) || buildItemDescPack(sourceLore);
+
+  const localizedName = getLocalizedTextFromPack(names, preferredLang);
+  const localizedLore = getLocalizedTextFromPack(descs, preferredLang);
+  const safeName = sanitizeEquipmentName(localizedName || sourceName, slot, rarity);
+  const safeLore = sanitizeLore(localizedLore || sourceLore, slot);
+  const safeNames = buildItemNamePack({
+    names: { ...(names || {}), [preferredLang]: safeName },
+    name: safeName
+  }) || buildItemNamePack(safeName);
+  const safeDescs = buildItemDescPack({
+    descs: { ...(descs || {}), [preferredLang]: safeLore },
+    lore: safeLore,
+    desc: safeLore
+  }) || buildItemDescPack(safeLore);
+  return {
+    name: getLocalizedTextFromPack(safeNames, 'zh-TW') || safeName,
+    names: safeNames,
+    lore: getLocalizedTextFromPack(safeDescs, 'zh-TW') || safeLore,
+    desc: getLocalizedTextFromPack(safeDescs, 'zh-TW') || safeLore,
+    descs: safeDescs
+  };
 }
 
 function parseJsonFromText(raw = '') {
@@ -525,18 +583,27 @@ function buildGuidedEquipment(materials = [], options = {}, hints = {}, parsed =
 
   const rawName = String(parsed?.equipmentName || parsed?.name || hints?.equipmentName || '').trim();
   const rawLore = String(parsed?.lore || parsed?.desc || hints?.lore || '').trim();
+  const fallbackName = rawName ? sanitizeEquipmentName(rawName, slot, rarity) : buildFallbackName(materials, slot, rarity);
+  const fallbackLore = rawLore ? sanitizeLore(rawLore, slot) : buildFallbackLore(slot, materials);
+  const localization = normalizeEquipmentLocalization(
+    { name: fallbackName, lore: fallbackLore },
+    slot,
+    rarity,
+    options?.lang || 'zh-TW'
+  );
   return {
     id: `eq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-    name: rawName ? sanitizeEquipmentName(rawName, slot, rarity) : buildFallbackName(materials, slot, rarity),
+    name: localization.name,
+    names: localization.names,
     slot,
     rarity,
     value,
     stats,
-    lore: rawLore ? sanitizeLore(rawLore, slot) : buildFallbackLore(slot, materials),
+    lore: localization.lore,
+    desc: localization.desc,
+    descs: localization.descs,
     sourceMaterials: materials.map((row) => ({
-      name: normalizeText(row?.name || '未知素材', 80),
-      value: Math.max(1, Math.floor(Number(row?.value || 1))),
-      source: normalizeText(row?.source || 'inventory', 24)
+      ...buildSourceMaterialEntry(row)
     })),
     createdAt: Date.now(),
     generatedBy: 'ai_guided'
@@ -559,19 +626,29 @@ function buildFallbackFusionEquipment(materials = [], options = {}) {
       Number(armorDefenseRange[0] || 1)
     );
   }
+  const localization = normalizeEquipmentLocalization(
+    {
+      name: buildFallbackName(materials, slot, rarity),
+      lore: buildFallbackLore(slot, materials)
+    },
+    slot,
+    rarity,
+    options?.lang || 'zh-TW'
+  );
 
   return {
     id: `eq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-    name: buildFallbackName(materials, slot, rarity),
+    name: localization.name,
+    names: localization.names,
     slot,
     rarity,
     value,
     stats,
-    lore: buildFallbackLore(slot, materials),
+    lore: localization.lore,
+    desc: localization.desc,
+    descs: localization.descs,
     sourceMaterials: materials.map((row) => ({
-      name: normalizeText(row?.name || '未知素材', 80),
-      value: Math.max(1, Math.floor(Number(row?.value || 1))),
-      source: normalizeText(row?.source || 'inventory', 24)
+      ...buildSourceMaterialEntry(row)
     })),
     createdAt: Date.now(),
     generatedBy: 'fallback'
@@ -581,11 +658,7 @@ function buildFallbackFusionEquipment(materials = [], options = {}) {
 async function fuseTreasuresToEquipment(items = [], options = {}) {
   const materials = (Array.isArray(items) ? items : [])
     .slice(0, 3)
-    .map((row) => ({
-      name: normalizeText(row?.name || '未知素材', 80),
-      value: Math.max(1, Math.floor(Number(row?.value || 1))),
-      source: normalizeText(row?.source || 'inventory', 24)
-    }));
+    .map((row) => buildSourceMaterialEntry(row));
   if (materials.length !== 3) {
     throw new Error('equipment fusion requires exactly 3 materials');
   }
@@ -645,9 +718,18 @@ function cloneEquipmentItem(item = null) {
   if (!item || typeof item !== 'object') return null;
   return {
     ...item,
+    names: item.names && typeof item.names === 'object' && !Array.isArray(item.names)
+      ? { ...item.names }
+      : item.names,
+    descs: item.descs && typeof item.descs === 'object' && !Array.isArray(item.descs)
+      ? { ...item.descs }
+      : item.descs,
     stats: item.stats && typeof item.stats === 'object'
       ? { ...item.stats }
-      : { attack: 0, hp: 0, defense: 0, speed: 0 }
+      : { attack: 0, hp: 0, defense: 0, speed: 0 },
+    sourceMaterials: Array.isArray(item.sourceMaterials)
+      ? item.sourceMaterials.map((row) => buildSourceMaterialEntry(row))
+      : []
   };
 }
 
@@ -664,12 +746,18 @@ function normalizeEquipmentItem(item = null) {
       speed: Math.max(0, Math.floor(Number(item.stats.speed || 0)))
     }
     : buildEquipmentStats(slot, Math.max(0, Number(item.primaryStat || 0)));
+  const localization = normalizeEquipmentLocalization(item, slot, rarity, 'zh-TW');
+  const sourceMaterials = Array.isArray(item.sourceMaterials)
+    ? item.sourceMaterials.map((row) => buildSourceMaterialEntry(row)).filter(Boolean).slice(0, 3)
+    : [];
   return {
     ...item,
     slot,
     rarity,
     value: Math.max(0, Math.floor(Number(item.value || 0))),
-    stats
+    stats,
+    ...localization,
+    sourceMaterials
   };
 }
 
@@ -708,7 +796,9 @@ function ensurePlayerEquipmentState(player) {
     player.equipment = buildEmptyEquipmentSlots();
     changed = true;
   }
-  player.equipment = buildNormalizedSlotMap(player.equipment);
+  const normalizedLegacySlots = buildNormalizedSlotMap(player.equipment);
+  if (JSON.stringify(player.equipment) !== JSON.stringify(normalizedLegacySlots)) changed = true;
+  player.equipment = normalizedLegacySlots;
 
   if (!player.petEquipment || typeof player.petEquipment !== 'object' || Array.isArray(player.petEquipment)) {
     player.petEquipment = {};
@@ -742,12 +832,13 @@ function ensurePlayerEquipmentState(player) {
     player.equipmentBag = [];
     changed = true;
   }
+  const bagBefore = JSON.stringify(player.equipmentBag);
   const normalizedBag = [];
   for (const row of player.equipmentBag) {
     const normalized = normalizeEquipmentItem(row);
     if (normalized) normalizedBag.push(normalized);
   }
-  if (normalizedBag.length !== player.equipmentBag.length) changed = true;
+  if (bagBefore !== JSON.stringify(normalizedBag)) changed = true;
   player.equipmentBag = normalizedBag;
   return changed;
 }

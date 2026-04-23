@@ -10,17 +10,525 @@ try {
 } catch {
   // OpenCC is optional. Fallback keeps original text.
 }
+const { sanitizeWorldText } = require('../../../core/style-sanitizer');
 
 const SKILL_CHIP_PREFIX = Object.freeze({
   'zh-TW': '技能晶片：',
   'zh-CN': '技能晶片：',
+  ko: '스킬 칩: ',
   en: 'Skill Chip: '
 });
+
+const ITEM_LOCALIZATION_LANGS = Object.freeze(['zh-TW', 'zh-CN', 'ko', 'en']);
 
 const COMMON_ITEM_TRANSLATIONS = Object.freeze({
   '乾糧一包': { 'zh-TW': '乾糧一包', 'zh-CN': '干粮一包', en: 'Ration Pack' },
   '水囊': { 'zh-TW': '水囊', 'zh-CN': '水囊', en: 'Water Flask' }
 });
+
+const ITEM_NAME_EN_TRANSLATIONS = Object.freeze({
+  '天隕鐵原礦': 'Meteoric Iron Raw Ore',
+  '天隕鐵晶核': 'Meteoric Iron Crystal Core',
+  '天隕鐵殘片': 'Meteoric Iron Shard',
+  '星沙藤花粉': 'Star-Sand Vine Pollen',
+  '星沙銀光盔': 'Star-Sand Silverglow Helm',
+  '星潮磁能戰盔': 'Star-Tide Magnetic Battle Helm',
+  '月影蘭花粉': 'Moonshadow Orchid Pollen',
+  '月影蘭葉': 'Moonshadow Orchid Leaf',
+  '橋上設伏皮毛': 'Bridge Ambush Fur',
+  '燃霜哥布林核心': 'Frostflame Goblin Core',
+  '燃霜輕聲道徽章': 'Frostflame Whisperpath Emblem',
+  '磁能霜焰護甲': 'Magnetized Frostflame Armor',
+  '裂痕林工程師的提醒言猶在耳殘晶': 'Fracturewood Engineer Warning Echo Crystal Shard',
+  '赤霞芝葉': 'Scarlet Reishi Leaf',
+  '銀葬神秘男子碎片': 'Silverburial Mysterious Man Fragment',
+  '霜焰花莖': 'Frostflame Flower Stem',
+  '霜焰蒼銀盔': 'Frostflame Argent Helm',
+  '靈脈銅原礦': 'Leyline Copper Raw Ore',
+  '靈脈銅晶核': 'Leyline Copper Crystal Core',
+  '靈脈銅殘片': 'Leyline Copper Shard',
+  '靈脈銅紋印': 'Leyline Copper Sigil',
+  '鳳鳴金曜冠': 'Phoenixsong Auric Crown',
+  '黑曜月影織甲': 'Obsidian Moonshadow Weave Armor',
+  '黑曜髓晶紋印': 'Obsidian Core Crystal Sigil',
+  '黑曜髓晶護盔': 'Obsidian Core Crystal Helm',
+  '星沙藤葉': 'Star-Sand Vine Leaf',
+  '蒼銀礦原礦': 'Argent Ore Raw Ore',
+  '蒼銀礦晶核': 'Argent Ore Crystal Core',
+  '蒼銀礦殘片': 'Argent Ore Shard',
+  '赤霞芝花粉': 'Scarlet Reishi Pollen',
+  '霜焰花花粉': 'Frostflame Flower Pollen',
+  '霜焰花葉': 'Frostflame Flower Leaf',
+  '鳳鳴金晶核': 'Phoenixsong Gold Crystal Core',
+  '鳳鳴金殘片': 'Phoenixsong Gold Shard',
+  '鳳鳴金紋印': 'Phoenixsong Gold Sigil',
+  '黑曜髓晶原礦': 'Obsidian Core Crystal Raw Ore',
+  '黑曜髓晶晶核': 'Obsidian Core Crystal Core'
+});
+
+const ITEM_DESC_EN_TRANSLATIONS = Object.freeze({
+  '以霜焰花花粉、靈脈銅紋印與赤霞芝花粉融合而成的科技護甲，散發著寒冷與熾熱交織的光芒，能在戰鬥中吸收大地靈氣，提升持有者的生命值。': 'A tech armor fused from Frostflame Flower Pollen, a Leyline Copper Sigil, and Scarlet Reishi Pollen. It radiates intertwined cold and heat, absorbs terrestrial spirit energy in battle, and increases the bearer\'s HP.',
+  '以黑曜髓晶原礦、鳳鳴金晶核與蒼銀礦原礦融合打造的未來頭盔，鑲嵌星潮港磁能核心，賦予使用者強大攻擊力。': 'A futuristic helm forged from Obsidian Core Crystal Raw Ore, a Phoenixsong Gold Crystal Core, and Argent Ore Raw Ore, embedded with a Star-Tide Harbor magnetic core to grant strong attack power.',
+  '來自 哥布林 的史詩戰鬥證物。': 'Epic battle trophy from Goblin.',
+  '來自 林工程師的提醒言猶在耳 的普通戰鬥證物。': 'Common battle trophy from Engineer Lin\'s lingering warning.',
+  '來自 神秘男子 的普通戰鬥證物。': 'Common battle trophy from the Mysterious Man.',
+  '來自 輕聲道 的普通戰鬥證物。': 'Common battle trophy from Whisperpath.',
+  '廣州 採集取得的普通草藥。': 'Common herb gathered in Guangzhou.',
+  '廣州 探索發現的普通寶藏。': 'Common treasure discovered in Guangzhou.',
+  '此冠以鳳鳴金晶核、鳳鳴金殘片、鳳鳴金紋印融合而成，表面刻有熾熱金紋，散發耀眼光芒，據說能召喚鳳凰之魂，大幅提升佩帶者的攻擊力。': 'This crown is fused from a Phoenixsong Gold Crystal Core, Phoenixsong Gold Shard, and Phoenixsong Gold Sigil. Blazing gold patterns are engraved on its surface, and its radiant glow is said to summon the spirit of the phoenix, greatly increasing the wearer\'s attack power.',
+  '此盔以霜焰花葉與蒼銀礦晶核為核心，結合寒霜與熾焰的能量，外觀閃爍銀白光澤，兼具攻擊與防護之效。': 'This helm uses Frostflame Flower Leaf and an Argent Ore Crystal Core as its core, combining frost and blazing-flame energy. Its silver-white sheen offers both attack and protection.',
+  '洛陽城 探索發現的稀有寶藏。': 'Rare treasure discovered in Luoyang City.',
+  '由星沙藤葉與花粉萃取出的星沙精華，結合蒼銀礦殘片打造的金屬光盔，散發星辰與銀光的共振，能大幅提升佩帶者的攻擊力。': 'A metallic light helm forged from Star-Sand essence extracted from vine leaves and pollen, combined with Argent Ore shards. It resonates with starlight and silver light, greatly increasing the wearer\'s attack power.',
+  '由黑曜髓晶晶核、月影蘭葉與赤霞芝葉融合而成的增幅装甲，擁有光與影的交錯防護，可為穿戴者提供強大的生命力。': 'An enhanced armor fused from Obsidian Core Crystal Core, Moonshadow Orchid Leaf, and Scarlet Reishi Leaf. Its interwoven light-and-shadow shielding provides strong vitality to the wearer.',
+  '由黑曜髓晶晶核、月影蘭葉與赤霞芝葉融合而成的增幅裝甲，擁有光與影的交錯防護，可為穿戴者提供強大的生命力。': 'An enhanced armor fused from Obsidian Core Crystal Core, Moonshadow Orchid Leaf, and Scarlet Reishi Leaf. Its interwoven light-and-shadow shielding provides strong vitality to the wearer.',
+  '由黑曜髓晶的核心能源與印記融合而成的防護頭盔，散發著冰冷的科技光芒，提升佩帶者的攻擊力。': 'A protective helm fused from Obsidian Core Crystal energy and sigils. It emits a cold technological glow and increases the wearer\'s attack power.',
+  '草原部落 採集取得的普通草藥。': 'Common herb gathered in the Grassland Tribe.',
+  '草原部落 探索發現的普通寶藏。': 'Common treasure discovered in the Grassland Tribe.',
+  '襄陽城 探索發現的稀有寶藏。': 'Rare treasure discovered in Xiangyang City.',
+  '雲棧茶嶺 探索發現的史詩寶藏。': 'Epic treasure discovered in Cloudridge Tea Range.',
+  '雲棧茶嶺 探索發現的普通寶藏。': 'Common treasure discovered in Cloudridge Tea Range.',
+  '雲棧茶嶺 狩獵取得的普通獵物。': 'Common prey hunted in Cloudridge Tea Range.'
+});
+
+const ITEM_NAME_KO_TRANSLATIONS = Object.freeze({
+  '天隕鐵原礦': '운석철 원광',
+  '天隕鐵晶核': '운석철 결정핵',
+  '天隕鐵殘片': '운석철 파편',
+  '星沙藤花粉': '성사등 화분',
+  '星沙銀光盔': '성사 은광 투구',
+  '星潮磁能戰盔': '성조 자기 전투 투구',
+  '月影蘭花粉': '월영란 화분',
+  '月影蘭葉': '월영란 잎',
+  '橋上設伏皮毛': '다리 매복 모피',
+  '燃霜哥布林核心': '서리화염 고블린 핵심',
+  '燃霜輕聲道徽章': '서리화염 위스퍼패스 휘장',
+  '磁能霜焰護甲': '자기화 서리화염 갑옷',
+  '裂痕林工程師的提醒言猶在耳殘晶': '균열숲 엔지니어 경고 메아리 결정 파편',
+  '赤霞芝葉': '적노을 영지 잎',
+  '銀葬神秘男子碎片': '은장 신비한 남자 조각',
+  '霜焰花莖': '서리화염 꽃줄기',
+  '霜焰蒼銀盔': '서리화염 창은 투구',
+  '靈脈銅原礦': '지맥 구리 원광',
+  '靈脈銅晶核': '지맥 구리 결정핵',
+  '靈脈銅殘片': '지맥 구리 파편',
+  '靈脈銅紋印': '지맥 구리 인장',
+  '鳳鳴金曜冠': '봉명 금요관',
+  '黑曜月影織甲': '흑요 월영 직조 갑옷',
+  '黑曜髓晶紋印': '흑요 수결정 인장',
+  '黑曜髓晶護盔': '흑요 수결정 방호 투구',
+  '星沙藤葉': '성사등 잎',
+  '蒼銀礦原礦': '창은광 원광',
+  '蒼銀礦晶核': '창은광 결정핵',
+  '蒼銀礦殘片': '창은광 파편',
+  '赤霞芝花粉': '적노을 영지 화분',
+  '霜焰花花粉': '서리화염 꽃 화분',
+  '霜焰花葉': '서리화염 꽃잎',
+  '鳳鳴金晶核': '봉명 금 결정핵',
+  '鳳鳴金殘片': '봉명 금 파편',
+  '鳳鳴金紋印': '봉명 금 인장',
+  '黑曜髓晶原礦': '흑요 수결정 원광',
+  '黑曜髓晶晶核': '흑요 수결정 핵'
+});
+
+const ITEM_DESC_KO_TRANSLATIONS = Object.freeze({
+  '以霜焰花花粉、靈脈銅紋印與赤霞芝花粉融合而成的科技護甲，散發著寒冷與熾熱交織的光芒，能在戰鬥中吸收大地靈氣，提升持有者的生命值。': '서리화염 꽃 화분, 지맥 구리 인장, 적노을 영지 화분을 융합한 기술 갑옷입니다. 냉기와 열기가 교차하는 빛을 내며 전투 중 대지의 기운을 흡수해 착용자의 HP를 높입니다.',
+  '以黑曜髓晶原礦、鳳鳴金晶核與蒼銀礦原礦融合打造的未來頭盔，鑲嵌星潮港磁能核心，賦予使用者強大攻擊力。': '흑요 수결정 원광, 봉명 금 결정핵, 창은광 원광을 융합해 만든 미래형 투구입니다. 성조항 자기 핵이 박혀 있어 강한 공격력을 제공합니다.',
+  '來自 哥布林 的史詩戰鬥證物。': '고블린에게서 획득한 에픽 전투 증표입니다.',
+  '來自 林工程師的提醒言猶在耳 的普通戰鬥證物。': '엔지니어 린의 경고 메아리에서 획득한 일반 전투 증표입니다.',
+  '來自 神秘男子 的普通戰鬥證物。': '신비한 남자에게서 획득한 일반 전투 증표입니다.',
+  '來自 輕聲道 的普通戰鬥證物。': '위스퍼패스에게서 획득한 일반 전투 증표입니다.',
+  '廣州 採集取得的普通草藥。': '광저우에서 채집한 일반 약초입니다.',
+  '廣州 探索發現的普通寶藏。': '광저우 탐험에서 발견한 일반 보물입니다.',
+  '此冠以鳳鳴金晶核、鳳鳴金殘片、鳳鳴金紋印融合而成，表面刻有熾熱金紋，散發耀眼光芒，據說能召喚鳳凰之魂，大幅提升佩帶者的攻擊力。': '이 관은 봉명 금 결정핵, 봉명 금 파편, 봉명 금 인장을 융합해 만들었습니다. 표면의 뜨거운 금빛 문양과 눈부신 광휘는 불사조의 혼을 부른다고 전해지며 착용자의 공격력을 크게 높입니다.',
+  '此盔以霜焰花葉與蒼銀礦晶核為核心，結合寒霜與熾焰的能量，外觀閃爍銀白光澤，兼具攻擊與防護之效。': '이 투구는 서리화염 꽃잎과 창은광 결정핵을 핵심으로, 냉기와 화염의 에너지를 결합했습니다. 은백색 광택을 띠며 공격과 방어를 모두 강화합니다.',
+  '洛陽城 探索發現的稀有寶藏。': '낙양성 탐험에서 발견한 희귀 보물입니다.',
+  '由星沙藤葉與花粉萃取出的星沙精華，結合蒼銀礦殘片打造的金屬光盔，散發星辰與銀光的共振，能大幅提升佩帶者的攻擊力。': '성사등 잎과 화분에서 추출한 정수와 창은광 파편을 결합해 만든 금속 투구입니다. 별빛과 은빛 공명을 일으켜 착용자의 공격력을 크게 높입니다.',
+  '由黑曜髓晶晶核、月影蘭葉與赤霞芝葉融合而成的增幅装甲，擁有光與影的交錯防護，可為穿戴者提供強大的生命力。': '흑요 수결정 핵, 월영란 잎, 적노을 영지 잎을 융합한 증폭 장갑입니다. 빛과 그림자가 교차하는 방호로 착용자에게 강한 생명력을 제공합니다.',
+  '由黑曜髓晶晶核、月影蘭葉與赤霞芝葉融合而成的增幅裝甲，擁有光與影的交錯防護，可為穿戴者提供強大的生命力。': '흑요 수결정 핵, 월영란 잎, 적노을 영지 잎을 융합한 증폭 장갑입니다. 빛과 그림자가 교차하는 방호로 착용자에게 강한 생명력을 제공합니다.',
+  '由黑曜髓晶的核心能源與印記融合而成的防護頭盔，散發著冰冷的科技光芒，提升佩帶者的攻擊力。': '흑요 수결정의 핵심 에너지와 인장을 융합한 방호 투구입니다. 차가운 기술 광채를 내며 착용자의 공격력을 높입니다.',
+  '草原部落 採集取得的普通草藥。': '초원 부족에서 채집한 일반 약초입니다.',
+  '草原部落 探索發現的普通寶藏。': '초원 부족 탐험에서 발견한 일반 보물입니다.',
+  '襄陽城 探索發現的稀有寶藏。': '양양성 탐험에서 발견한 희귀 보물입니다.',
+  '雲棧茶嶺 探索發現的史詩寶藏。': '운잔 차령 탐험에서 발견한 에픽 보물입니다.',
+  '雲棧茶嶺 探索發現的普通寶藏。': '운잔 차령 탐험에서 발견한 일반 보물입니다.',
+  '雲棧茶嶺 狩獵取得的普通獵物。': '운잔 차령 사냥에서 획득한 일반 사냥감입니다.'
+});
+
+const ITEM_RARITY_EN_TRANSLATIONS = Object.freeze({
+  '普通': 'Common',
+  '稀有': 'Rare',
+  '史詩': 'Epic',
+  '傳說': 'Legendary'
+});
+
+const ITEM_LOCATION_EN_TRANSLATIONS = Object.freeze({
+  '廣州': 'Guangzhou',
+  '草原部落': 'Grassland Tribe',
+  '襄陽城': 'Xiangyang City',
+  '洛陽城': 'Luoyang City',
+  '雲棧茶嶺': 'Cloudridge Tea Range'
+});
+
+const ITEM_SOURCE_EN_TRANSLATIONS = Object.freeze({
+  '哥布林': 'Goblin',
+  '神秘男子': 'Mysterious Man',
+  '輕聲道': 'Whisperpath',
+  '林工程師的提醒言猶在耳': 'Engineer Lin lingering warning'
+});
+
+const ITEM_TOKEN_EN_TRANSLATIONS = Object.freeze([
+  ['黑曜髓晶', 'Obsidian Core Crystal'],
+  ['鳳鳴金', 'Phoenixsong Gold'],
+  ['蒼銀礦', 'Argent Ore'],
+  ['靈脈銅', 'Leyline Copper'],
+  ['天隕鐵', 'Meteoric Iron'],
+  ['星沙藤', 'Star-Sand Vine'],
+  ['月影蘭', 'Moonshadow Orchid'],
+  ['霜焰花', 'Frostflame Flower'],
+  ['赤霞芝', 'Scarlet Reishi'],
+  ['銀葬', 'Silverburial'],
+  ['輕聲道', 'Whisperpath'],
+  ['裂痕林', 'Fracturewood'],
+  ['工程師', 'Engineer'],
+  ['提醒言猶在耳', 'Warning Echo'],
+  ['晶核', 'Crystal Core'],
+  ['原礦', 'Raw Ore'],
+  ['殘片', 'Shard'],
+  ['紋印', 'Sigil'],
+  ['徽章', 'Emblem'],
+  ['護甲', 'Armor'],
+  ['護盔', 'Helm'],
+  ['戰盔', 'Battle Helm'],
+  ['銀光盔', 'Silverglow Helm'],
+  ['蒼銀盔', 'Argent Helm'],
+  ['織甲', 'Weave Armor'],
+  ['花粉', 'Pollen'],
+  ['花葉', 'Leaf'],
+  ['花莖', 'Stem'],
+  ['葉', 'Leaf'],
+  ['皮毛', 'Fur'],
+  ['碎片', 'Fragment'],
+  ['核心', 'Core'],
+  ['冠', 'Crown']
+]);
+
+const KO_EXACT_TRANSLATIONS = Object.freeze({
+  'Untranslated Item': '미번역 아이템',
+  'Untranslated Description': '미번역 설명',
+  'Unknown': '알 수 없음',
+  'Unknown Element': '알 수 없는 속성',
+  'Rns': 'Rns',
+  'Bag': '가방',
+  'Collectible': '수집품',
+  'Gear': '장비',
+  'Est.': '예상',
+  'Total': '합계',
+  'Hit': '타격'
+});
+
+const KO_EN_TOKEN_TRANSLATIONS = Object.freeze([
+  ['Welcome back', '다시 오신 것을 환영합니다'],
+  ['Welcome to', '환영합니다'],
+  ['Settings', '설정'],
+  ['Back', '뒤로'],
+  ['Continue', '계속'],
+  ['Character', '캐릭터'],
+  ['Adventure', '모험'],
+  ['Combat', '전투'],
+  ['Victory', '승리'],
+  ['Defeat', '패배'],
+  ['Language', '언어'],
+  ['Wallet', '지갑'],
+  ['Bind Wallet', '지갑 연결'],
+  ['Sync Assets', '자산 동기화'],
+  ['World', '월드'],
+  ['Profile', '프로필'],
+  ['Inventory', '인벤토리'],
+  ['Collectibles', '수집품'],
+  ['Equipment', '장비'],
+  ['Pet', '펫'],
+  ['Pets', '펫'],
+  ['Skill Chip', '스킬 칩'],
+  ['Move', '기술'],
+  ['Moves', '기술'],
+  ['Not equipped', '장착 안 됨'],
+  ['Flee', '도주'],
+  ['Page', '페이지'],
+  ['Current', '현재'],
+  ['Locked', '잠김'],
+  ['Unlocked', '해제됨'],
+  ['Ready', '준비됨'],
+  ['Appraisal', '감정'],
+  ['Memory Audit', '기억 점검'],
+  ['System', '시스템'],
+  ['Portal', '포털'],
+  ['Teleport', '전송'],
+  ['Map', '지도'],
+  ['Story', '스토리'],
+  ['Battle', '전투'],
+  ['Damage', '피해'],
+  ['Speed', '속도'],
+  ['Element', '속성'],
+  ['HP', 'HP'],
+  ['ATK', '공격력'],
+  ['DEF', '방어력'],
+  ['High Risk', '고위험'],
+  ['Costs Money', '비용 필요'],
+  ['Social', '소셜'],
+  ['Explore', '탐험'],
+  ['Combat Tension', '전투 긴장'],
+  ['High Reward', '고보상'],
+  ['Uncertain', '불확실'],
+  ['Friendly Appraisal', '우호 감정'],
+  ['Mystery Appraisal', '신비 감정'],
+  ['Learn Rule', '학습 규칙'],
+  ['Sell Rule', '판매 규칙'],
+  ['Skill Chips Obtained', '획득한 스킬 칩'],
+  ['Starter Gift', '스타터 선물'],
+  ['No sellable items right now', '현재 판매 가능한 아이템이 없습니다'],
+  ['No sellable items', '판매 가능한 아이템 없음'],
+  ['treasure discovered in', '보물 발견:'],
+  ['battle trophy from', '전투 전리품 출처:'],
+  ['Common herb gathered in', '일반 약초 채집 지역:'],
+  ['Common prey hunted in', '일반 사냥감 획득 지역:'],
+  ['An enhanced armor fused from', '다음을 융합한 증폭 갑옷:'],
+  ['A futuristic helm forged from', '다음을 융합한 미래형 투구:'],
+  ['This crown is fused from', '이 왕관은 다음 재료를 융합해 제작됨:'],
+  ['A tech armor fused from', '다음을 융합한 기술 갑옷:'],
+  ['A metallic light helm forged from', '다음을 융합한 금속 광투구:'],
+  ['A protective helm fused from', '다음을 융합한 방호 투구:'],
+  ['wearer', '착용자'],
+  ['attack power', '공격력'],
+  ['health', '체력'],
+  ['vitality', '생명력'],
+  ['crystal', '결정'],
+  ['core', '핵심'],
+  ['shard', '파편'],
+  ['ore', '광석'],
+  ['armor', '갑옷'],
+  ['helm', '투구'],
+  ['crown', '왕관'],
+  ['pollen', '화분'],
+  ['leaf', '잎'],
+  ['sigil', '인장'],
+  ['Obsidian', '흑요'],
+  ['Moonshadow', '월영'],
+  ['Meteoric Iron', '운석철'],
+  ['Phoenixsong', '봉명'],
+  ['Leyline Copper', '지맥 구리'],
+  ['Frostflame', '서리화염'],
+  ['Whisperpath', '위스퍼패스'],
+  ['Fracturewood', '균열숲'],
+  ['Xiangyang City', '양양성'],
+  ['Luoyang City', '낙양성'],
+  ['Guangzhou', '광저우'],
+  ['Cloudridge Tea Range', '운잔 차령'],
+  ['Grassland Tribe', '초원 부족'],
+  ['Legendary', '전설'],
+  ['Epic', '에픽'],
+  ['Rare', '레어'],
+  ['Common', '일반']
+]);
+
+const KO_ZH_TOKEN_TRANSLATIONS = Object.freeze([
+  ['語言', '언어'],
+  ['语言', '언어'],
+  ['設定', '설정'],
+  ['设置', '설정'],
+  ['返回', '뒤로'],
+  ['錢包', '지갑'],
+  ['钱包', '지갑'],
+  ['綁定', '연결'],
+  ['绑定', '연결'],
+  ['同步', '동기화'],
+  ['資產', '자산'],
+  ['资产', '자산'],
+  ['世界', '세계'],
+  ['冒險', '모험'],
+  ['冒险', '모험'],
+  ['戰鬥', '전투'],
+  ['战斗', '전투'],
+  ['勝利', '승리'],
+  ['胜利', '승리'],
+  ['失敗', '실패'],
+  ['失败', '실패'],
+  ['速度', '속도'],
+  ['屬性', '속성'],
+  ['属性', '속성'],
+  ['寵物', '펫'],
+  ['宠物', '펫'],
+  ['技能', '기술'],
+  ['晶片', '칩'],
+  ['芯片', '칩'],
+  ['裝備', '장비'],
+  ['装备', '장비'],
+  ['收藏品', '수집품'],
+  ['藏品', '수집품'],
+  ['地圖', '지도'],
+  ['地图', '지도'],
+  ['傳送門', '포털'],
+  ['传送门', '포털'],
+  ['傳送裝置', '전송 장치'],
+  ['传送装置', '전송 장치'],
+  ['主線', '메인 스토리'],
+  ['主线', '메인 스토리']
+]);
+
+const MOVE_WORD_TO_KO = Object.freeze([
+  ['Pulse', '맥동'],
+  ['Calibration', '보정'],
+  ['Alloy', '합금'],
+  ['Ram', '강타'],
+  ['Prism', '프리즘'],
+  ['Sheath', '장막'],
+  ['Fiber', '섬유'],
+  ['Bind', '결박'],
+  ['Biorepair', '바이오 수복'],
+  ['Root', '뿌리'],
+  ['Net', '그물'],
+  ['Interference', '교란'],
+  ['Purge', '정화'],
+  ['Wave', '파동'],
+  ['Pressure', '압력'],
+  ['Mist', '안개'],
+  ['Phase', '위상'],
+  ['Crystal', '수정'],
+  ['Storm', '폭풍'],
+  ['Bastion', '요새'],
+  ['Field', '장'],
+  ['Spore', '포자'],
+  ['Blade', '칼날'],
+  ['Rain', '비'],
+  ['Cryo', '극저온'],
+  ['Impact', '충격'],
+  ['Plasma', '플라즈마'],
+  ['Bloom', '개화'],
+  ['Thermal', '열'],
+  ['Shield', '보호막'],
+  ['Circuit', '회로'],
+  ['Regeneration', '재생'],
+  ['Matrix', '매트릭스'],
+  ['Meteor', '유성'],
+  ['Drop', '낙하'],
+  ['Drifting', '표류'],
+  ['Quicksand', '유사'],
+  ['Tidal', '조류'],
+  ['Frost', '서리'],
+  ['Lance', '창'],
+  ['Steam', '증기'],
+  ['Veil', '장막'],
+  ['Wildfire', '들불'],
+  ['Chain', '연쇄'],
+  ['Cinder', '잿불'],
+  ['Haze', '안개'],
+  ['Flare', '섬광'],
+  ['Snare', '올가미'],
+  ['Thorn', '가시'],
+  ['Forest', '숲'],
+  ['Mend', '치유'],
+  ['Vine', '덩굴'],
+  ['Riptide', '역조'],
+  ['Cut', '절단'],
+  ['Bubble', '거품'],
+  ['Guard', '방호'],
+  ['Echo', '메아리'],
+  ['Spring', '샘'],
+  ['Foam', '거품'],
+  ['Dart', '다트'],
+  ['Stream', '흐름'],
+  ['Mirror', '거울'],
+  ['Abyssal', '심연'],
+  ['Crush', '분쇄'],
+  ['Clarity', '명료'],
+  ['Current', '해류'],
+  ['Lock', '잠금'],
+  ['Ember', '불씨'],
+  ['Ash', '재'],
+  ['Jab', '찌르기'],
+  ['Magma', '마그마'],
+  ['Bite', '물어뜯기'],
+  ['Sunforge', '태양 단련'],
+  ['Spark', '불꽃'],
+  ['Claw', '발톱'],
+  ['Char', '그을음'],
+  ['Lava', '용암'],
+  ['Rush', '돌진'],
+  ['Firebrand', '화염인장'],
+  ['Strike', '강타'],
+  ['Volcanic', '화산'],
+  ['Surge', '격류'],
+  ['Smoke', '연막'],
+  ['Firewall', '화염 장벽'],
+  ['Burning', '작열'],
+  ['Edge', '칼날'],
+  ['Seed', '씨앗'],
+  ['Volley', '난사'],
+  ['Leafstep', '잎걸음'],
+  ['Leaf', '잎'],
+  ['Barkskin', '수피 갑옷'],
+  ['Bark', '수피'],
+  ['Morning Dew', '아침 이슬'],
+  ['Whip', '채찍'],
+  ['Bud', '새싹'],
+  ['Sap', '수액'],
+  ['Petal', '꽃잎'],
+  ['Dance', '춤'],
+  ['Pollen', '꽃가루'],
+  ['Shock', '충격'],
+  ['Spike', '가시창'],
+  ['Nature', '자연'],
+  ['Cycle', '순환'],
+  ['Ancient', '고대'],
+  ['Canopy', '수관'],
+  ['Singularity', '특이점'],
+  ['Solar', '태양'],
+  ['Fission', '분열'],
+  ['Leyline', '지맥'],
+  ['Crash', '충돌'],
+  ['Fusion', '융합'],
+  ['Thunderbolt', '천둥'],
+  ['Overload', '과부하'],
+  ['Maelstrom', '소용돌이'],
+  ['Prison', '감옥'],
+  ['Ocean', '바다'],
+  ['Renewal', '재생'],
+  ['Inferno', '지옥불'],
+  ['Drive', '돌진'],
+  ['Phoenix', '불사조'],
+  ['Guardwheel', '방호륜'],
+  ['Blooming', '만개'],
+  ['Overgrowth', '과성장'],
+  ['Shadow', '그림자'],
+  ['Slash', '베기'],
+  ['Glitch', '오류'],
+  ['Fear', '공포'],
+  ['Web', '거미줄'],
+  ['Toxic', '맹독'],
+  ['Static', '정전기'],
+  ['Hex', '저주'],
+  ['Core', '핵심'],
+  ['Drain', '흡수'],
+  ['Neural', '신경'],
+  ['Corrosion', '부식'],
+  ['Melting', '용해'],
+  ['Acidflow', '산류'],
+  ['Scorchsand', '작열모래'],
+  ['Plague', '역병'],
+  ['Iron', '철'],
+  ['Infernal', '지옥'],
+  ['Protocol', '프로토콜'],
+  ['Detonation', '폭발'],
+  ['Spectral', '유령'],
+  ['Silver', '은'],
+  ['Array', '진형'],
+  ['Cryotoxin', '빙독'],
+  ['Mudflame', '진흙화염'],
+  ['Null', '무효'],
+  ['Boundary', '경계'],
+  ['Collapse', '붕괴'],
+  ['Headbutt', '박치기'],
+  ['Flee', '도주']
+]);
 
 const CHOICE_TAGS = Object.freeze({
   high_risk: {
@@ -400,8 +908,429 @@ const MOVE_LOCALIZATION = Object.freeze([
   ['flee', '逃跑', 'Flee']
 ]);
 
-const MOVE_EN_BY_ID = new Map(MOVE_LOCALIZATION.map(([id, zh, en]) => [String(id), { zh, en }]));
-const MOVE_EN_BY_ZH = new Map(MOVE_LOCALIZATION.map(([id, zh, en]) => [String(zh), { id, en }]));
+function normalizeMoveNameLookupKey(name = '') {
+  return String(name || '')
+    .replace(/\u3000/g, ' ')
+    .replace(/[「」『』"'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function collectMoveNameVariants(moveName = '') {
+  const seed = String(moveName || '').trim();
+  if (!seed) return [];
+  const out = [];
+  const seen = new Set();
+  function addVariant(value = '') {
+    const safe = String(value || '').trim();
+    if (!safe || seen.has(safe)) return;
+    seen.add(safe);
+    out.push(safe);
+  }
+  const directVariants = [
+    seed,
+    convertCNToTW(seed),
+    localizeScriptOnly(seed, 'zh-TW'),
+    localizeScriptOnly(seed, 'zh-CN')
+  ];
+  for (const value of directVariants) addVariant(value);
+  const sanitized = String(sanitizeWorldText(seed) || '').trim();
+  if (sanitized && sanitized !== seed) {
+    const sanitizedVariants = [
+      sanitized,
+      convertCNToTW(sanitized),
+      localizeScriptOnly(sanitized, 'zh-TW'),
+      localizeScriptOnly(sanitized, 'zh-CN')
+    ];
+    for (const value of sanitizedVariants) addVariant(value);
+  }
+  return out;
+}
+
+const MOVE_META_BY_ID = new Map(MOVE_LOCALIZATION.map(([id, zh, en]) => [String(id), {
+  id: String(id),
+  zh: String(zh),
+  en: String(en),
+  ko: translateMoveNameToKo(String(en))
+}]));
+const MOVE_ID_BY_ZH_KEY = new Map();
+for (const [id, zh] of MOVE_LOCALIZATION) {
+  const raw = String(zh || '').trim();
+  const variants = [
+    raw,
+    localizeScriptOnly(raw, 'zh-TW'),
+    localizeScriptOnly(raw, 'zh-CN'),
+    convertCNToTW(raw),
+    convertTWToCN(raw)
+  ];
+  for (const variant of variants) {
+    const key = normalizeMoveNameLookupKey(variant);
+    if (!key || MOVE_ID_BY_ZH_KEY.has(key)) continue;
+    MOVE_ID_BY_ZH_KEY.set(key, String(id));
+  }
+}
+function resolveMoveMeta(moveId = '', moveName = '') {
+  const safeMoveId = String(moveId || '').trim();
+  if (safeMoveId && MOVE_META_BY_ID.has(safeMoveId)) {
+    return MOVE_META_BY_ID.get(safeMoveId);
+  }
+  const name = String(moveName || '').trim();
+  if (!name) return null;
+  const variants = collectMoveNameVariants(name);
+  for (const variant of variants) {
+    const key = normalizeMoveNameLookupKey(variant);
+    if (!key) continue;
+    const resolvedId = MOVE_ID_BY_ZH_KEY.get(key);
+    if (resolvedId && MOVE_META_BY_ID.has(resolvedId)) {
+      return MOVE_META_BY_ID.get(resolvedId);
+    }
+  }
+  return null;
+}
+
+function normalizeTextValue(value = '') {
+  return String(value || '').trim();
+}
+
+function containsCJKText(value = '') {
+  return /[\u3400-\u9fff]/u.test(String(value || ''));
+}
+
+function containsKoreanText(value = '') {
+  return /[\uac00-\ud7a3]/u.test(String(value || ''));
+}
+
+function cleanEnglishText(text = '') {
+  return String(text || '')
+    .replace(/[，。！？；：、]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanKoreanText(text = '') {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function applyItemTokenEnglishTranslation(text = '') {
+  let out = String(text || '');
+  for (const [zhToken, enToken] of ITEM_TOKEN_EN_TRANSLATIONS) {
+    if (!zhToken || !enToken) continue;
+    out = out.split(zhToken).join(` ${enToken} `);
+  }
+  return cleanEnglishText(out);
+}
+
+function lookupExactTranslation(translationMap = {}, text = '') {
+  if (!translationMap || typeof translationMap !== 'object') return '';
+  const source = normalizeTextValue(text);
+  if (!source) return '';
+  const variants = [
+    source,
+    localizeScriptOnly(source, 'zh-TW'),
+    localizeScriptOnly(source, 'zh-CN'),
+    convertCNToTW(source),
+    convertTWToCN(source)
+  ];
+  for (const variant of variants) {
+    const key = normalizeTextValue(variant);
+    if (!key) continue;
+    const hit = normalizeTextValue(translationMap[key] || '');
+    if (hit) return hit;
+  }
+  return '';
+}
+
+function applyTokenReplacement(text = '', tokenRows = []) {
+  let out = String(text || '');
+  for (const [source, target] of tokenRows) {
+    if (!source || !target) continue;
+    out = out.split(source).join(target);
+  }
+  return out;
+}
+
+function translateEnglishToKo(text = '') {
+  const source = normalizeTextValue(text);
+  if (!source) return '';
+  if (containsKoreanText(source)) return source;
+  const exact = normalizeTextValue(KO_EXACT_TRANSLATIONS[source] || '');
+  if (exact) return exact;
+  const replaced = applyTokenReplacement(source, KO_EN_TOKEN_TRANSLATIONS);
+  return cleanKoreanText(replaced);
+}
+
+function translateChineseToKo(text = '') {
+  const source = normalizeTextValue(text);
+  if (!source) return '';
+  if (containsKoreanText(source)) return source;
+  const replaced = applyTokenReplacement(source, KO_ZH_TOKEN_TRANSLATIONS);
+  return cleanKoreanText(replaced);
+}
+
+function translateMoveNameToKo(englishName = '') {
+  const source = normalizeTextValue(englishName);
+  if (!source) return '';
+  if (containsKoreanText(source)) return source;
+  let out = source;
+  for (const [token, ko] of MOVE_WORD_TO_KO) {
+    if (!token || !ko) continue;
+    const pattern = new RegExp(`\\b${token.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`, 'gi');
+    out = out.replace(pattern, ko);
+  }
+  out = out.replace(/\s{2,}/g, ' ').trim();
+  return out;
+}
+
+function translateTextToKo(text = '') {
+  const source = normalizeTextValue(text);
+  if (!source) return '';
+  if (containsKoreanText(source)) return source;
+  const byItemNameKo = translateItemNameToKo(source);
+  if (byItemNameKo) return byItemNameKo;
+  const byItemDescKo = translateItemDescToKo(source);
+  if (byItemDescKo) return byItemDescKo;
+  if (!containsCJKText(source)) {
+    const en = translateEnglishToKo(source);
+    return en || source;
+  }
+  const zh = translateChineseToKo(source);
+  if (zh && zh !== source) return zh;
+  return source;
+}
+
+function localizeObjectToKorean(value = null) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return translateTextToKo(value);
+  if (typeof value === 'function') {
+    return (...args) => translateTextToKo(String(value(...args) || ''));
+  }
+  if (Array.isArray(value)) return value.map((item) => localizeObjectToKorean(item));
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [key, row] of Object.entries(value)) {
+      out[key] = localizeObjectToKorean(row);
+    }
+    return out;
+  }
+  return value;
+}
+
+function translateItemNameToEn(name = '') {
+  const source = normalizeTextValue(name);
+  if (!source) return '';
+  if (!containsCJKText(source)) return source;
+  const exact = lookupExactTranslation(ITEM_NAME_EN_TRANSLATIONS, source);
+  if (exact) return exact;
+  const tokenized = applyItemTokenEnglishTranslation(source);
+  if (tokenized && !containsCJKText(tokenized)) return tokenized;
+  return '';
+}
+
+function translateItemNameToKo(name = '') {
+  const source = normalizeTextValue(name);
+  if (!source) return '';
+  if (containsKoreanText(source)) return source;
+  const exact = lookupExactTranslation(ITEM_NAME_KO_TRANSLATIONS, source);
+  if (exact) return exact;
+  const enBase = translateItemNameToEn(source);
+  if (enBase) {
+    const koByEn = translateEnglishToKo(enBase);
+    if (koByEn && koByEn !== enBase) return koByEn;
+  }
+  const zhBase = translateChineseToKo(source);
+  if (zhBase && zhBase !== source) return zhBase;
+  return '';
+}
+
+function translateLocationToEn(location = '') {
+  const source = normalizeTextValue(location);
+  if (!source) return '';
+  const exact = normalizeTextValue(ITEM_LOCATION_EN_TRANSLATIONS[source] || '');
+  if (exact) return exact;
+  return translateItemNameToEn(source);
+}
+
+function translateRarityToEn(rarity = '') {
+  const source = normalizeTextValue(rarity);
+  if (!source) return '';
+  return normalizeTextValue(ITEM_RARITY_EN_TRANSLATIONS[source] || source);
+}
+
+function translateSourceToEn(sourceName = '') {
+  const source = normalizeTextValue(sourceName);
+  if (!source) return '';
+  const exact = normalizeTextValue(ITEM_SOURCE_EN_TRANSLATIONS[source] || '');
+  if (exact) return exact;
+  const byName = translateItemNameToEn(source);
+  return byName || source;
+}
+
+function translateItemDescToEn(desc = '') {
+  const source = normalizeTextValue(desc);
+  if (!source) return '';
+  if (!containsCJKText(source)) return source;
+
+  const exact = lookupExactTranslation(ITEM_DESC_EN_TRANSLATIONS, source);
+  if (exact) return exact;
+
+  const treasure = source.match(/^(.+?)\s+探索發現的(普通|稀有|史詩)寶藏。$/u);
+  if (treasure) {
+    const location = translateLocationToEn(treasure[1]) || normalizeTextValue(treasure[1]);
+    const rarity = translateRarityToEn(treasure[2]) || normalizeTextValue(treasure[2]);
+    return `${rarity} treasure discovered in ${location}.`;
+  }
+
+  const herb = source.match(/^(.+?)\s+採集取得的普通草藥。$/u);
+  if (herb) {
+    const location = translateLocationToEn(herb[1]) || normalizeTextValue(herb[1]);
+    return `Common herb gathered in ${location}.`;
+  }
+
+  const prey = source.match(/^(.+?)\s+狩獵取得的普通獵物。$/u);
+  if (prey) {
+    const location = translateLocationToEn(prey[1]) || normalizeTextValue(prey[1]);
+    return `Common prey hunted in ${location}.`;
+  }
+
+  const trophy = source.match(/^來自\s+(.+?)\s+的(普通|稀有|史詩)戰鬥證物。$/u);
+  if (trophy) {
+    const enemy = translateSourceToEn(trophy[1]) || normalizeTextValue(trophy[1]);
+    const rarity = translateRarityToEn(trophy[2]) || normalizeTextValue(trophy[2]);
+    return `${rarity} battle trophy from ${enemy}.`;
+  }
+
+  const tokenized = applyItemTokenEnglishTranslation(source);
+  if (tokenized && !containsCJKText(tokenized)) return tokenized;
+  return '';
+}
+
+function translateItemDescToKo(desc = '') {
+  const source = normalizeTextValue(desc);
+  if (!source) return '';
+  if (containsKoreanText(source)) return source;
+
+  const exact = lookupExactTranslation(ITEM_DESC_KO_TRANSLATIONS, source);
+  if (exact) return exact;
+
+  const enBase = translateItemDescToEn(source);
+  if (enBase && enBase !== 'Untranslated Description') {
+    const koByEn = translateEnglishToKo(enBase);
+    if (koByEn && koByEn !== enBase) return koByEn;
+  }
+
+  const zhBase = translateChineseToKo(source);
+  if (zhBase && zhBase !== source) return zhBase;
+  return '';
+}
+
+function pickFirstText(...values) {
+  for (const value of values) {
+    const text = normalizeTextValue(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function resolveEnglishValue(zhTw = '', sourceMap = {}, fallbackMap = {}, options = {}) {
+  const base = normalizeTextValue(zhTw);
+  const explicit = pickFirstText(sourceMap.en, fallbackMap.en, options?.fallbackEn);
+  const translator = typeof options?.translateEn === 'function' ? options.translateEn : null;
+  const fallbackLabel = normalizeTextValue(options?.enFallback || 'Untranslated Item');
+
+  if (explicit && !containsCJKText(explicit) && explicit !== base) return explicit;
+
+  if (translator) {
+    const generated = normalizeTextValue(translator(base));
+    if (generated && !containsCJKText(generated)) return generated;
+  }
+
+  if (explicit && !containsCJKText(explicit)) return explicit;
+  if (!containsCJKText(base)) return base;
+  return fallbackLabel || 'Untranslated Item';
+}
+
+function resolveKoreanValue(zhTw = '', sourceMap = {}, fallbackMap = {}, options = {}) {
+  const base = normalizeTextValue(zhTw);
+  const explicit = pickFirstText(sourceMap.ko, fallbackMap.ko, options?.fallbackKo);
+  const translator = typeof options?.translateKo === 'function' ? options.translateKo : translateTextToKo;
+  const fallbackLabel = normalizeTextValue(options?.koFallback || '미번역');
+
+  if (explicit && containsKoreanText(explicit) && explicit !== base) return explicit;
+
+  if (typeof translator === 'function') {
+    const generated = normalizeTextValue(translator(base));
+    if (generated && containsKoreanText(generated)) return generated;
+  }
+
+  if (explicit && !containsCJKText(explicit)) return translateEnglishToKo(explicit) || explicit;
+  if (!containsCJKText(base)) return translateEnglishToKo(base) || base;
+  return fallbackLabel || '미번역';
+}
+
+function collectLocalizedLangKeys(...maps) {
+  const keys = [...ITEM_LOCALIZATION_LANGS];
+  const seen = new Set(keys);
+  for (const map of maps) {
+    if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+    for (const key of Object.keys(map)) {
+      const safe = normalizeTextValue(key);
+      if (!safe || seen.has(safe)) continue;
+      seen.add(safe);
+      keys.push(safe);
+    }
+  }
+  return keys;
+}
+
+function normalizeLocalizedTextMap(source = {}, fallback = {}, options = {}) {
+  const sourceMap = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+  const fallbackMap = fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {};
+  const fallbackText = normalizeTextValue(options?.fallbackText || '');
+  const zhTwSeed = pickFirstText(
+    sourceMap['zh-TW'],
+    fallbackMap['zh-TW'],
+    sourceMap['zh-CN'] ? localizeScriptOnly(sourceMap['zh-CN'], 'zh-TW') : '',
+    fallbackMap['zh-CN'] ? localizeScriptOnly(fallbackMap['zh-CN'], 'zh-TW') : '',
+    sourceMap.en,
+    fallbackMap.en,
+    fallbackText
+  );
+  if (!zhTwSeed) return null;
+  const zhTw = localizeScriptOnly(zhTwSeed, 'zh-TW');
+  const keys = collectLocalizedLangKeys(sourceMap, fallbackMap);
+  const out = {};
+  for (const key of keys) {
+    if (key === 'en') {
+      out[key] = resolveEnglishValue(zhTw, sourceMap, fallbackMap, options);
+      continue;
+    }
+    const explicit = pickFirstText(sourceMap[key], fallbackMap[key]);
+    if (explicit) {
+      out[key] = explicit;
+      continue;
+    }
+    if (key === 'zh-TW') {
+      out[key] = zhTw;
+      continue;
+    }
+    if (key === 'zh-CN') {
+      out[key] = localizeScriptOnly(zhTw, 'zh-CN');
+      continue;
+    }
+    if (key === 'ko') {
+      out[key] = resolveKoreanValue(zhTw, sourceMap, fallbackMap, options);
+      continue;
+    }
+    out[key] = zhTw;
+  }
+  if (!out['zh-TW']) out['zh-TW'] = zhTw;
+  if (!out['zh-CN']) out['zh-CN'] = localizeScriptOnly(out['zh-TW'], 'zh-CN');
+  if (!out.ko) out.ko = resolveKoreanValue(out['zh-TW'], sourceMap, fallbackMap, options);
+  if (!out.en) out.en = resolveEnglishValue(out['zh-TW'], sourceMap, fallbackMap, options);
+  return out;
+}
 
 function normalizeLangCode(lang = 'zh-TW') {
   const raw = String(lang || '').trim();
@@ -421,6 +1350,16 @@ function normalizeLangCode(lang = 'zh-TW') {
     lower === 'en-us' ||
     lower.startsWith('en-')
   ) return 'en';
+  if (
+    raw === 'ko' ||
+    raw === 'ko-KR' ||
+    lower === 'ko' ||
+    lower === 'ko-kr' ||
+    lower === 'kr' ||
+    lower === 'korean' ||
+    lower.includes('한국') ||
+    lower.includes('korean')
+  ) return 'ko';
   return 'zh-TW';
 }
 
@@ -428,6 +1367,7 @@ function localizeScriptOnly(text = '', lang = 'zh-TW') {
   const source = String(text || '');
   const code = normalizeLangCode(lang);
   if (!source) return '';
+  if (code === 'ko') return translateTextToKo(source);
   if (code === 'zh-CN') return convertTWToCN(source);
   if (code === 'zh-TW') return convertCNToTW(source);
   return source;
@@ -452,7 +1392,11 @@ function buildSkillChipPrefixAliases() {
     'Skill Chip:',
     'Skill Chip -',
     'Skill Chip－',
-    'SkillChip:'
+    'SkillChip:',
+    '스킬 칩:',
+    '스킬 칩：',
+    '스킬칩:',
+    '스킬칩：'
   ];
 }
 
@@ -464,23 +1408,28 @@ function stripSkillChipPrefix(name = '') {
   for (const prefix of SKILL_CHIP_PREFIX_ALIASES) {
     if (text.startsWith(prefix)) return text.slice(prefix.length).trim();
   }
-  const regexMatch = text.match(/^(?:技能晶片|技能芯片|skill\s*chip)\s*[:：\-－]?\s*(.+)$/iu);
+  const regexMatch = text.match(/^(?:技能晶片|技能芯片|skill\s*chip|스킬\s*칩|스킬칩)\s*[:：\-－]?\s*(.+)$/iu);
   if (regexMatch?.[1]) return String(regexMatch[1] || '').trim();
   return '';
 }
 
 function getMoveLocalization(moveId = '', moveName = '', lang = 'zh-TW') {
   const code = normalizeLangCode(lang);
-  const safeMoveId = String(moveId || '').trim();
   const fallbackName = String(moveName || '').trim();
-  if (code === 'en') {
-    const byId = safeMoveId ? MOVE_EN_BY_ID.get(safeMoveId) : null;
-    if (byId?.en) return byId.en;
-    const byZh = fallbackName ? MOVE_EN_BY_ZH.get(convertCNToTW(fallbackName)) : null;
-    return byZh?.en || fallbackName;
+  const moveMeta = resolveMoveMeta(moveId, fallbackName);
+  if (code === 'ko') {
+    const ko = normalizeTextValue(moveMeta?.ko || '');
+    if (ko) return ko;
+    if (moveMeta?.en) return translateMoveNameToKo(moveMeta.en) || moveMeta.en;
+    return translateTextToKo(fallbackName);
   }
-  if (code === 'zh-CN') return localizeScriptOnly(fallbackName, 'zh-CN');
-  return localizeScriptOnly(fallbackName, 'zh-TW');
+  if (code === 'en') {
+    if (moveMeta?.en) return moveMeta.en;
+    return fallbackName;
+  }
+  const zhBase = String(moveMeta?.zh || fallbackName);
+  if (code === 'zh-CN') return localizeScriptOnly(zhBase, 'zh-CN');
+  return localizeScriptOnly(zhBase, 'zh-TW');
 }
 
 function formatSkillChipDisplay(moveId = '', moveName = '', lang = 'zh-TW') {
@@ -495,11 +1444,17 @@ function buildItemNamePack(raw = null) {
       ? raw.names
       : (raw.itemNames && typeof raw.itemNames === 'object' ? raw.itemNames : null);
     if (names) {
-      return {
-        'zh-TW': String(names['zh-TW'] || raw.name || raw.itemName || '').trim(),
-        'zh-CN': String(names['zh-CN'] || localizeScriptOnly(names['zh-TW'] || raw.name || raw.itemName || '', 'zh-CN')).trim(),
-        en: String(names.en || raw.name || raw.itemName || '').trim()
-      };
+      return normalizeLocalizedTextMap(
+        names,
+        {},
+        {
+          fallbackText: pickFirstText(raw.name, raw.itemName),
+          translateKo: translateItemNameToKo,
+          koFallback: '미번역 아이템',
+          translateEn: translateItemNameToEn,
+          enFallback: 'Untranslated Item'
+        }
+      );
     }
   }
 
@@ -520,48 +1475,96 @@ function buildItemNamePack(raw = null) {
   const chipMoveName = stripSkillChipPrefix(baseName);
   if (chipMoveName) {
     const zhTwMoveName = localizeScriptOnly(chipMoveName, 'zh-TW');
-    return {
+    return normalizeLocalizedTextMap({
       'zh-TW': `${getSkillChipPrefix('zh-TW')}${zhTwMoveName}`,
       'zh-CN': `${getSkillChipPrefix('zh-CN')}${localizeScriptOnly(zhTwMoveName, 'zh-CN')}`,
+      ko: `${getSkillChipPrefix('ko')}${getMoveLocalization('', zhTwMoveName, 'ko')}`,
       en: `${getSkillChipPrefix('en')}${getMoveLocalization('', zhTwMoveName, 'en')}`
-    };
+    });
   }
 
-  return {
+  return normalizeLocalizedTextMap({
     'zh-TW': localizeScriptOnly(baseName, 'zh-TW'),
-    'zh-CN': localizeScriptOnly(baseName, 'zh-CN'),
-    en: baseName
-  };
+    'zh-CN': localizeScriptOnly(baseName, 'zh-CN')
+  }, {}, {
+    fallbackText: localizeScriptOnly(baseName, 'zh-TW'),
+    translateKo: translateItemNameToKo,
+    koFallback: '미번역 아이템',
+    translateEn: translateItemNameToEn,
+    enFallback: 'Untranslated Item'
+  });
+}
+
+function buildItemDescPack(raw = null) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const descs = raw.descs && typeof raw.descs === 'object'
+      ? raw.descs
+      : (raw.itemDescs && typeof raw.itemDescs === 'object' ? raw.itemDescs : null);
+    const fallbackText = pickFirstText(raw.desc, raw.lore, raw.itemDesc);
+    if (descs) {
+      return normalizeLocalizedTextMap(descs, {}, {
+        fallbackText,
+        translateKo: translateItemDescToKo,
+        koFallback: '미번역 설명',
+        translateEn: translateItemDescToEn,
+        enFallback: 'Untranslated Description'
+      });
+    }
+    if (!fallbackText) return null;
+    return normalizeLocalizedTextMap({ 'zh-TW': fallbackText }, {}, {
+      fallbackText,
+      translateKo: translateItemDescToKo,
+      koFallback: '미번역 설명',
+      translateEn: translateItemDescToEn,
+      enFallback: 'Untranslated Description'
+    });
+  }
+  const text = normalizeTextValue(raw);
+  if (!text) return null;
+  return normalizeLocalizedTextMap({ 'zh-TW': text }, {}, {
+    fallbackText: text,
+    translateKo: translateItemDescToKo,
+    koFallback: '미번역 설명',
+    translateEn: translateItemDescToEn,
+    enFallback: 'Untranslated Description'
+  });
+}
+
+function getLocalizedTextFromPack(pack = null, lang = 'zh-TW') {
+  if (!pack || typeof pack !== 'object' || Array.isArray(pack)) return '';
+  const code = normalizeLangCode(lang);
+  if (code === 'ko') {
+    const ko = normalizeTextValue(pack.ko || '');
+    if (ko) return ko;
+    const base = normalizeTextValue(pack.en || pack['zh-TW'] || pack['zh-CN'] || '');
+    return translateTextToKo(base) || base;
+  }
+  return normalizeTextValue(pack[code] || pack['zh-TW'] || pack.en || '');
 }
 
 function getLocalizedItemName(raw = null, lang = 'zh-TW') {
-  const code = normalizeLangCode(lang);
   const pack = buildItemNamePack(raw);
-  if (!pack) return '';
-  return String(pack[code] || pack['zh-TW'] || '').trim();
+  return getLocalizedTextFromPack(pack, lang);
 }
 
 function getLocalizedItemDesc(raw = null, lang = 'zh-TW') {
-  const code = normalizeLangCode(lang);
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
-  const descs = raw.descs && typeof raw.descs === 'object' ? raw.descs : null;
-  const desc = descs?.[code] || descs?.['zh-TW'] || raw.desc || '';
-  return localizeScriptOnly(desc, code);
+  const pack = buildItemDescPack(raw);
+  return getLocalizedTextFromPack(pack, lang);
 }
 
 function resolveChoiceTagKey(tag = '') {
   const text = String(tag || '').replace(/[【】\[\]]/g, '').trim();
   if (!text) return '';
-  if (/🔥|高風險|高风险|high\s*risk/iu.test(text)) return 'high_risk';
-  if (/💰|需花錢|需花钱|costs?\s*money|spend/iu.test(text)) return 'spend';
-  if (/🤝|需社交|社交|social|友誼賽|友谊赛|friendly\s*spar/iu.test(text)) return text.includes('友') || /friendly\s*spar/iu.test(text) ? 'friendly_spar' : 'social';
-  if (/🔍|需探索|探索|explore/iu.test(text)) return 'explore';
-  if (/⚔️|會戰鬥|会战斗|combat/iu.test(text)) return 'combat';
-  if (/🎁|高回報|高回报|high\s*reward/iu.test(text)) return 'reward';
-  if (/❓|有驚喜|有惊喜|uncertain|surprise/iu.test(text)) return 'surprise';
-  if (/🏪|鑑價站|鉴价站|appraisal/iu.test(text)) return 'appraisal';
-  if (/🕳️|神秘鑑價|神秘鉴价|mystery\s*appraisal/iu.test(text)) return 'mystery_appraisal';
-  if (/🧩|友善鑑價|友善鉴价|friendly\s*appraisal/iu.test(text)) return 'friendly_appraisal';
+  if (/🔥|高風險|高风险|high\s*risk|고위험/iu.test(text)) return 'high_risk';
+  if (/💰|需花錢|需花钱|costs?\s*money|spend|비용/iu.test(text)) return 'spend';
+  if (/🤝|需社交|社交|social|友誼賽|友谊赛|friendly\s*spar|소셜|우호 대련/iu.test(text)) return text.includes('友') || /friendly\s*spar|우호 대련/iu.test(text) ? 'friendly_spar' : 'social';
+  if (/🔍|需探索|探索|explore|탐험/iu.test(text)) return 'explore';
+  if (/⚔️|會戰鬥|会战斗|combat|전투/iu.test(text)) return 'combat';
+  if (/🎁|高回報|高回报|high\s*reward|고보상/iu.test(text)) return 'reward';
+  if (/❓|有驚喜|有惊喜|uncertain|surprise|불확실/iu.test(text)) return 'surprise';
+  if (/🏪|鑑價站|鉴价站|appraisal|감정/iu.test(text)) return 'appraisal';
+  if (/🕳️|神秘鑑價|神秘鉴价|mystery\s*appraisal|신비 감정/iu.test(text)) return 'mystery_appraisal';
+  if (/🧩|友善鑑價|友善鉴价|friendly\s*appraisal|우호 감정/iu.test(text)) return 'friendly_appraisal';
   return '';
 }
 
@@ -569,6 +1572,10 @@ function getChoiceTag(key = '', lang = 'zh-TW') {
   const row = CHOICE_TAGS[String(key || '').trim()];
   if (!row) return '';
   const code = normalizeLangCode(lang);
+  if (code === 'ko') {
+    const baseLabel = row.labels.en || row.labels['zh-TW'] || '';
+    return `[${row.emoji}${translateTextToKo(baseLabel)}]`;
+  }
   return `[${row.emoji}${row.labels[code] || row.labels['zh-TW']}]`;
 }
 
@@ -583,7 +1590,10 @@ function getChoiceTagPromptLines(lang = 'zh-TW') {
   return orderedKeys
     .map((key) => {
       const row = CHOICE_TAGS[key];
-      return `- ${getChoiceTag(key, code)} - ${row.desc[code] || row.desc['zh-TW']}`;
+      const desc = code === 'ko'
+        ? translateTextToKo(row.desc.en || row.desc['zh-TW'] || '')
+        : (row.desc[code] || row.desc['zh-TW']);
+      return `- ${getChoiceTag(key, code)} - ${desc}`;
     })
     .join('\n');
 }
@@ -595,16 +1605,25 @@ function isAggressiveChoiceTag(tag = '') {
 
 function getGenerationStatusText(lang = 'zh-TW') {
   const code = normalizeLangCode(lang);
+  if (code === 'ko') {
+    return localizeObjectToKorean(GENERATION_STATUS_TEXT.en || GENERATION_STATUS_TEXT['zh-TW'] || {});
+  }
   return GENERATION_STATUS_TEXT[code] || GENERATION_STATUS_TEXT['zh-TW'];
 }
 
 function getLoadingAnimationText(lang = 'zh-TW') {
   const code = normalizeLangCode(lang);
+  if (code === 'ko') {
+    return localizeObjectToKorean(LOADING_ANIMATION_TEXT.en || LOADING_ANIMATION_TEXT['zh-TW'] || {});
+  }
   return LOADING_ANIMATION_TEXT[code] || LOADING_ANIMATION_TEXT['zh-TW'];
 }
 
 function getSkillChipUiText(lang = 'zh-TW') {
   const code = normalizeLangCode(lang);
+  if (code === 'ko') {
+    return localizeObjectToKorean(SKILL_CHIP_UI_TEXT.en || SKILL_CHIP_UI_TEXT['zh-TW'] || {});
+  }
   return SKILL_CHIP_UI_TEXT[code] || SKILL_CHIP_UI_TEXT['zh-TW'];
 }
 
@@ -613,17 +1632,25 @@ function joinLocalizedList(items = [], lang = 'zh-TW') {
   const list = (Array.isArray(items) ? items : [])
     .map((item) => String(item || '').trim())
     .filter(Boolean);
-  return list.join(code === 'en' ? ', ' : '、');
+  return list.join(code === 'en' || code === 'ko' ? ', ' : '、');
 }
 
 module.exports = {
+  ITEM_LOCALIZATION_LANGS,
+  MOVE_LOCALIZATION,
+  COMMON_ITEM_TRANSLATIONS,
   normalizeLangCode,
   localizeScriptOnly,
+  translateTextToKo,
+  localizeObjectToKorean,
+  normalizeLocalizedTextMap,
   getSkillChipPrefix,
   stripSkillChipPrefix,
   getMoveLocalization,
   formatSkillChipDisplay,
   buildItemNamePack,
+  buildItemDescPack,
+  getLocalizedTextFromPack,
   getLocalizedItemName,
   getLocalizedItemDesc,
   resolveChoiceTagKey,
