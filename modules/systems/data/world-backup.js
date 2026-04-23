@@ -2,6 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { WORLD_DATA_ROOT, PROJECT_ROOT, getActiveWorldDataRoot } = require('../../core/storage-paths');
+const { copyWorldDataSnapshot } = require('./world-backup-snapshot');
+const {
+  getGoogleDriveBackupDebugStatus,
+  validateGoogleDriveConfig,
+  runGoogleDriveBackup,
+  runGoogleDrivePull
+} = require('./world-backup-gdrive');
 
 const BACKUP_REPO = String(process.env.WORLD_BACKUP_REPO || '').trim();
 const BACKUP_PAT = String(process.env.WORLD_BACKUP_PAT || '').trim();
@@ -14,6 +21,8 @@ const BACKUP_MINUTE = Math.max(0, Math.min(59, Number(process.env.WORLD_BACKUP_M
 const BACKUP_RUN_ON_STARTUP = String(process.env.WORLD_BACKUP_RUN_ON_STARTUP || '0').trim().toLowerCase() === '1';
 const BACKUP_GIT_NAME = String(process.env.WORLD_BACKUP_GIT_NAME || 'Renaiss World Bot').trim();
 const BACKUP_GIT_EMAIL = String(process.env.WORLD_BACKUP_GIT_EMAIL || 'bot@renaiss.world').trim();
+const BACKUP_PROVIDER = String(process.env.WORLD_BACKUP_PROVIDER || 'git').trim().toLowerCase();
+const BACKUP_INCLUDE_VOLATILE = String(process.env.WORLD_BACKUP_INCLUDE_VOLATILE || '0').trim().toLowerCase() === '1';
 
 let _running = false;
 let _lastRunMinuteKey = '';
@@ -23,6 +32,18 @@ let _onResult = null;
 
 function _isBackupEnabled() {
   return String(process.env.WORLD_BACKUP_ENABLED || '0').trim().toLowerCase() === '1';
+}
+
+function _getBackupProvider() {
+  return BACKUP_PROVIDER === 'gdrive' ? 'gdrive' : 'git';
+}
+
+function _isGitProvider() {
+  return _getBackupProvider() === 'git';
+}
+
+function _isGoogleDriveProvider() {
+  return _getBackupProvider() === 'gdrive';
 }
 
 function _maskRepoSecrets(text = '') {
@@ -48,6 +69,8 @@ function _resolveBackupRepoUrl() {
 function getBackupDebugStatus() {
   const repoRaw = String(BACKUP_REPO || '').trim();
   const repoResolved = _resolveBackupRepoUrl();
+  const provider = _getBackupProvider();
+  const driveStatus = getGoogleDriveBackupDebugStatus();
   let repoHost = '';
   let repoPath = '';
   try {
@@ -62,17 +85,20 @@ function getBackupDebugStatus() {
 
   return {
     enabled: _isBackupEnabled(),
+    provider,
     hasRepo: Boolean(repoRaw),
     hasPat: Boolean(BACKUP_PAT),
     hasResolvedRepo: Boolean(repoResolved),
     branch: BACKUP_BRANCH,
     subdir: BACKUP_SUBDIR,
+    includeVolatile: BACKUP_INCLUDE_VOLATILE,
     timezone: BACKUP_TZ,
     hour: BACKUP_HOUR,
     minute: BACKUP_MINUTE,
     runOnStartup: BACKUP_RUN_ON_STARTUP,
     repoHost,
-    repoPath
+    repoPath,
+    ...driveStatus
   };
 }
 
@@ -131,16 +157,8 @@ function _copyWorldDataToRepo() {
   const backupRepoDir = _getBackupRepoDir();
   const worldDataRoot = getActiveWorldDataRoot();
   const targetDir = path.join(backupRepoDir, BACKUP_SUBDIR);
-  fs.rmSync(targetDir, { recursive: true, force: true });
-  fs.mkdirSync(path.dirname(targetDir), { recursive: true });
-  fs.cpSync(worldDataRoot, targetDir, {
-    recursive: true,
-    dereference: true,
-    filter: (src) => {
-      const resolved = path.resolve(src);
-      if (resolved.startsWith(path.resolve(backupRepoDir))) return false;
-      return true;
-    }
+  copyWorldDataSnapshot(worldDataRoot, targetDir, {
+    includeVolatile: BACKUP_INCLUDE_VOLATILE
   });
 }
 
@@ -195,13 +213,13 @@ function _getTzNowParts(tz) {
   };
 }
 
-async function runWorldBackup(reason = 'manual') {
+async function runWorldBackupViaGit(reason = 'manual') {
   const manualRequested = String(reason || '').trim().toLowerCase().startsWith('manual');
   if (!_isBackupEnabled() && !manualRequested) {
-    return { ok: false, skipped: true, reason: 'disabled' };
+    return { ok: false, skipped: true, reason: 'disabled', provider: 'git' };
   }
   const repoUrl = _resolveBackupRepoUrl();
-  if (!repoUrl) return { ok: false, skipped: true, reason: 'missing_repo' };
+  if (!repoUrl) return { ok: false, skipped: true, reason: 'missing_repo', provider: 'git' };
   if (_isGithubHttpsWithoutAuth(repoUrl)) {
     return {
       ok: false,
@@ -210,12 +228,10 @@ async function runWorldBackup(reason = 'manual') {
       error:
         'GitHub private repo requires auth. Set WORLD_BACKUP_PAT, or set WORLD_BACKUP_REPO to https://x-access-token:<PAT>@github.com/<owner>/<repo>.git',
       repo: BACKUP_REPO,
-      branch: BACKUP_BRANCH
+      branch: BACKUP_BRANCH,
+      provider: 'git'
     };
   }
-  if (_running) return { ok: false, skipped: true, reason: 'already_running' };
-
-  _running = true;
   try {
     _ensureRepoReady(repoUrl);
     _copyWorldDataToRepo();
@@ -223,28 +239,26 @@ async function runWorldBackup(reason = 'manual') {
     _runGit(['add', '-A'], backupRepoDir);
 
     if (!_hasGitStagedChanges(backupRepoDir)) {
-      return { ok: true, changed: false, reason, repo: BACKUP_REPO, branch: BACKUP_BRANCH };
+      return { ok: true, changed: false, reason, repo: BACKUP_REPO, branch: BACKUP_BRANCH, provider: 'git' };
     }
 
     const now = new Date();
     const stamp = now.toISOString().replace('T', ' ').slice(0, 19);
     _runGit(['commit', '-m', `backup(world): ${stamp} [${reason}]`], backupRepoDir);
     _runGit(['push', 'origin', BACKUP_BRANCH], backupRepoDir);
-    return { ok: true, changed: true, reason, repo: BACKUP_REPO, branch: BACKUP_BRANCH };
+    return { ok: true, changed: true, reason, repo: BACKUP_REPO, branch: BACKUP_BRANCH, provider: 'git' };
   } catch (e) {
-    return { ok: false, changed: false, reason, error: String(e?.message || e), repo: BACKUP_REPO, branch: BACKUP_BRANCH };
-  } finally {
-    _running = false;
+    return { ok: false, changed: false, reason, error: String(e?.message || e), repo: BACKUP_REPO, branch: BACKUP_BRANCH, provider: 'git' };
   }
 }
 
-async function runWorldDataPull(reason = 'manual_pull') {
+async function runWorldDataPullViaGit(reason = 'manual_pull') {
   const manualRequested = String(reason || '').trim().toLowerCase().startsWith('manual');
   if (!_isBackupEnabled() && !manualRequested) {
-    return { ok: false, skipped: true, reason: 'disabled' };
+    return { ok: false, skipped: true, reason: 'disabled', provider: 'git' };
   }
   const repoUrl = _resolveBackupRepoUrl();
-  if (!repoUrl) return { ok: false, skipped: true, reason: 'missing_repo' };
+  if (!repoUrl) return { ok: false, skipped: true, reason: 'missing_repo', provider: 'git' };
   if (_isGithubHttpsWithoutAuth(repoUrl)) {
     return {
       ok: false,
@@ -253,12 +267,10 @@ async function runWorldDataPull(reason = 'manual_pull') {
       error:
         'GitHub private repo requires auth. Set WORLD_BACKUP_PAT, or set WORLD_BACKUP_REPO to https://x-access-token:<PAT>@github.com/<owner>/<repo>.git',
       repo: BACKUP_REPO,
-      branch: BACKUP_BRANCH
+      branch: BACKUP_BRANCH,
+      provider: 'git'
     };
   }
-  if (_running) return { ok: false, skipped: true, reason: 'already_running' };
-
-  _running = true;
   try {
     _ensureRepoReady(repoUrl);
     const backupRepoDir = _getBackupRepoDir();
@@ -270,7 +282,8 @@ async function runWorldDataPull(reason = 'manual_pull') {
         reason: 'missing_backup_subdir',
         error: `Backup subdir not found in repo: ${BACKUP_SUBDIR}`,
         repo: BACKUP_REPO,
-        branch: BACKUP_BRANCH
+        branch: BACKUP_BRANCH,
+        provider: 'git'
       };
     }
 
@@ -290,7 +303,8 @@ async function runWorldDataPull(reason = 'manual_pull') {
       reason,
       repo: BACKUP_REPO,
       branch: BACKUP_BRANCH,
-      subdir: BACKUP_SUBDIR
+      subdir: BACKUP_SUBDIR,
+      provider: 'git'
     };
   } catch (e) {
     return {
@@ -299,8 +313,54 @@ async function runWorldDataPull(reason = 'manual_pull') {
       reason,
       error: String(e?.message || e),
       repo: BACKUP_REPO,
-      branch: BACKUP_BRANCH
+      branch: BACKUP_BRANCH,
+      provider: 'git'
     };
+  }
+}
+
+async function runWorldBackup(reason = 'manual') {
+  const manualRequested = String(reason || '').trim().toLowerCase().startsWith('manual');
+  const provider = _getBackupProvider();
+  if (!_isBackupEnabled() && !manualRequested) {
+    return { ok: false, skipped: true, reason: 'disabled', provider };
+  }
+  if (_running) return { ok: false, skipped: true, reason: 'already_running', provider };
+
+  _running = true;
+  try {
+    if (_isGoogleDriveProvider()) {
+      return runGoogleDriveBackup({
+        reason,
+        worldDataRoot: getActiveWorldDataRoot(),
+        backupSubdir: BACKUP_SUBDIR,
+        includeVolatile: BACKUP_INCLUDE_VOLATILE
+      });
+    }
+    return runWorldBackupViaGit(reason);
+  } finally {
+    _running = false;
+  }
+}
+
+async function runWorldDataPull(reason = 'manual_pull') {
+  const manualRequested = String(reason || '').trim().toLowerCase().startsWith('manual');
+  const provider = _getBackupProvider();
+  if (!_isBackupEnabled() && !manualRequested) {
+    return { ok: false, skipped: true, reason: 'disabled', provider };
+  }
+  if (_running) return { ok: false, skipped: true, reason: 'already_running', provider };
+
+  _running = true;
+  try {
+    if (_isGoogleDriveProvider()) {
+      return runGoogleDrivePull({
+        reason,
+        worldDataRoot: getActiveWorldDataRoot(),
+        backupSubdir: BACKUP_SUBDIR
+      });
+    }
+    return runWorldDataPullViaGit(reason);
   } finally {
     _running = false;
   }
@@ -322,7 +382,7 @@ function _scheduleTick() {
   _lastRunMinuteKey = minuteKey;
   runWorldBackup('scheduled').then((res) => {
     if (res.ok) {
-      console.log(`[Backup] scheduled done: changed=${Boolean(res.changed)} repo=${BACKUP_REPO}`);
+      console.log(`[Backup] scheduled done: changed=${Boolean(res.changed)} provider=${String(res.provider || _getBackupProvider())}`);
     } else {
       console.log(`[Backup] scheduled failed: ${res.error || res.reason || 'unknown'}`);
     }
@@ -332,14 +392,23 @@ function _scheduleTick() {
 
 function startWorldBackupScheduler(onResult) {
   _onResult = typeof onResult === 'function' ? onResult : null;
+  const provider = _getBackupProvider();
   if (!_isBackupEnabled()) {
     console.log('[Backup] disabled (WORLD_BACKUP_ENABLED != 1)');
     return;
   }
 
-  if (!_resolveBackupRepoUrl()) {
-    console.log('[Backup] disabled: WORLD_BACKUP_REPO is empty');
-    return;
+  if (_isGitProvider()) {
+    if (!_resolveBackupRepoUrl()) {
+      console.log('[Backup] disabled: WORLD_BACKUP_REPO is empty');
+      return;
+    }
+  } else if (_isGoogleDriveProvider()) {
+    const driveCheck = validateGoogleDriveConfig();
+    if (!driveCheck.ok) {
+      console.log(`[Backup] disabled: ${String(driveCheck.reason || 'invalid_drive_config')}`);
+      return;
+    }
   }
 
   const worldDataRoot = getActiveWorldDataRoot();
@@ -347,16 +416,25 @@ function startWorldBackupScheduler(onResult) {
     fs.mkdirSync(worldDataRoot, { recursive: true });
   }
 
-  const repoUrl = _resolveBackupRepoUrl();
-  const repoDir = _getBackupRepoDir();
-  console.log(
-    `[Backup] scheduler on ${BACKUP_TZ} ${String(BACKUP_HOUR).padStart(2, '0')}:${String(BACKUP_MINUTE).padStart(2, '0')} ` +
-      `data_root=${worldDataRoot} repo_dir=${repoDir} repo=${_maskRepoSecrets(repoUrl)}`
-  );
+  if (_isGitProvider()) {
+    const repoUrl = _resolveBackupRepoUrl();
+    const repoDir = _getBackupRepoDir();
+    console.log(
+      `[Backup] scheduler on ${BACKUP_TZ} ${String(BACKUP_HOUR).padStart(2, '0')}:${String(BACKUP_MINUTE).padStart(2, '0')} ` +
+        `provider=${provider} data_root=${worldDataRoot} repo_dir=${repoDir} repo=${_maskRepoSecrets(repoUrl)}`
+    );
+  } else {
+    const driveStatus = getGoogleDriveBackupDebugStatus();
+    console.log(
+      `[Backup] scheduler on ${BACKUP_TZ} ${String(BACKUP_HOUR).padStart(2, '0')}:${String(BACKUP_MINUTE).padStart(2, '0')} ` +
+        `provider=${provider} data_root=${worldDataRoot} folder=${String(process.env.WORLD_BACKUP_DRIVE_FOLDER_ID || '').trim() || '(missing)'} ` +
+        `driveId=${String(process.env.WORLD_BACKUP_DRIVE_ID || '').trim() || '(none)'} auth_mode=${String(driveStatus.driveAuthModeEffective || 'none')} creds=${driveStatus.hasDriveAuthCredentials ? 'ok' : 'missing'}`
+    );
+  }
   if (BACKUP_RUN_ON_STARTUP) {
     runWorldBackup('startup').then((res) => {
       if (res.ok) {
-        console.log(`[Backup] startup done: changed=${Boolean(res.changed)} repo=${BACKUP_REPO}`);
+        console.log(`[Backup] startup done: changed=${Boolean(res.changed)} provider=${String(res.provider || provider)}`);
       } else {
         console.log(`[Backup] startup failed: ${res.error || res.reason || 'unknown'}`);
       }

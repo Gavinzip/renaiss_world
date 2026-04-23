@@ -80,7 +80,7 @@ const ADMIN_SLASH_COMMANDS = [
   }),
   withOwnerOnlyVisibility({
     name: 'backupworld',
-    description: '手動備份世界/玩家/記憶資料到備份 Git（需密碼）',
+    description: '手動備份世界/玩家/記憶資料到遠端備份（需密碼）',
     options: [
       {
         type: 3,
@@ -110,7 +110,7 @@ const ADMIN_SLASH_COMMANDS = [
   }),
   withOwnerOnlyVisibility({
     name: 'pullworlddata',
-    description: '從遠端備份 Git 拉最新資料並覆蓋伺服器資料（需密碼）',
+    description: '從遠端備份拉最新資料並覆蓋伺服器資料（需密碼）',
     options: [
       {
         type: 3,

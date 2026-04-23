@@ -145,7 +145,7 @@ function createSlashAdminUtils(deps = {}) {
       return;
     }
 
-    await interaction.reply({ content: '⏳ 正在執行手動備份（含玩家、世界、記憶資料）...', ephemeral: true });
+    await interaction.reply({ content: '⏳ 正在執行手動遠端備份（含玩家、世界、記憶資料）...', ephemeral: true });
 
     try {
       if (typeof CORE.saveWorld === 'function') CORE.saveWorld();
@@ -159,11 +159,19 @@ function createSlashAdminUtils(deps = {}) {
 
     if (result?.ok) {
       const changedText = result.changed ? '有新變更並已推送' : '沒有新變更（僅完成檢查）';
+      const provider = String(result.provider || 'git');
+      const detailLines = [`- provider：${provider}`];
+      if (provider === 'git') {
+        detailLines.push(`- 分支：${String(result.branch || 'main')}`);
+      } else if (provider === 'gdrive') {
+        detailLines.push(`- Drive folder：${String(result.folderId || '(unknown)')}`);
+        detailLines.push(`- 快照檔：${String(result.fileName || '(unknown)')}`);
+      }
       await interaction.followUp({
         content:
           `✅ 手動備份完成\n` +
           `- 狀態：${changedText}\n` +
-          `- 分支：${String(result.branch || 'main')}\n` +
+          `${detailLines.join('\n')}\n` +
           `- 原因標記：${String(result.reason || reason)}`,
         ephemeral: true
       });
@@ -171,12 +179,20 @@ function createSlashAdminUtils(deps = {}) {
     }
 
     const failReason = result?.error || result?.reason || 'unknown';
-    const hint =
-      failReason === 'disabled'
-        ? '\n請檢查伺服器環境變數 WORLD_BACKUP_ENABLED=1（修改後需重啟機器人）。'
-        : (failReason === 'missing_repo'
-          ? '\n請檢查 WORLD_BACKUP_REPO 是否已設定可寫入的 Git 倉庫。'
-          : '');
+    const failHints = {
+      disabled: '\n請檢查伺服器環境變數 WORLD_BACKUP_ENABLED=1（修改後需重啟機器人）。',
+      missing_repo: '\n請檢查 WORLD_BACKUP_REPO 是否已設定可寫入的 Git 倉庫。',
+      missing_drive_folder: '\n請檢查 WORLD_BACKUP_DRIVE_FOLDER_ID 是否已設定。',
+      missing_drive_credentials_service_account:
+        '\n目前 auth mode=service_account，請設定 WORLD_BACKUP_DRIVE_SERVICE_ACCOUNT_FILE 或 WORLD_BACKUP_DRIVE_SERVICE_ACCOUNT_JSON。',
+      missing_drive_credentials_oauth_user:
+        '\n目前 auth mode=oauth_user，請設定 WORLD_BACKUP_DRIVE_CLIENT_ID / WORLD_BACKUP_DRIVE_CLIENT_SECRET / WORLD_BACKUP_DRIVE_REFRESH_TOKEN。',
+      missing_drive_credentials:
+        '\n請設定 Drive 授權：service account 或 oauth_user（refresh token）。',
+      invalid_drive_auth_mode:
+        '\nWORLD_BACKUP_DRIVE_AUTH_MODE 僅支援 auto / service_account / oauth_user。'
+    };
+    const hint = String(failHints[failReason] || '');
     await interaction.followUp({
       content: `❌ 手動備份失敗：${failReason}${hint}`,
       ephemeral: true
@@ -200,13 +216,23 @@ function createSlashAdminUtils(deps = {}) {
     await interaction.reply({
       content:
         `🧪 備份設定檢查\n` +
+        `- provider：${status.provider || 'git'}\n` +
         `- WORLD_BACKUP_ENABLED：${status.enabled ? '1' : '0'}\n` +
+        `- include volatile：${status.includeVolatile ? '1' : '0'}\n` +
         `- WORLD_BACKUP_REPO：${status.hasRepo ? '已設定' : '未設定'}\n` +
         `- WORLD_BACKUP_PAT：${status.hasPat ? '已設定' : '未設定'}\n` +
         `- repo 解析：${status.hasResolvedRepo ? '成功' : '失敗'}\n` +
         `- repo host：${status.repoHost || '(unknown)'}\n` +
         `- repo path：${status.repoPath || '(unknown)'}\n` +
         `- branch：${status.branch || '(unknown)'}\n` +
+        `- drive folder：${status.hasDriveFolderId ? '已設定' : '未設定'}\n` +
+        `- drive id：${status.hasDriveId ? '已設定' : '未設定'}\n` +
+        `- drive auth mode：${status.driveAuthModeConfigured || '(unknown)'} → ${status.driveAuthModeEffective || 'none'}\n` +
+        `- drive oauth creds：${status.hasOauthUserCredentials ? '已設定' : '未設定'}\n` +
+        `- drive service-account creds：${status.hasServiceAccountCredentials ? '已設定' : '未設定'}\n` +
+        `- drive creds（有效）：${status.hasDriveAuthCredentials ? '已設定' : '未設定'}\n` +
+        `- drive retention：${Number(status.driveRetentionCount || 0)}\n` +
+        `- drive prefix：${status.driveFilePrefix || '(unknown)'}\n` +
         `- subdir：${status.subdir || '(unknown)'}\n` +
         `- 排程：${schedule} (${status.timezone || 'Asia/Taipei'})\n` +
         `- 開機即跑：${status.runOnStartup ? '是' : '否'}\n` +
@@ -224,17 +250,25 @@ function createSlashAdminUtils(deps = {}) {
     }
 
     await interaction.reply({
-      content: '⏳ 正在從遠端備份 Git 拉取資料並覆蓋伺服器資料...',
+      content: '⏳ 正在從遠端備份拉取資料並覆蓋伺服器資料...',
       ephemeral: true
     });
 
     const reason = `manual_pull:${String(user?.id || 'unknown')}`;
     const result = await runWorldDataPull(reason);
     if (result?.ok) {
+      const provider = String(result.provider || 'git');
+      const detailLines = [`- provider：${provider}`];
+      if (provider === 'git') {
+        detailLines.push(`- 分支：${String(result.branch || 'main')}`);
+      } else if (provider === 'gdrive') {
+        detailLines.push(`- Drive folder：${String(result.folderId || '(unknown)')}`);
+        detailLines.push(`- 快照檔：${String(result.fileName || '(unknown)')}`);
+      }
       await interaction.followUp({
         content:
           `✅ 已完成遠端資料覆蓋\n` +
-          `- 分支：${String(result.branch || 'main')}\n` +
+          `${detailLines.join('\n')}\n` +
           `- 子目錄：${String(result.subdir || '(unknown)')}\n` +
           `- 原因標記：${String(result.reason || reason)}\n` +
           `- 備註：若目前有活躍流程，建議重啟機器人以確保快取狀態一致。`,
