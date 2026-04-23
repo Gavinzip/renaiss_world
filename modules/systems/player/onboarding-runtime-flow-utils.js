@@ -1,3 +1,9 @@
+const {
+  getMoveLocalization,
+  getSkillChipUiText,
+  joinLocalizedList
+} = require('../runtime/utils/global-language-resources');
+
 function createOnboardingRuntimeFlowUtils(deps = {}) {
   const {
     CORE,
@@ -45,6 +51,23 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     getSettingsHubText
   } = deps;
   const walletSyncInFlight = new Set();
+
+  function buildStarterChipRewardField(chips = [], uiLang = 'zh-TW') {
+    const chipText = getSkillChipUiText(uiLang);
+    const chipLine = Array.isArray(chips) && chips.length > 0
+      ? joinLocalizedList(
+        chips
+          .slice(0, 5)
+          .map((move) => `${move?.emoji || '•'} ${getMoveLocalization(move?.id || '', move?.name || '', uiLang) || String(move?.name || '').trim()}`),
+        uiLang
+      )
+      : chipText.starterGiftEmpty;
+    return {
+      name: chipText.starterGiftTitle,
+      value: chipText.starterGiftValue(Array.isArray(chips) ? chips.length : 0, chipLine),
+      inline: false
+    };
+  }
 
   function getWalletOnboardingText(lang = 'zh-TW') {
     const code = String(lang || 'zh-TW').trim() || 'zh-TW';
@@ -712,14 +735,14 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       .setDescription(
         `**${player.name}**，你的 Renaiss 星球之旅開始了！\n\n` +
           `👤 角色已命名：**${player.name}**\n` +
-          `🐾 寵物已命名：**${pet.name}**\n\n` +
+          `🐾 ${t('petNamed', uiLang)}：**${pet.name}**\n\n` +
           `🎰 開局抽獎結果：${tierMeta.emoji} **${selectedMove.name}**（${tierMeta.name}）`
       )
       .addFields(
-        { name: '📍 位置', value: player.location, inline: true },
+        { name: `📍 ${t('location', uiLang)}`, value: player.location, inline: true },
         { name: '🎚️ 出生難度', value: spawnProfile ? `D${spawnProfile.difficulty}` : 'D1', inline: true },
-        { name: '👤 角色性別', value: selectedGender, inline: true },
-        { name: '🐾 寵物', value: `${pet.name}（${getPetElementDisplayName(selectedElement)}）`, inline: true },
+        { name: `👤 ${t('gender', uiLang)}`, value: selectedGender, inline: true },
+        { name: `🐾 ${t('pet', uiLang)}`, value: `${pet.name}（${getPetElementDisplayName(selectedElement, uiLang)}）`, inline: true },
         { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
         { name: t('gold', uiLang), value: String(player.stats.財富), inline: true }
       )
@@ -734,17 +757,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
 
     if (starterPack) {
       const chips = Array.isArray(starterPack.grantedChips) ? starterPack.grantedChips : [];
-      const chipLine = chips.length > 0
-        ? chips
-          .slice(0, 5)
-          .map((m) => `${m.emoji} ${m.name}`)
-          .join('、')
-        : '本次技能晶片發放失敗，請稍後重試。';
-      embed.addFields({
-        name: '🎁 開局贈禮：免費五連抽',
-        value: `已發放為技能晶片（已進背包，可販售；想學再到寵物招式頁學習）。\n本次新增：${chips.length} 張\n${chipLine}`,
-        inline: false
-      });
+      embed.addFields(buildStarterChipRewardField(chips, uiLang));
     }
 
     const row = new ActionRowBuilder().addComponents(
@@ -913,28 +926,18 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       .setColor(getPetElementColor(pet.type))
       .setDescription(pet.appearance)
       .addFields(
-        { name: '🐾 名字', value: pet.name, inline: true },
-        { name: '🏷️ 屬性', value: getPetElementDisplayName(pet.type), inline: true },
+        { name: `🐾 ${t('name', uiLang)}`, value: pet.name, inline: true },
+        { name: `🏷️ ${t('element', uiLang)}`, value: getPetElementDisplayName(pet.type, uiLang), inline: true },
         { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
         { name: t('atk', uiLang), value: String(pet.attack), inline: true },
         { name: t('def', uiLang), value: String(pet.defense), inline: true },
-        { name: '⚡ 速度', value: String(pet.speed), inline: true }
+        { name: `⚡ ${t('speed', uiLang)}`, value: String(pet.speed), inline: true }
       )
       .addFields({ name: '📜 招式', value: dmgInfo, inline: false });
 
     if (starterPack) {
       const chips = Array.isArray(starterPack.grantedChips) ? starterPack.grantedChips : [];
-      const chipLine = chips.length > 0
-        ? chips
-          .slice(0, 5)
-          .map(m => `${m.emoji} ${m.name}`)
-          .join('、')
-        : '本次技能晶片發放失敗，請稍後重試。';
-      embed.addFields({
-        name: '🎁 開局贈禮：免費五連抽',
-        value: `已發放為技能晶片（已進背包，可販售；想學再到寵物招式頁學習）。\n本次新增：${chips.length} 張\n${chipLine}`,
-        inline: false
-      });
+      embed.addFields(buildStarterChipRewardField(chips, uiLang));
     }
 
     const row = new ActionRowBuilder().addComponents(
@@ -966,12 +969,12 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
     }).join('\n');
 
     const embed = new EmbedBuilder()
-      .setTitle(`🐾 寵物命名：${pet.name}`)
+      .setTitle(`🐾 ${t('petNaming', uiLang)}：${pet.name}`)
       .setColor(getPetElementColor(pet.type))
       .setDescription(pet.appearance)
       .addFields(
-        { name: '🐾 名字', value: pet.name, inline: true },
-        { name: '🏷️ 屬性', value: getPetElementDisplayName(pet.type), inline: true },
+        { name: `🐾 ${t('name', uiLang)}`, value: pet.name, inline: true },
+        { name: `🏷️ ${t('element', uiLang)}`, value: getPetElementDisplayName(pet.type, uiLang), inline: true },
         { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
         { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
         { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
@@ -980,17 +983,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
 
     if (starterPack) {
       const chips = Array.isArray(starterPack.grantedChips) ? starterPack.grantedChips : [];
-      const chipLine = chips.length > 0
-        ? chips
-          .slice(0, 5)
-          .map(m => `${m.emoji} ${m.name}`)
-          .join('、')
-        : '本次技能晶片發放失敗，請稍後重試。';
-      embed.addFields({
-        name: '🎁 開局贈禮：免費五連抽',
-        value: `已發放為技能晶片（已進背包，可販售；想學再到寵物招式頁學習）。\n本次新增：${chips.length} 張\n${chipLine}`,
-        inline: false
-      });
+      embed.addFields(buildStarterChipRewardField(chips, uiLang));
     }
 
     const row = new ActionRowBuilder().addComponents(

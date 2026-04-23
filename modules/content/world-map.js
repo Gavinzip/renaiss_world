@@ -404,6 +404,12 @@ const LEGACY_LOCATION_ALIASES = {
   '蓬萊仙島': '蓬萊觀測島'
 };
 
+function normalizeLocationName(location = '') {
+  const raw = String(location || '').trim();
+  if (!raw) return '';
+  return String(LEGACY_LOCATION_ALIASES[raw] || raw).trim();
+}
+
 const REGION_PORTAL_HUBS = {
   central_core: '襄陽城',
   west_desert: '敦煌',
@@ -412,6 +418,19 @@ const REGION_PORTAL_HUBS = {
   island_routes: '星潮港',
   hidden_deeps: '光明頂'
 };
+
+const INTER_REGION_HUB_LINKS = Object.freeze([
+  ['襄陽城', '敦煌'],
+  ['襄陽城', '廣州'],
+  ['襄陽城', '草原部落'],
+  ['襄陽城', '星潮港'],
+  ['襄陽城', '光明頂'],
+  ['敦煌', '廣州'],
+  ['敦煌', '草原部落'],
+  ['廣州', '星潮港'],
+  ['星潮港', '光明頂'],
+  ['草原部落', '光明頂']
+]);
 
 function buildLocationStoryMetadata() {
   const byLocation = {};
@@ -478,19 +497,7 @@ function createPortalConnections() {
     }
   }
 
-  const interRegionLinks = [
-    ['襄陽城', '敦煌'],
-    ['襄陽城', '廣州'],
-    ['襄陽城', '草原部落'],
-    ['襄陽城', '星潮港'],
-    ['襄陽城', '光明頂'],
-    ['敦煌', '廣州'],
-    ['敦煌', '草原部落'],
-    ['廣州', '星潮港'],
-    ['星潮港', '光明頂'],
-    ['草原部落', '光明頂']
-  ];
-  for (const [a, b] of interRegionLinks) addEdge(a, b);
+  for (const [a, b] of INTER_REGION_HUB_LINKS) addEdge(a, b);
 
   const fallbackHub = MAP_LOCATIONS[0] || '襄陽城';
   for (const loc of MAP_LOCATIONS) {
@@ -505,6 +512,50 @@ function createPortalConnections() {
 }
 
 const PORTAL_CONNECTIONS = createPortalConnections();
+
+function getConnectedLocations(location = '') {
+  const normalized = normalizeLocationName(location);
+  if (!normalized) return [];
+  return Array.isArray(ROUTE_CONNECTIONS[normalized]) ? [...ROUTE_CONNECTIONS[normalized]] : [];
+}
+
+function areLocationsAdjacent(from = '', to = '') {
+  const start = normalizeLocationName(from);
+  const goal = normalizeLocationName(to);
+  if (!start || !goal) return false;
+  if (start === goal) return true;
+  return getConnectedLocations(start).includes(goal);
+}
+
+function findLocationPath(from = '', to = '') {
+  const start = normalizeLocationName(from);
+  const goal = normalizeLocationName(to);
+  if (!start || !goal) return [];
+  if (start === goal) return [start];
+  if (!MAP_LOCATIONS.includes(start) || !MAP_LOCATIONS.includes(goal)) return [];
+
+  const visited = new Set([start]);
+  const queue = [[start, [start]]];
+
+  while (queue.length > 0) {
+    const [current, path] = queue.shift();
+    const neighbors = getConnectedLocations(current);
+    for (const next of neighbors) {
+      if (!next || visited.has(next)) continue;
+      const nextPath = path.concat(next);
+      if (next === goal) return nextPath;
+      visited.add(next);
+      queue.push([next, nextPath]);
+    }
+  }
+
+  return [];
+}
+
+function getRouteNextHop(from = '', to = '') {
+  const path = findLocationPath(from, to);
+  return path.length >= 2 ? String(path[1] || '').trim() : '';
+}
 
 const REGION_MINIMAP_LAYOUTS = {
   central_core: {
@@ -591,6 +642,80 @@ const REGION_MINIMAP_LAYOUTS = {
   }
 };
 
+const REGION_ROUTE_EDGES = Object.freeze({
+  central_core: [
+    ['河港鎮', '襄陽城'],
+    ['襄陽城', '洛陽城'],
+    ['洛陽城', '大都'],
+    ['大都', '青石關'],
+    ['襄陽城', '龍脊山道'],
+    ['洛陽城', '墨林古道'],
+    ['大都', '皇城內廷']
+  ],
+  west_desert: [
+    ['敦煌', '喀什爾'],
+    ['喀什爾', '赤沙前哨'],
+    ['敦煌', '鳴沙廢城'],
+    ['赤沙前哨', '砂輪遺站']
+  ],
+  southern_delta: [
+    ['廣州', '鏡湖渡口'],
+    ['鏡湖渡口', '大理'],
+    ['大理', '雲棧茶嶺'],
+    ['雲棧茶嶺', '南疆苗疆'],
+    ['廣州', '海潮碼頭'],
+    ['南疆苗疆', '霧雨古祭壇']
+  ],
+  northern_highland: [
+    ['草原部落', '霜狼哨站'],
+    ['霜狼哨站', '雪白山莊'],
+    ['雪白山莊', '玄冰裂谷']
+  ],
+  island_routes: [
+    ['星潮港', '珊瑚環礁'],
+    ['珊瑚環礁', '桃花島'],
+    ['桃花島', '潮汐試煉島'],
+    ['桃花島', '蓬萊觀測島']
+  ],
+  hidden_deeps: [
+    ['光明頂', '無光礦坑'],
+    ['無光礦坑', '黑木崖'],
+    ['黑木崖', '天機遺都'],
+    ['天機遺都', '死亡之海']
+  ]
+});
+
+function createRouteConnections() {
+  const graph = new Map();
+
+  const addNode = (name) => {
+    if (!name) return;
+    if (!graph.has(name)) graph.set(name, new Set());
+  };
+
+  const addEdge = (a, b) => {
+    if (!a || !b || a === b) return;
+    addNode(a);
+    addNode(b);
+    graph.get(a).add(b);
+    graph.get(b).add(a);
+  };
+
+  for (const loc of MAP_LOCATIONS) addNode(loc);
+
+  for (const edges of Object.values(REGION_ROUTE_EDGES)) {
+    for (const [a, b] of Array.isArray(edges) ? edges : []) addEdge(a, b);
+  }
+
+  for (const [a, b] of INTER_REGION_HUB_LINKS) addEdge(a, b);
+
+  return Object.fromEntries(
+    Array.from(graph.entries()).map(([name, set]) => [name, Array.from(set)])
+  );
+}
+
+const ROUTE_CONNECTIONS = createRouteConnections();
+
 const ANSI = {
   reset: '\u001b[0m',
   brightYellow: '\u001b[1;33m',
@@ -615,7 +740,7 @@ function buildIslandMapAnsi(currentLocation = '') {
 }
 
 function getLocationRegionId(location) {
-  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const normalized = normalizeLocationName(location);
   const profile = LOCATION_PROFILES[normalized];
   if (!profile) return '';
   const region = REGION_CATALOG.find((item) => String(item?.name || '') === String(profile.region || ''));
@@ -655,7 +780,7 @@ function getRegionLocationsByLocation(location) {
 }
 
 function getLocationCoordinate(location) {
-  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const normalized = normalizeLocationName(location);
   const regionId = getLocationRegionId(normalized);
   if (!regionId) return null;
   const layout = REGION_MINIMAP_LAYOUTS[regionId];
@@ -731,7 +856,7 @@ function buildRegionMapSnapshot(location = '') {
 
 function getPortalDestinations(location) {
   if (!location) return getRegionPortalHubs();
-  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const normalized = normalizeLocationName(location);
   const hubs = getRegionPortalHubs().filter((hub) => hub !== normalized);
   if (hubs.length > 0) return hubs;
   return Array.isArray(PORTAL_CONNECTIONS[normalized]) ? [...PORTAL_CONNECTIONS[normalized]] : [];
@@ -739,14 +864,14 @@ function getPortalDestinations(location) {
 
 function getLocationStoryMetadata(location) {
   if (!location) return null;
-  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const normalized = normalizeLocationName(location);
   const data = LOCATION_STORY_METADATA[normalized];
   return data ? { ...data } : null;
 }
 
 function getLocationProfile(location) {
   if (!location) return null;
-  const normalized = LEGACY_LOCATION_ALIASES[location] || location;
+  const normalized = normalizeLocationName(location);
   const profile = LOCATION_PROFILES[normalized];
   if (!profile) return null;
   const region = REGION_CATALOG.find((item) => String(item?.name || '') === String(profile.region || ''));
@@ -821,6 +946,10 @@ function getRegionOverview() {
 module.exports = {
   ISLAND_MAP_TEXT,
   buildIslandMapAnsi,
+  getConnectedLocations,
+  areLocationsAdjacent,
+  findLocationPath,
+  getRouteNextHop,
   getPortalDestinations,
   getLocationPortalHub,
   getRegionPortalHubs,

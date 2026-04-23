@@ -9,6 +9,8 @@ loadProjectEnv();
 const {
   LOCATION_DESCRIPTIONS,
   getPortalDestinations,
+  getConnectedLocations,
+  findLocationPath,
   getLocationStoryContext,
   getLocationProfile,
   getNearbyPoints
@@ -31,6 +33,12 @@ const {
   getLocationWeatherProfile
 } = require('./location-weather');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
+const {
+  getChoiceTag,
+  localizeChoiceTag,
+  getChoiceTagPromptLines,
+  isAggressiveChoiceTag
+} = require('../systems/runtime/utils/global-language-resources');
 
 const LANGUAGE_RESOURCES = createGlobalLanguageResources({
   normalizeLangCode: (lang = 'zh-TW') => {
@@ -564,7 +572,7 @@ function normalizeChoiceByLanguage(choice, playerLang = 'zh-TW') {
     name: normalizeOutputByLanguage(choice.name || '', playerLang),
     choice: normalizeOutputByLanguage(choice.choice || '', playerLang),
     desc: normalizeOutputByLanguage(choice.desc || '', playerLang),
-    tag: normalizeOutputByLanguage(choice.tag || '', playerLang)
+    tag: localizeChoiceTag(choice.tag || '', playerLang)
   };
 }
 
@@ -580,17 +588,82 @@ function normalizeDynamicEventMeta(raw = null) {
   };
 }
 
+function buildChoiceRoutePreview(path = [], maxStops = 4) {
+  const list = Array.isArray(path) ? path.filter(Boolean) : [];
+  if (list.length <= maxStops) return list.join(' → ');
+  return `${list.slice(0, maxStops).join(' → ')} → …`;
+}
+
+function normalizeChoiceRouteForMap(choice = {}, player = null, location = '') {
+  if (!choice || typeof choice !== 'object') return choice;
+  const currentLocation = String(location || '').trim();
+  const moveTo = normalizeMoveToLocation(choice?.move_to || choice?.moveTo || '');
+  if (!currentLocation || !moveTo || moveTo === currentLocation) return choice;
+
+  const routePath = typeof findLocationPath === 'function'
+    ? findLocationPath(currentLocation, moveTo)
+    : [];
+  if (!Array.isArray(routePath) || routePath.length < 2) return choice;
+
+  const nextHop = String(routePath[1] || '').trim();
+  const finalTarget = String(routePath[routePath.length - 1] || moveTo).trim();
+  if (!nextHop) return choice;
+
+  const next = { ...choice, move_to: nextHop };
+  if (Object.prototype.hasOwnProperty.call(next, 'moveTo')) delete next.moveTo;
+  if (nextHop === finalTarget) return next;
+
+  const routePreview = buildChoiceRoutePreview(routePath);
+  const playerLang = String(player?.language || 'zh-TW').trim();
+  const replaceTarget = (text = '') => String(text || '').replace(new RegExp(escapeRegex(finalTarget), 'u'), nextHop);
+  const tweakLead = (text = '') => String(text || '')
+    .replace(/^前往/u, '先往')
+    .replace(/^趕往/u, '先趕往')
+    .replace(/^赶往/u, '先赶往')
+    .replace(/^Go to /u, 'Head to ')
+    .replace(/^Move to /u, 'Move to ');
+
+  if (playerLang === 'en') {
+    const originalName = String(choice.name || '').trim();
+    const originalChoice = String(choice.choice || '').trim();
+    const originalDesc = String(choice.desc || '').trim();
+    next.name = originalName ? tweakLead(replaceTarget(originalName)) : `Head to ${nextHop} first`;
+    let choiceText = originalChoice ? tweakLead(replaceTarget(originalChoice)) : `Head to ${nextHop} first`;
+    if (!choiceText.includes(finalTarget)) choiceText = `${choiceText.replace(/[.]\s*$/u, '')}, following the mapped route toward ${finalTarget}`;
+    next.choice = choiceText;
+    let descText = originalDesc ? replaceTarget(originalDesc) : `Secure ${nextHop} first, then continue toward ${finalTarget}`;
+    if (!descText.includes(finalTarget)) descText = `${descText.replace(/[.]\s*$/u, '')} | Final target: ${finalTarget}`;
+    if (routePreview) descText = `${descText} | Route: ${routePreview}`;
+    next.desc = descText;
+    return next;
+  }
+
+  const originalName = String(choice.name || '').trim();
+  const originalChoice = String(choice.choice || '').trim();
+  const originalDesc = String(choice.desc || '').trim();
+  next.name = originalName ? tweakLead(replaceTarget(originalName)) : `先往${nextHop}`;
+  let choiceText = originalChoice ? tweakLead(replaceTarget(originalChoice)) : `先前往${nextHop}`;
+  if (!choiceText.includes(finalTarget)) choiceText = `${choiceText.replace(/[。；]\s*$/u, '')}，沿地圖路線朝${finalTarget}推進`;
+  next.choice = choiceText;
+  let descText = originalDesc ? replaceTarget(originalDesc) : `先到${nextHop}卡位，再往${finalTarget}推進`;
+  if (!descText.includes(finalTarget)) descText = `${descText.replace(/[。；]\s*$/u, '')}｜最終目標：${finalTarget}`;
+  if (routePreview) descText = `${descText}｜路線：${routePreview}`;
+  next.desc = descText;
+  return next;
+}
+
 function normalizeChoiceSemanticMeta(choice = {}, player = null, location = '') {
   if (!choice || typeof choice !== 'object') return choice;
+  const routeNormalized = normalizeChoiceRouteForMap(choice, player, location);
   const dynamicContext = DYNAMIC_WORLD.buildDynamicWorldContext(player, location, {
     playerLang: String(player?.language || 'zh-TW').trim()
   });
-  const styleTag = DYNAMIC_WORLD.inferStyleTag(choice, choice?.hiddenMeta);
-  const hiddenMeta = DYNAMIC_WORLD.normalizeChoiceHiddenMeta(choice?.hiddenMeta, choice, {
+  const styleTag = DYNAMIC_WORLD.inferStyleTag(routeNormalized, routeNormalized?.hiddenMeta);
+  const hiddenMeta = DYNAMIC_WORLD.normalizeChoiceHiddenMeta(routeNormalized?.hiddenMeta, routeNormalized, {
     locationWanted: Number(dynamicContext?.wanted || 0)
   });
-  const dynamicEvent = normalizeDynamicEventMeta(choice?.dynamicEvent || choice?.eventMeta);
-  const out = { ...choice, styleTag, hiddenMeta };
+  const dynamicEvent = normalizeDynamicEventMeta(routeNormalized?.dynamicEvent || routeNormalized?.eventMeta);
+  const out = { ...routeNormalized, styleTag, hiddenMeta };
   if (dynamicEvent) out.dynamicEvent = dynamicEvent;
   return out;
 }
@@ -790,7 +863,7 @@ async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', locati
     mentor_spar:
       `用途：玩家在 ${location || '目前位置'} 遇到正派名師，主動提出友誼賽求指導。\n` +
       '限制：要清楚描述這是「友誼賽」，不是生死戰；語氣尊重且有學習目的。\n' +
-      '固定標籤：tag 必須是 [🤝友誼賽]',
+      `固定標籤：tag 必須是 ${getChoiceTag('friendly_spar', playerLang)}`,
     storage_heist:
       `用途：故事中有人攜帶封存艙，玩家起心動念要直接搶奪。\n` +
       `限制：必須明確是針對「對方手上的封存艙」採取行動；語句要貼合 ${location || '當前場景'}。\n` +
@@ -798,7 +871,7 @@ async function generateSystemChoiceWithAI({ action, playerLang = 'zh-TW', locati
       '限制：choice 必須同時包含「搶奪封存艙」+「現場打開/撬開檢視」+「把內容佔為己有/私吞」。\n' +
       '限制：不得使用模板句型（例如固定開頭「盯準對方手上的封存艙...」）。\n' +
       '限制：這是高風險衝突，choice 句尾必須附上「（會進入戰鬥）」。\n' +
-      '固定標籤：tag 必須是 [⚔️會戰鬥]'
+      `固定標籤：tag 必須是 ${getChoiceTag('combat', playerLang)}`
   }[action];
 
   if (!actionSpec) throw new Error(`Unsupported system choice action: ${action}`);
@@ -843,7 +916,7 @@ ${actionSpec}
 
 async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', newbieMask = false) {
   const langInstruction = getAiLanguageDirective(playerLang, 'plain');
-  const digitalTag = newbieMask ? '[🧩友善報價]' : '[🕳️精明殺價]';
+  const digitalTag = newbieMask ? getChoiceTag('friendly_appraisal', playerLang) : getChoiceTag('mystery_appraisal', playerLang);
   const digitalTask = newbieMask
     ? '第二個選項要對應 market_digital（外在要友善、強調新手照顧與檢測協助，不可直接露出惡意）'
     : '第二個選項要對應 market_digital（話術壓價、對玩家不利但說得漂亮）';
@@ -863,7 +936,7 @@ async function generateMarketChoicesWithAI(playerLang = 'zh-TW', location = '', 
 
 輸出格式（固定兩筆）：
 [
-  {"action":"market_renaiss","name":"...","choice":"...","desc":"...","tag":"[🏪公道鑑價]"},
+  {"action":"market_renaiss","name":"...","choice":"...","desc":"...","tag":"${getChoiceTag('appraisal', playerLang)}"},
   {"action":"market_digital","name":"...","choice":"...","desc":"...","tag":"${digitalTag}"}
 ]
 
@@ -1160,7 +1233,7 @@ async function injectMentorSparChoice(choices, playerLang = 'zh-TW', location = 
       name: '拜訪名師',
       choice: `向${location || '附近'}的正派名師提出友誼賽請求`,
       desc: '在切磋中證明實力，達到門檻可獲收徒指導',
-      tag: '[🤝友誼賽]'
+      tag: getChoiceTag('friendly_spar', playerLang)
     }, playerLang);
   }
 
@@ -1768,12 +1841,12 @@ function parseChoicesFromAIResult(raw = '', playerLang = 'zh-TW', options = {}) 
     }
     const content = line.replace(/^\d+\.?\s*/, '').trim();
     if (!content || content.length < 6) continue;
-    parsed.push(normalizeChoiceSemanticMeta(normalizeChoiceByLanguage({
-      name: content.slice(0, 15),
-      choice: content,
-      desc: content,
-      tag: '[❓有驚喜]'
-    }, playerLang), player, location));
+      parsed.push(normalizeChoiceSemanticMeta(normalizeChoiceByLanguage({
+        name: content.slice(0, 15),
+        choice: content,
+        desc: content,
+        tag: getChoiceTag('surprise', playerLang)
+      }, playerLang), player, location));
   }
   return parsed.slice(0, CHOICE_OUTPUT_COUNT);
 }
@@ -1921,6 +1994,11 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
   let duplicateCount = 0;
   let anchorHitCount = 0;
   let aggressiveCount = 0;
+  const adjacentSet = new Set(
+    location && typeof getConnectedLocations === 'function'
+      ? getConnectedLocations(location)
+      : []
+  );
   const locationRegex = location
     ? new RegExp(`把[「"]?${escapeRegex(location)}[」"]?\\s*(送|帶去|拿去|送去)`, 'u')
     : null;
@@ -1945,17 +2023,20 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
     if (locationRegex && locationRegex.test(text)) issues.push(`第 ${i + 1} 個把地名當作物件`);
     if (moveTo && !text.includes(moveTo)) issues.push(`第 ${i + 1} 個 move_to=${moveTo} 但文案未提到該地點`);
     if (hasCityMoveIntent && !moveTo) issues.push(`第 ${i + 1} 個是跨城移動選項但缺少 move_to 欄位`);
+    if (moveTo && adjacentSet.size > 0 && moveTo !== location && !adjacentSet.has(moveTo)) {
+      issues.push(`第 ${i + 1} 個 move_to=${moveTo} 與目前位置 ${location} 不相鄰；若要去更遠城市，必須改成第一跳城市`);
+    }
 
     if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) {
       anchorHitCount += 1;
     }
-    if (/\[(?:🔥高風險|⚔️會戰鬥)\]/u.test(String(choice?.tag || ''))) {
+    if (isAggressiveChoiceTag(String(choice?.tag || ''))) {
       aggressiveCount += 1;
     }
   }
 
   if (duplicateCount > 0) issues.push(`有 ${duplicateCount} 個重複選項`);
-  if (aggressiveCount < 1) issues.push('至少需要 1 個偏激進選項（[🔥高風險] 或 [⚔️會戰鬥]）');
+  if (aggressiveCount < 1) issues.push('至少需要 1 個偏激進選項（高風險或戰鬥張力）');
   if (locationPlaystyle && Array.isArray(locationPlaystyle.keywords) && locationPlaystyle.keywords.length > 0) {
     const minKeywordHits = Math.max(1, Number(locationPlaystyle.minKeywordHits || 1));
     const keywordHits = countChoiceKeywordHits(list, locationPlaystyle.keywords);
@@ -2757,6 +2838,8 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const nearbyHint = nearbyPoints.length > 0 ? nearbyPoints.join('、') : '周遭地標資訊不足';
   const portalDestinations = typeof getPortalDestinations === 'function' ? getPortalDestinations(location) : [];
   const portalHint = portalDestinations.length > 0 ? portalDestinations.slice(0, 4).join('、') : '附近沒有穩定傳送門';
+  const connectedLocations = typeof getConnectedLocations === 'function' ? getConnectedLocations(location) : [];
+  const connectedHint = connectedLocations.length > 0 ? connectedLocations.join('、') : '（本城無明確相鄰城市資料）';
   const navigationTarget = String(player?.navigationTarget || '').trim();
   const digitalPresenceText = formatRoamingDigitalPresence(location, 2);
   const battleCadence = getBattleCadenceInfo(player);
@@ -2855,9 +2938,27 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     : '';
   const sourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
   const directedDestination = extractDirectedDestinationFromStoryTail(fullStoryText, sourceChoiceText);
+  const directedDestinationFirstHop = directedDestination && directedDestination !== location
+    ? (typeof findLocationPath === 'function'
+      ? String((findLocationPath(location, directedDestination) || [])[1] || directedDestination).trim()
+      : directedDestination)
+    : '';
   const destinationContinuityRule = directedDestination
-    ? `故事結尾已明確指向「${directedDestination}」：5 個選項中至少 1 個要直接銜接「前往${directedDestination}」或「為前往${directedDestination}準備」，不可整組忽略此去向。`
+    ? (directedDestinationFirstHop && directedDestinationFirstHop !== directedDestination
+      ? `故事結尾已明確指向「${directedDestination}」：5 個選項中至少 1 個要直接銜接「先往${directedDestinationFirstHop}」或「為前往${directedDestination}準備」，不可整組忽略此去向。`
+      : `故事結尾已明確指向「${directedDestination}」：5 個選項中至少 1 個要直接銜接「前往${directedDestination}」或「為前往${directedDestination}準備」，不可整組忽略此去向。`)
     : '若結尾明確提到下一站/下一個城市，至少 1 個選項要直接承接該去向，不能只給平行支線。';
+  const routeConstraintRule = (() => {
+    const base = `目前城市是「${location}」，相鄰可直達城市只有：${connectedHint}。一般移動選項的 move_to 只能填這些相鄰城市；若真正目標更遠，本回合 move_to 必須改成第一跳城市。`;
+    if (!navigationTarget) return base;
+    const navFirstHop = typeof findLocationPath === 'function'
+      ? String((findLocationPath(location, navigationTarget) || [])[1] || navigationTarget).trim()
+      : navigationTarget;
+    if (navFirstHop && navFirstHop !== navigationTarget) {
+      return `${base} 目前導航目標是「${navigationTarget}」，若要推進，這回合真正可移動的第一跳是「${navFirstHop}」。`;
+    }
+    return `${base} 目前導航目標是「${navigationTarget}」，若要移動可直接以該城市作為 move_to。`;
+  })();
   const memoryRelevanceRule = '使用記憶內容時，需符合「現在場景可作用」。允許「突然想起過去某句話/某人物提醒」作為起點，但必須寫成可執行路徑（回想→驗證來源→前往對應地點或對象）；若該人物此刻不在場，禁止寫成立即當面互動。';
   const npcRelevanceRule = '禁止憑空新增未鋪陳敵對稱呼（例如匿名滲透者、可疑隊伍）；除非故事全文、當地NPC或附近敵對NPC已出現對應依據。';
   const pendingConflict = player?.pendingConflictFollowup && typeof player.pendingConflictFollowup === 'object'
@@ -2944,6 +3045,7 @@ ${locationWeatherPrompt}
 封存艙尺寸規格：便攜小型艙體（約小背包大小，可單人攜行）
 附近可互動地點：${nearbyHint}
 附近傳送門可通往：${portalHint}
+本城相鄰可直達城市：${connectedHint}
 導航目標：${navigationTarget || '（未設定）'}
 結尾導向地點：${directedDestination || '（未明示）'}
 附近可疑勢力：${digitalPresenceText}
@@ -2957,6 +3059,7 @@ ${memorySection}
 ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
 ${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
 ${truthGatePrompt ? `\n${truthGatePrompt}` : ''}
+${routeConstraintRule ? `\n【地圖路線硬規則】\n${routeConstraintRule}` : ''}
 ${missionChoiceRule ? `\n【關鍵任務選項規則】\n${missionChoiceRule}` : ''}
 ${pendingConflictRule ? `\n【衝突延續硬規則】\n${pendingConflictRule}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
@@ -2984,9 +3087,9 @@ ${anchorText}
 3. 回傳 JSON 陣列，固定 5 筆，每筆格式：
    {"name":"12字內短標題","choice":"12-28字具體動作","desc":"12-30字補充說明","tag":"[風險標籤]","move_to":"目的城市或空字串","action":"explore|social|fight|trade","styleTag":"穩健|交涉|灰線|強奪|追獵|佈局","hiddenMeta":{"law":-2..2,"harm":-2..2,"trust":-2..2,"selfInterest":-2..2,"targetFaction":"beacon|gray|digital|civic|none","witnessRisk":0..1},"dynamicEvent":{"archetype":"","phase":"offered","intensity":1..5,"chainHint":"一句短提示"}}
 3a. 不得少於 5 筆、不得輸出 null/空物件；就算資訊不足也要輸出完整 5 筆且保持合理
-3b. move_to 規則：只有「真的會移動到另一座城市」才填城市名（例如「洛陽城」）；非移動選項必須填空字串 ""
-3c. move_to 只能填地圖中的城市名，且要與該選項文案一致
-3d. move_to 自檢：若 choice 文案出現「前往/趕往/啟程去 + 城市名」，必須填同一城市；若只是城內行動（調查、詢問、監視、交易），move_to 必須是 ""
+3b. move_to 規則：只有「真的會移動到另一座城市」才填城市名；非移動選項必須填空字串 ""
+3c. move_to 只能填地圖中的城市名，且必須是「本城相鄰可直達城市」之一；若真正目標更遠，本回合必須填第一跳城市
+3d. move_to 自檢：若 choice 文案出現「前往/趕往/啟程去 + 城市名」，必須填同一城市；若文案是在描述「先往第一跳、再朝更遠目標推進」，move_to 只能填第一跳城市；若只是城內行動（調查、詢問、監視、交易），move_to 必須是 ""
 3e. 禁止「文案寫跨城但 move_to 空白」與「move_to 有城市但文案沒提該城市」兩種錯誤
 3f. styleTag 必填，且僅能為：穩健、交涉、灰線、強奪、追獵、佈局
 3g. hiddenMeta 必填，且只作系統判讀，不要在文案中出現善惡分數字眼
@@ -3005,7 +3108,7 @@ ${anchorText}
 11a. 禁止模板句型：不可出現「沿著/沿XX繼續追查來源與流向」「先處理本區關鍵」「回到核心線索」這類制式措辭
 11b. 每個選項都要有具體對象（人/物/地點/行動），不能只寫抽象目標
 11c. 禁止把規則文字直接寫進選項（例如「關鍵任務」「唯一來源」「地區進度 x/8」「鎖定某某拿到某證據」）
-12. 至少 1 個選項要偏激進（[🔥高風險] 或 [⚔️會戰鬥]），但不必每輪都立刻開打
+12. 至少 1 個選項要偏激進（高風險或戰鬥張力標籤），但不必每輪都立刻開打
 13. 若島嶼劇情進行中，至少 1 個選項要明確推進島內主題（來自島內引導段），且不得超過 1 個主線強引導選項
 13a. 地區玩法口味必須落地：至少 ${Math.max(1, Number(locationPlaystyle?.minKeywordHits || 1))} 個選項要明顯反映「${locationPlaystyle?.name || '在地探索'}」（${Array.isArray(locationPlaystyle?.keywords) && locationPlaystyle.keywords.length > 0 ? locationPlaystyle.keywords.slice(0, 6).join('、') : '請使用在地語境關鍵詞'}）
 13b. 至少 1 個選項要反映當前天候「${locationWeatherProfile?.name || '晴空'}」帶來的行動差異（例如改走掩體、調整接觸策略、改變查驗方式），但不可模板化
@@ -3023,17 +3126,11 @@ ${storageHeistPromptRule ? `${storageHeistPromptRule}` : ''}
 ${pendingConflictRule ? `${pendingConflictRuleNumber}. ${pendingConflictRule}` : ''}
 
 風險標籤可選（根據劇情選擇適合的）：
-- [🔥高風險] - 可能會受傷或失敗
-- [💰需花錢] - 需要花費金錢
-- [🤝需社交] - 需要與人交談
-- [🔍需探索] - 需要探索或搜尋
-- [⚔️會戰鬥] - 戰鬥張力升高（不一定立刻開打）
-- [🎁高回報] - 成功後收獲豐厚
-- [❓有驚喜] - 結果未知
+${getChoiceTagPromptLines(playerLang)}
 
 額外規則：
 1. 只有「立刻進入戰鬥」的選項，才在句尾加上「（會進入戰鬥）」。
-2. 其餘 [⚔️會戰鬥] 只代表故事走向偏向衝突，不要馬上開打。
+2. 其餘戰鬥張力標籤只代表故事走向偏向衝突，不要馬上開打。
 3. 若故事「結尾段」仍有明確威脅（例如正在逼近、尚未解除），至少要有 1 個衝突相關選項（可為備戰、追蹤、佈防、談判、撤離或立即戰鬥）。
 4. 是否立刻開打由情境判斷：若尚在鋪陳，可先給非即時衝突選項；若已正面對峙，再給立即戰鬥選項。
 
@@ -3045,9 +3142,9 @@ ${pendingConflictRule ? `${pendingConflictRuleNumber}. ${pendingConflictRule}` :
 
 輸出前請先在內部完成自檢（不要把自檢內容輸出）：
 - 檢查 5 筆是否齊全，且每筆都有 name/choice/desc/tag/move_to
-- 檢查至少 1 筆 [🔥高風險] 或 [⚔️會戰鬥]
+- 檢查至少 1 筆高風險或戰鬥張力標籤
 - 檢查至少 ${Math.max(1, Number(locationPlaystyle?.minKeywordHits || 1))} 筆符合地區玩法口味
-- 逐筆檢查 move_to 與文案一致：跨城就填該城；非跨城就填 ""
+- 逐筆檢查 move_to 與文案一致：跨城就填本回合真正移動到的那一站，且該站必須與目前城市相鄰；非跨城就填 ""
 
 ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
 

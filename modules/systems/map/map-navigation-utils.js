@@ -6,6 +6,8 @@ function createMapNavigationUtils(deps = {}) {
     getLocationProfile = () => null,
     getLocationPortalHub = (location = '') => String(location || '').trim(),
     getPortalDestinations = () => [],
+    getConnectedLocations = () => [],
+    findLocationPath = () => [],
     getRegionLocationsByLocation = () => [],
     isMainPortalHubLocation = () => false,
     getTeleportDeviceStockInfo = () => ({ count: 0, soonestRemainingMs: 0 }),
@@ -272,8 +274,8 @@ function createMapNavigationUtils(deps = {}) {
   function pickRoamDestination(player) {
     const from = String(player?.location || '');
     if (!from) return null;
-    const rawCandidates = typeof getPortalDestinations === 'function'
-      ? getPortalDestinations(from)
+    const rawCandidates = typeof getConnectedLocations === 'function'
+      ? getConnectedLocations(from)
       : [];
     const candidates = Array.isArray(rawCandidates)
       ? rawCandidates.filter((loc) => loc && loc !== from)
@@ -330,14 +332,43 @@ function createMapNavigationUtils(deps = {}) {
       return null;
     }
 
-    const entryGate = canEnterLocation(player, targetLocation);
-    if (!entryGate.allowed) {
+    const routePath = typeof findLocationPath === 'function'
+      ? findLocationPath(fromLocation, targetLocation)
+      : [];
+    if (!Array.isArray(routePath) || routePath.length < 2) {
       player.navigationTarget = '';
-      const blockedLine = tx.mapAutoTravelGateBlocked(targetLocation, fromLocation, entryGate.winRate);
+      const blockedLine = typeof tx.mapAutoTravelNoRoute === 'function'
+        ? tx.mapAutoTravelNoRoute(targetLocation, fromLocation)
+        : `🧭 你想前往 **${targetLocation}**，但從 **${fromLocation}** 找不到合法地圖路線。`;
       result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
       result.autoTravel = {
         fromLocation,
         targetLocation,
+        blocked: true,
+        reason: 'route_missing'
+      };
+      if (typeof queueMemory === 'function') {
+        queueMemory({
+          type: '移動',
+          content: `嘗試探索前往${targetLocation}`,
+          outcome: '受阻｜地圖路線不存在',
+          importance: 1,
+          tags: ['travel', 'wander', 'blocked', 'route_missing']
+        });
+      }
+      return result.autoTravel;
+    }
+
+    const stepLocation = String(routePath[1] || '').trim();
+    const entryGate = canEnterLocation(player, stepLocation);
+    if (!entryGate.allowed) {
+      player.navigationTarget = '';
+      const blockedLine = tx.mapAutoTravelGateBlocked(stepLocation, fromLocation, entryGate.winRate);
+      result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
+      result.autoTravel = {
+        fromLocation,
+        targetLocation: stepLocation,
+        finalTargetLocation: targetLocation,
         blocked: true,
         winRate: entryGate.winRate,
         reason: 'entry_gate'
@@ -345,7 +376,9 @@ function createMapNavigationUtils(deps = {}) {
       if (typeof queueMemory === 'function') {
         queueMemory({
           type: '移動',
-          content: `嘗試探索前往${targetLocation}`,
+          content: stepLocation === targetLocation
+            ? `嘗試探索前往${targetLocation}`
+            : `嘗試沿地圖路線前往${targetLocation}（下一站：${stepLocation}）`,
           outcome: `受阻｜勝率 ${format1(entryGate.winRate)}%`,
           importance: 1,
           tags: ['travel', 'wander', 'blocked', 'entry_gate']
@@ -354,21 +387,34 @@ function createMapNavigationUtils(deps = {}) {
       return result.autoTravel;
     }
 
-    player.location = targetLocation;
+    player.location = stepLocation;
     syncLocationArcLocation(player);
     ensurePlayerIslandState(player);
     player.portalMenuOpen = false;
-    player.navigationTarget = '';
+    const arrived = stepLocation === targetLocation;
+    player.navigationTarget = arrived ? '' : targetLocation;
 
-    const moveLine = tx.mapAutoTravelMoved(fromLocation, targetLocation);
+    const moveLine = arrived
+      ? tx.mapAutoTravelMoved(fromLocation, targetLocation)
+      : (typeof tx.mapAutoTravelMovedStep === 'function'
+        ? tx.mapAutoTravelMovedStep(fromLocation, stepLocation, targetLocation)
+        : `🧭 你依照地圖座標先從 **${fromLocation}** 推進到 **${stepLocation}**，繼續朝 **${targetLocation}** 前進。`);
     result.message = `${String(result.message || '').trim()}\n\n${moveLine}`.trim();
-    result.autoTravel = { fromLocation, targetLocation, reason: 'manual_navigation' };
+    result.autoTravel = {
+      fromLocation,
+      targetLocation: stepLocation,
+      finalTargetLocation: targetLocation,
+      reason: 'manual_navigation',
+      arrived
+    };
 
     if (typeof queueMemory === 'function') {
       queueMemory({
         type: '移動',
-        content: `依座標導航從${fromLocation}前往${targetLocation}`,
-        outcome: '區內自由探索移動',
+        content: arrived
+          ? `依座標導航從${fromLocation}前往${targetLocation}`
+          : `依座標導航先從${fromLocation}前往${stepLocation}`,
+        outcome: arrived ? '區內自由探索移動' : `沿地圖路線前進（目標：${targetLocation}）`,
         importance: 2,
         tags: ['travel', 'navigation', 'map_move']
       });

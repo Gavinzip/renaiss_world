@@ -2,6 +2,7 @@ function createAdventureStatusUtils(deps = {}) {
   const {
     normalizeLangCode = (v) => v || 'zh-TW',
     formatPetHpWithRecovery = (pet) => `${Math.round(Number(pet?.hp || 0))}/${Math.round(Number(pet?.maxHp || 0))}`,
+    getPetElementDisplayName = (v = '') => String(v || '未知屬性'),
     // Global language resource accessor (section-based).
     getLanguageSection = null,
     ISLAND_STORY = null,
@@ -16,6 +17,12 @@ function createAdventureStatusUtils(deps = {}) {
         statusHp: '氣血',
         statusEnergy: '能量',
         statusCurrency: 'Rns 代幣',
+        fieldPet: '🐾 寵物',
+        fieldHp: '⚔️ 氣血',
+        fieldCurrency: '💰 Rns 代幣',
+        fieldLocation: '📍 位置',
+        fieldLuck: '🌟 幸運',
+        fieldWanted: '🚨 通緝級',
         mainlineDone: (location) => `📖 本區主線：已完成（${location}）`,
         mainlineProgress: (location) => `📖 本區主線：進行中（${location}）`,
         missionBoss: (done) => `｜關鍵任務：擊敗四巨頭全員（${done ? '已完成' : '未完成'}）`,
@@ -33,6 +40,12 @@ function createAdventureStatusUtils(deps = {}) {
         statusHp: '气血',
         statusEnergy: '能量',
         statusCurrency: 'Rns 代币',
+        fieldPet: '🐾 宠物',
+        fieldHp: '⚔️ 气血',
+        fieldCurrency: '💰 Rns 代币',
+        fieldLocation: '📍 位置',
+        fieldLuck: '🌟 幸运',
+        fieldWanted: '🚨 通缉级',
         mainlineDone: (location) => `📖 本区主线：已完成（${location}）`,
         mainlineProgress: (location) => `📖 本区主线：进行中（${location}）`,
         missionBoss: (done) => `｜关键任务：击败四巨头全员（${done ? '已完成' : '未完成'}）`,
@@ -50,6 +63,12 @@ function createAdventureStatusUtils(deps = {}) {
         statusHp: 'HP',
         statusEnergy: 'Energy',
         statusCurrency: 'Rns Tokens',
+        fieldPet: '🐾 Pet',
+        fieldHp: '⚔️ HP',
+        fieldCurrency: '💰 Rns',
+        fieldLocation: '📍 Location',
+        fieldLuck: '🌟 Luck',
+        fieldWanted: '🚨 Wanted Lv',
         mainlineDone: (location) => `📖 Local Mainline: Completed (${location})`,
         mainlineProgress: (location) => `📖 Local Mainline: In Progress (${location})`,
         missionBoss: (done) => ` | Key Mission: Defeat all Four Commanders (${done ? 'Done' : 'Pending'})`,
@@ -76,6 +95,24 @@ function createAdventureStatusUtils(deps = {}) {
     const tx = getAdventureText(lang || player?.language || 'zh-TW');
     const hpText = formatPetHpWithRecovery(pet);
     return `${tx.statusHp} ${hpText} | ${tx.statusEnergy} ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | ${tx.statusCurrency} ${player.stats.財富} | ${player.location}`;
+  }
+
+  function buildMainStatusFields(player, pet, lang = '', options = {}) {
+    const tx = getAdventureText(lang || player?.language || 'zh-TW');
+    const safeLang = lang || player?.language || 'zh-TW';
+    const wantedLevel = Math.max(0, Number(options?.wantedLevel || 0));
+    return [
+      {
+        name: tx.fieldPet,
+        value: `${pet?.name || 'Unknown'} (${getPetElementDisplayName(pet?.type || pet?.element || '', safeLang)})`,
+        inline: true
+      },
+      { name: tx.fieldHp, value: formatPetHpWithRecovery(pet), inline: true },
+      { name: tx.fieldCurrency, value: String(player?.stats?.財富 || 0), inline: true },
+      { name: tx.fieldLocation, value: String(player?.location || ''), inline: true },
+      { name: tx.fieldLuck, value: String(player?.stats?.運氣 || 0), inline: true },
+      { name: tx.fieldWanted, value: String(wantedLevel), inline: true }
+    ];
   }
 
   function getIslandMainlineProgressMeta(player) {
@@ -115,6 +152,7 @@ function createAdventureStatusUtils(deps = {}) {
   return {
     getAdventureText,
     buildMainStatusBar,
+    buildMainStatusFields,
     getIslandMainlineProgressMeta,
     buildMainlineProgressLine
   };

@@ -1,3 +1,5 @@
+const { getSkillChipPrefix } = require('./utils/global-language-resources');
+
 function getRuntimeConstants(env = process.env) {
   const RESETDATA_PASSWORD = String(env.RESETDATA_PASSWORD || '0121').trim();
   const ADMIN_OWNER_USER_ID = String(env.ADMIN_OWNER_USER_ID || '1051129116419702784').trim();
@@ -31,7 +33,7 @@ function getRuntimeConstants(env = process.env) {
   const CHOICE_DISPLAY_COUNT = 5;
   const BATTLE_ESTIMATE_MAX_TURNS = 16;
   const CUSTOM_INPUT_OPTION_RATE = Math.max(0, Math.min(1, Number(env.CUSTOM_INPUT_OPTION_RATE || 0.01)));
-  const SKILL_CHIP_PREFIX = '技能晶片：';
+  const SKILL_CHIP_PREFIX = getSkillChipPrefix('zh-TW');
   const PROTECTED_MOVE_IDS = new Set(['flee']);
   const ENCOUNTER_RECENT_WINDOW_TURNS = Math.max(2, Math.min(20, Number(env.ENCOUNTER_RECENT_WINDOW_TURNS || 6)));
   const ENCOUNTER_RECENT_LIMIT = Math.max(2, Math.min(20, Number(env.ENCOUNTER_RECENT_LIMIT || 10)));

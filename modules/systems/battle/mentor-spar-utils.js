@@ -16,6 +16,7 @@ function createMentorSparUtils(deps = {}) {
     MENTOR_SPAR_COOLDOWN_TURNS = 4,
     CHOICE_DISPLAY_COUNT = 5
   } = deps;
+  const { getChoiceTag } = require('../runtime/utils/global-language-resources');
 
   function ensureMentorSparRecord(player) {
     if (!player || typeof player !== 'object') return null;
@@ -180,7 +181,7 @@ function createMentorSparUtils(deps = {}) {
     if (/🤝|社交|交談/u.test(tag)) {
       return {
         action: 'social',
-        tag: '[🤝需社交]',
+        tag: getChoiceTag('social', player?.language || 'zh-TW'),
         name: '整理導師筆記',
         choice: `在${location}整理剛獲得的導師筆記，向在地人確認實戰用法`,
         desc: '先把新知識消化後再挑戰更高難度'
@@ -188,7 +189,7 @@ function createMentorSparUtils(deps = {}) {
     }
     return {
       action: 'explore',
-      tag: '[🔍需探索]',
+      tag: getChoiceTag('explore', player?.language || 'zh-TW'),
       name: '尋找可學對象',
       choice: `在${location}先整理線索並觀察周邊，等待合適導師現身`,
       desc: '附近沒有可切磋對象或仍在冷卻中，先做準備更穩妥'
@@ -204,7 +205,7 @@ function createMentorSparUtils(deps = {}) {
     source.mentorName = picked.name;
     source.mentorLoc = picked.loc;
     source.mentorTitle = picked.title;
-    source.tag = '[🤝友誼賽]';
+    source.tag = getChoiceTag('friendly_spar', player?.language || 'zh-TW');
     source.name = `向${picked.name}請求友誼賽`;
     source.choice = `向${picked.name}提出友誼賽請求，驗證你對戰術的掌握（會進入戰鬥）`;
     source.desc = `${picked.title}願意指導你；每位導師只可切磋一次`;

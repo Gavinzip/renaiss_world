@@ -55,7 +55,7 @@ function createPetCommandUtils(deps = {}) {
         { name: t('atk', uiLang), value: String(pet.attack), inline: true },
         { name: t('def', uiLang), value: String(pet.defense), inline: true },
         { name: '📊 等級', value: String(pet.level), inline: true },
-        { name: '🏷️ 屬性', value: getPetElementDisplayName(pet.type), inline: true }
+        { name: `🏷️ ${t('element', uiLang)}`, value: getPetElementDisplayName(pet.type, uiLang), inline: true }
       )
       .addFields({ name: '📜 招式', value: dmgInfo, inline: false });
 
@@ -63,7 +63,7 @@ function createPetCommandUtils(deps = {}) {
       embed.addFields(
         { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
         { name: t('gold', uiLang), value: String(player.stats.財富), inline: true },
-        { name: '📍 位置', value: player.location, inline: true }
+        { name: `📍 ${t('location', uiLang)}`, value: player.location, inline: true }
       );
     }
 

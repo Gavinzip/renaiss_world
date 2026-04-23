@@ -19,6 +19,7 @@ function createClaimPetUiUtils(deps = {}) {
       await interaction.update({ content: '❌ 找不到角色！', embeds: [], components: [] }).catch(() => {});
       return;
     }
+    const uiLang = player.language || 'zh-TW';
 
     const capacity = getPetCapacityForUser(user.id);
     const embed = new EmbedBuilder()
@@ -32,9 +33,9 @@ function createClaimPetUiUtils(deps = {}) {
       );
 
     const row1 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('claim_new_pet_element_water').setLabel('💧 水屬性').setStyle(ButtonStyle.Primary).setDisabled(capacity.availableSlots <= 0),
-      new ButtonBuilder().setCustomId('claim_new_pet_element_fire').setLabel('🔥 火屬性').setStyle(ButtonStyle.Danger).setDisabled(capacity.availableSlots <= 0),
-      new ButtonBuilder().setCustomId('claim_new_pet_element_grass').setLabel('🌿 草屬性').setStyle(ButtonStyle.Success).setDisabled(capacity.availableSlots <= 0)
+      new ButtonBuilder().setCustomId('claim_new_pet_element_water').setLabel(`💧 ${getPetElementDisplayName('水', uiLang)}`).setStyle(ButtonStyle.Primary).setDisabled(capacity.availableSlots <= 0),
+      new ButtonBuilder().setCustomId('claim_new_pet_element_fire').setLabel(`🔥 ${getPetElementDisplayName('火', uiLang)}`).setStyle(ButtonStyle.Danger).setDisabled(capacity.availableSlots <= 0),
+      new ButtonBuilder().setCustomId('claim_new_pet_element_grass').setLabel(`🌿 ${getPetElementDisplayName('草', uiLang)}`).setStyle(ButtonStyle.Success).setDisabled(capacity.availableSlots <= 0)
     );
     const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('open_profile').setLabel('💳 返回檔案').setStyle(ButtonStyle.Secondary)
@@ -54,10 +55,10 @@ function createClaimPetUiUtils(deps = {}) {
     }
   }
 
-  async function showClaimPetNameModal(interaction, element = '水') {
+  async function showClaimPetNameModal(interaction, element = '水', lang = 'zh-TW') {
     const modal = new ModalBuilder()
       .setCustomId('claim_new_pet_name_modal')
-      .setTitle(`🐾 新寵物命名（${getPetElementDisplayName(element)}）`);
+      .setTitle(`🐾 新寵物命名（${getPetElementDisplayName(element, lang)}）`);
 
     const input = new TextInputBuilder()
       .setCustomId('claim_pet_name')

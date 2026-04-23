@@ -167,19 +167,27 @@ function createOnboardingProfileUtils(deps = {}) {
     return 0x0ea5e9;
   }
 
-  function getPetElementDisplayName(element = '') {
+  function getUnknownElementLabel(lang = 'zh-TW') {
+    if (String(lang || 'zh-TW') === 'en') return 'Unknown Element';
+    if (String(lang || 'zh-TW') === 'zh-CN') return '未知属性';
+    return '未知屬性';
+  }
+
+  function getPetElementDisplayName(element = '', lang = 'zh-TW') {
     const normalized = normalizePetElementCode(element);
-    if (normalized === '火') return '火屬性';
-    if (normalized === '草') return '草屬性';
-    return '水屬性';
+    const langText = getLanguageText(lang || 'zh-TW');
+    if (normalized === '火') return langText.fire || '火屬性';
+    if (normalized === '草') return langText.grass || '草屬性';
+    if (normalized === '水') return langText.water || '水屬性';
+    return getUnknownElementLabel(lang);
   }
 
   function normalizeKnownBattleElement(raw = '') {
     const text = String(raw || '').trim();
     if (!text) return '';
-    if (text === '水' || /^water$/i.test(text) || /水屬性/u.test(text)) return '水';
-    if (text === '火' || /^fire$/i.test(text) || /火屬性/u.test(text)) return '火';
-    if (text === '草' || /^grass$/i.test(text) || /草屬性/u.test(text)) return '草';
+    if (text === '水' || /^water$/i.test(text) || /水[屬属]性/u.test(text)) return '水';
+    if (text === '火' || /^fire$/i.test(text) || /火[屬属]性/u.test(text)) return '火';
+    if (text === '草' || /^grass$/i.test(text) || /草[屬属]性/u.test(text)) return '草';
     return '';
   }
 
@@ -191,13 +199,14 @@ function createOnboardingProfileUtils(deps = {}) {
     return '🧪';
   }
 
-  function formatBattleElementDisplay(raw = '', fallback = '未知屬性') {
+  function formatBattleElementDisplay(raw = '', fallback = '', lang = 'zh-TW') {
     const text = String(raw || '').trim();
-    if (!text) return `❔ ${fallback}`;
+    const safeFallback = String(fallback || getUnknownElementLabel(lang)).trim() || getUnknownElementLabel(lang);
+    if (!text) return `❔ ${safeFallback}`;
     const normalized = normalizeKnownBattleElement(text);
-    if (normalized) return `${getBattleElementEmoji(normalized)} ${getPetElementDisplayName(normalized)}`;
-    const cleaned = text.replace(/屬性$/u, '').trim();
-    const label = cleaned ? `${cleaned}屬性` : fallback;
+    if (normalized) return `${getBattleElementEmoji(normalized)} ${getPetElementDisplayName(normalized, lang)}`;
+    const cleaned = text.replace(/[屬属]性$/u, '').trim();
+    const label = cleaned || safeFallback;
     return `${getBattleElementEmoji(text)} ${label}`;
   }
 

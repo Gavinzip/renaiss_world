@@ -1,3 +1,5 @@
+const CONTENT_LOCALIZATION = require('./content-localization-utils');
+
 function createGlobalLanguageResources(deps = {}) {
   const {
     normalizeLangCode = (lang = 'zh-TW') => String(lang || 'zh-TW')
@@ -73,7 +75,21 @@ function createGlobalLanguageResources(deps = {}) {
         hp: '生命',
         atk: '攻擊',
         def: '防禦',
-        gold: 'Rns 代幣'
+        gold: 'Rns 代幣',
+        pet: '寵物',
+        element: '屬性',
+        location: '位置',
+        luck: '幸運',
+        wanted: '通緝級',
+        speed: '速度',
+        name: '名字',
+        gender: '性別',
+        partnerElement: '夥伴屬性',
+        petCapacity: '寵物額度',
+        petList: '寵物列表',
+        petManagement: '寵物管理',
+        petNamed: '寵物已命名',
+        petNaming: '寵物命名'
       },
       'zh-CN': {
         welcome: '欢迎来到 Renaiss 星球！',
@@ -95,7 +111,21 @@ function createGlobalLanguageResources(deps = {}) {
         hp: '生命',
         atk: '攻击',
         def: '防御',
-        gold: 'Rns 代币'
+        gold: 'Rns 代币',
+        pet: '宠物',
+        element: '属性',
+        location: '位置',
+        luck: '幸运',
+        wanted: '通缉级',
+        speed: '速度',
+        name: '名字',
+        gender: '性别',
+        partnerElement: '伙伴属性',
+        petCapacity: '宠物额度',
+        petList: '宠物列表',
+        petManagement: '宠物管理',
+        petNamed: '宠物已命名',
+        petNaming: '宠物命名'
       },
       en: {
         welcome: 'Welcome to Renaiss Planet!',
@@ -117,7 +147,21 @@ function createGlobalLanguageResources(deps = {}) {
         hp: 'HP',
         atk: 'ATK',
         def: 'DEF',
-        gold: 'Rns Token'
+        gold: 'Rns',
+        pet: 'Pet',
+        element: 'Element',
+        location: 'Location',
+        luck: 'Luck',
+        wanted: 'Wanted Lv',
+        speed: 'Speed',
+        name: 'Name',
+        gender: 'Gender',
+        partnerElement: 'Partner Element',
+        petCapacity: 'Pet Capacity',
+        petList: 'Pet List',
+        petManagement: 'Pet Management',
+        petNamed: 'Pet Named',
+        petNaming: 'Pet Naming'
       }
     },
 
@@ -288,6 +332,12 @@ function createGlobalLanguageResources(deps = {}) {
         statusHp: '氣血',
         statusEnergy: '能量',
         statusCurrency: 'Rns 代幣',
+        fieldPet: '🐾 寵物',
+        fieldHp: '⚔️ 氣血',
+        fieldCurrency: '💰 Rns 代幣',
+        fieldLocation: '📍 位置',
+        fieldLuck: '🌟 幸運',
+        fieldWanted: '🚨 通緝級',
         mainlineDone: (location) => `📖 本區主線：已完成（${location}）`,
         mainlineProgress: (location) => `📖 本區主線：進行中（${location}）`,
         missionBoss: (done) => `｜關鍵任務：擊敗四巨頭全員（${done ? '已完成' : '未完成'}）`,
@@ -305,6 +355,12 @@ function createGlobalLanguageResources(deps = {}) {
         statusHp: '气血',
         statusEnergy: '能量',
         statusCurrency: 'Rns 代币',
+        fieldPet: '🐾 宠物',
+        fieldHp: '⚔️ 气血',
+        fieldCurrency: '💰 Rns 代币',
+        fieldLocation: '📍 位置',
+        fieldLuck: '🌟 幸运',
+        fieldWanted: '🚨 通缉级',
         mainlineDone: (location) => `📖 本区主线：已完成（${location}）`,
         mainlineProgress: (location) => `📖 本区主线：进行中（${location}）`,
         missionBoss: (done) => `｜关键任务：击败四巨头全员（${done ? '已完成' : '未完成'}）`,
@@ -322,6 +378,12 @@ function createGlobalLanguageResources(deps = {}) {
         statusHp: 'HP',
         statusEnergy: 'Energy',
         statusCurrency: 'Rns Tokens',
+        fieldPet: '🐾 Pet',
+        fieldHp: '⚔️ HP',
+        fieldCurrency: '💰 Rns',
+        fieldLocation: '📍 Location',
+        fieldLuck: '🌟 Luck',
+        fieldWanted: '🚨 Wanted Lv',
         mainlineDone: (location) => `📖 Local Mainline: Completed (${location})`,
         mainlineProgress: (location) => `📖 Local Mainline: In Progress (${location})`,
         missionBoss: (done) => ` | Key Mission: Defeat all Four Commanders (${done ? 'Done' : 'Pending'})`,
@@ -1049,5 +1111,6 @@ function createGlobalLanguageResources(deps = {}) {
 }
 
 module.exports = {
-  createGlobalLanguageResources
+  createGlobalLanguageResources,
+  ...CONTENT_LOCALIZATION
 };

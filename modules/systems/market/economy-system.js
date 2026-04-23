@@ -12,6 +12,13 @@ const path = require('path');
 const { LEGACY_DATA_DIR } = require('../../core/storage-paths');
 const { createGlobalLanguageResources } = require('../runtime/utils/global-language-resources');
 const { createSqliteMirroredSingletonStore } = require('../data/sqlite-mirrored-state');
+const {
+  localizeScriptOnly,
+  buildItemNamePack,
+  getSkillChipUiText,
+  formatSkillChipDisplay,
+  getMoveLocalization
+} = require('../runtime/utils/global-language-resources');
 
 const PROTECTED_ITEMS = new Set(['乾糧一包', '水囊']);
 
@@ -278,31 +285,37 @@ function findAndRemoveNamedItems(list = [], targetName = '', quantity = 1) {
 
 function reservePetMoveForListing(player, itemRef = {}, itemName = '') {
   ensurePlayerEconomy(player);
+  const uiLang = player?.language || 'zh-TW';
+  const chipText = getSkillChipUiText(uiLang);
   const ownerId = normalizeText(player?.id || '', 36);
   const petId = normalizeText(itemRef.petId || '', 64);
   const moveId = normalizeText(itemRef.moveId || '', 64);
   const moveNameHint = normalizeText(itemRef.moveName || itemName || '', 80);
   if (!ownerId) return { success: false, reason: '找不到玩家資訊。' };
-  if (!petId || !moveId) return { success: false, reason: '技能晶片掛賣資料不完整。' };
+  if (!petId || !moveId) return { success: false, reason: chipText.listingIncomplete };
 
   const pet = typeof PET.getPetById === 'function' ? PET.getPetById(petId) : null;
   if (!pet || String(pet.ownerId || '') !== ownerId) {
-    return { success: false, reason: '找不到可掛賣的技能晶片來源。' };
+    return { success: false, reason: chipText.listingSourceMissing };
   }
   if (!Array.isArray(pet.moves)) pet.moves = [];
 
   const idx = pet.moves.findIndex((m) => String(m?.id || '').trim() === moveId);
   if (idx < 0) {
-    return { success: false, reason: `技能「${moveNameHint || moveId}」不存在或已被移除。` };
+    const missingMoveName = getMoveLocalization(moveId, moveNameHint || moveId, uiLang) || moveNameHint || moveId;
+    return { success: false, reason: chipText.listingMoveMissing(missingMoveName) };
   }
   const move = pet.moves[idx];
   if (move?.effect?.flee) {
-    return { success: false, reason: '逃跑技能不可掛賣。' };
+    return { success: false, reason: chipText.cannotSellFlee };
   }
 
   const activeIds = Array.isArray(pet.activeMoveIds) ? pet.activeMoveIds.map((id) => String(id || '').trim()) : [];
   if (activeIds.includes(moveId)) {
-    return { success: false, reason: `請先把「${move.name || moveId}」從上陣招式卸下，再掛賣。` };
+    return {
+      success: false,
+      reason: chipText.unequipBeforeSell(getMoveLocalization(moveId, move.name || moveId, uiLang) || move.name || moveId)
+    };
   }
 
   const [removed] = pet.moves.splice(idx, 1);
@@ -313,7 +326,10 @@ function reservePetMoveForListing(player, itemRef = {}, itemName = '') {
   }
   if (typeof PET.savePet === 'function') PET.savePet(pet);
 
-  const displayName = normalizeText(itemName || `技能晶片：${removed?.name || moveId}`, 120);
+  const displayName = normalizeText(
+    itemName || formatSkillChipDisplay(moveId, removed?.name || moveId, 'zh-TW'),
+    120
+  );
   return {
     success: true,
     targetName: displayName,
@@ -429,7 +445,7 @@ function restoreReservedItemsToOwner(player, reservedItems = []) {
       }
       if (!restored) {
         if (!Array.isArray(player.inventory)) player.inventory = [];
-        player.inventory.unshift(`技能晶片：${moveName}`);
+        player.inventory.unshift(formatSkillChipDisplay(moveId, moveName, 'zh-TW'));
       }
       continue;
     }
@@ -471,14 +487,22 @@ function transferReservedItemsToBuyer(player, reservedItems = []) {
           const learned = typeof PET.learnMove === 'function' ? PET.learnMove(buyerPet, moveId) : null;
           if (learned?.success) {
             if (typeof PET.savePet === 'function') PET.savePet(buyerPet);
-            transferNotes.push(`已學會技能：${moveName}`);
+            transferNotes.push(
+              getSkillChipUiText(player?.language || 'zh-TW').learnedSkill(
+                getMoveLocalization(moveId, moveName, player?.language || 'zh-TW') || moveName
+              )
+            );
             continue;
           }
         }
       }
       if (!Array.isArray(player.inventory)) player.inventory = [];
-      player.inventory.unshift(`技能晶片：${moveName}`);
-      transferNotes.push(`獲得技能晶片：${moveName}`);
+      player.inventory.unshift(formatSkillChipDisplay(moveId, moveName, 'zh-TW'));
+      transferNotes.push(
+        getSkillChipUiText(player?.language || 'zh-TW').gainedSkillChip(
+          getMoveLocalization(moveId, moveName, player?.language || 'zh-TW') || moveName
+        )
+      );
       continue;
     }
     if (!Array.isArray(player.inventory)) player.inventory = [];
@@ -526,6 +550,10 @@ function createSellListing(player, marketType = 'renaiss', payload = {}) {
   const normalizedMarket = normalizeMarketType(marketType);
   const finalQty = Math.max(1, Math.floor(Number(reserve.quantity || qty || 1)));
   const finalItemName = normalizeText(reserve.targetName || payload.itemName || '', 120);
+  const finalItemNames = sanitizeLocalizedTextMap(
+    buildItemNamePack(reserve.targetName || payload.itemName || ''),
+    buildItemNamePack(finalItemName)
+  );
 
   const listing = {
     id: createListingId(),
@@ -534,6 +562,7 @@ function createSellListing(player, marketType = 'renaiss', payload = {}) {
     ownerId,
     ownerName: normalizeText(player.name || `玩家${ownerId.slice(-4)}`, 36),
     itemName: finalItemName,
+    itemNames: finalItemNames,
     itemKind: String(reserve.itemKind || (isPetMoveListing ? 'pet_move' : 'item')),
     quantity: finalQty,
     unitPrice,
@@ -586,6 +615,7 @@ function createBuyListing(player, marketType = 'renaiss', payload = {}) {
     ownerId,
     ownerName: normalizeText(player.name || `玩家${ownerId.slice(-4)}`, 36),
     itemName,
+    itemNames: sanitizeLocalizedTextMap(buildItemNamePack(itemName), buildItemNamePack(itemName)),
     quantity: qty,
     unitPrice,
     totalPrice,
@@ -716,6 +746,7 @@ function buyFromSellListing(buyer, listingId, options = {}) {
       listingId: listing.id,
       marketType: listing.marketType,
       itemName: listing.itemName,
+      itemNames: listing.itemNames || null,
       quantity: Number(listing.quantity || 1),
       totalPrice: total,
       sellerName: listing.ownerName,
@@ -801,6 +832,7 @@ function fulfillBuyListing(seller, listingId, options = {}) {
       listingId: listing.id,
       marketType: listing.marketType,
       itemName: listing.itemName,
+      itemNames: listing.itemNames || null,
       quantity: Number(listing.quantity || 1),
       totalPrice: payout,
       buyerName: listing.ownerName
@@ -1252,6 +1284,24 @@ function sanitizeLootDesc(desc = '', fallback = '') {
   return cleaned || fallback;
 }
 
+function sanitizeLocalizedTextMap(value = {}, fallback = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const safeFallback = fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {};
+  const zhTw = sanitizeLootName(source['zh-TW'] || safeFallback['zh-TW'] || '');
+  const zhCn = sanitizeLootName(source['zh-CN'] || localizeScriptOnly(zhTw, 'zh-CN') || safeFallback['zh-CN'] || zhTw);
+  const en = sanitizeLootName(source.en || safeFallback.en || zhTw);
+  return { 'zh-TW': zhTw, 'zh-CN': zhCn, en };
+}
+
+function sanitizeLocalizedDescMap(value = {}, fallback = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const safeFallback = fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {};
+  const zhTw = sanitizeLootDesc(source['zh-TW'] || safeFallback['zh-TW'] || '');
+  const zhCn = sanitizeLootDesc(source['zh-CN'] || localizeScriptOnly(zhTw, 'zh-CN') || safeFallback['zh-CN'] || zhTw);
+  const en = sanitizeLootDesc(source.en || safeFallback.en || zhTw);
+  return { 'zh-TW': zhTw, 'zh-CN': zhCn, en };
+}
+
 function buildFallbackLootFlavor(meta = {}) {
   const rarity = String(meta.rarity || '普通');
   const enemyName = String(meta.enemyName || '敵人').replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '') || '敵人';
@@ -1260,30 +1310,45 @@ function buildFallbackLootFlavor(meta = {}) {
   const value = rollValueByRarity(rarity);
 
   if (meta.sourceType === 'combat') {
+    const name = `${pickOne(TROPHY_PREFIX, '碎影')}${enemyName}${pickOne(['徽章', '碎片', '核心', '殘晶'], '碎片')}`;
+    const desc = `來自 ${enemyName} 的${rarity}戰鬥證物。`;
     return {
-      name: `${pickOne(TROPHY_PREFIX, '碎影')}${enemyName}${pickOne(['徽章', '碎片', '核心', '殘晶'], '碎片')}`,
-      desc: `來自 ${enemyName} 的${rarity}戰鬥證物。`,
+      name,
+      names: sanitizeLocalizedTextMap(buildItemNamePack(name)),
+      desc,
+      descs: sanitizeLocalizedDescMap({ 'zh-TW': desc }),
       value
     };
   }
   if (meta.sourceType === 'forage') {
+    const name = `${pickOne(RARE_PLANTS, '野生草藥')}${pickOne(['葉', '莖', '萃露', '花粉'], '萃露')}`;
+    const desc = `${location} 採集取得的${rarity}${category}。`;
     return {
-      name: `${pickOne(RARE_PLANTS, '野生草藥')}${pickOne(['葉', '莖', '萃露', '花粉'], '萃露')}`,
-      desc: `${location} 採集取得的${rarity}${category}。`,
+      name,
+      names: sanitizeLocalizedTextMap(buildItemNamePack(name)),
+      desc,
+      descs: sanitizeLocalizedDescMap({ 'zh-TW': desc }),
       value
     };
   }
   if (meta.sourceType === 'hunt') {
-    const animalName = String(meta.animalName || '獵物');
+    const name = `${String(meta.animalName || '獵物')}${pickOne(['皮毛', '骨片', '腺囊', '紋刺'], '素材')}`;
+    const desc = `${location} 狩獵取得的${rarity}${category}。`;
     return {
-      name: `${animalName}${pickOne(['皮毛', '骨片', '腺囊', '紋刺'], '素材')}`,
-      desc: `${location} 狩獵取得的${rarity}${category}。`,
+      name,
+      names: sanitizeLocalizedTextMap(buildItemNamePack(name)),
+      desc,
+      descs: sanitizeLocalizedDescMap({ 'zh-TW': desc }),
       value
     };
   }
+  const name = `${pickOne(RARE_ORES, '古礦石')}${pickOne(['原礦', '晶核', '紋印', '殘片'], '原礦')}`;
+  const desc = `${location} 探索發現的${rarity}${category}。`;
   return {
-    name: `${pickOne(RARE_ORES, '古礦石')}${pickOne(['原礦', '晶核', '紋印', '殘片'], '原礦')}`,
-    desc: `${location} 探索發現的${rarity}${category}。`,
+    name,
+    names: sanitizeLocalizedTextMap(buildItemNamePack(name)),
+    desc,
+    descs: sanitizeLocalizedDescMap({ 'zh-TW': desc }),
     value
   };
 }
@@ -1296,7 +1361,6 @@ async function generateLootFlavorWithAI(meta = {}) {
   const rarity = String(meta.rarity || '普通');
   const valueRange = getLootValueRange(rarity);
   const lang = String(meta.lang || 'zh-TW');
-  const languageRule = getAiLanguageDirective(lang, 'outputFullstop');
   const sourceType = String(meta.sourceType || 'combat');
   const category = String(meta.category || '素材');
   const location = String(meta.location || '未知地點');
@@ -1312,8 +1376,12 @@ async function generateLootFlavorWithAI(meta = {}) {
 
   const prompt = `你是遊戲掉落命名助手，請回傳 JSON 物件，不要其他文字。
 欄位：
-- name: 掉落物名稱（2~12字，不要空格、不要引號）
-- desc: 一句描述（12~40字）
+- nameZhTw: 掉落物繁體中文名稱（2~12字，不要空格、不要引號）
+- nameZhCn: 掉落物簡體中文名稱（2~12字，不要空格、不要引號）
+- nameEn: 掉落物英文名稱（2~20字，可用空格）
+- descZhTw: 一句繁體中文描述（12~40字）
+- descZhCn: 一句簡體中文描述（12~40字）
+- descEn: One English description (8~24 words)
 - value: 整數價格
 
 條件：
@@ -1323,7 +1391,7 @@ async function generateLootFlavorWithAI(meta = {}) {
 - ${sourceHint}
 - 價格必須介於 ${valueRange.min} 到 ${valueRange.max}
 - 名稱不要和「${fallback.name}」完全相同
-- ${languageRule}`;
+- 三種語言名稱要描述同一件掉落物，不可互相矛盾`;
 
   const body = JSON.stringify({
     model: MINIMAX_MODEL,
@@ -1337,16 +1405,26 @@ async function generateLootFlavorWithAI(meta = {}) {
     const raw = await requestMiniMax(body, apiKey, LOOT_AI_TIMEOUT_MS);
     const parsed = parseJsonFromText(raw);
     if (!parsed || typeof parsed !== 'object') return fallback;
-    const safeName = sanitizeLootName(parsed.name, fallback.name);
-    const safeDesc = sanitizeLootDesc(parsed.desc, fallback.desc);
+    const safeNames = sanitizeLocalizedTextMap({
+      'zh-TW': parsed.nameZhTw,
+      'zh-CN': parsed.nameZhCn,
+      en: parsed.nameEn
+    }, fallback.names);
+    const safeDescs = sanitizeLocalizedDescMap({
+      'zh-TW': parsed.descZhTw,
+      'zh-CN': parsed.descZhCn,
+      en: parsed.descEn
+    }, fallback.descs);
     const safeValue = clamp(
       Number(parsed.value || fallback.value),
       valueRange.min,
       valueRange.max
     );
     return {
-      name: safeName,
-      desc: safeDesc,
+      name: safeNames['zh-TW'],
+      names: safeNames,
+      desc: safeDescs['zh-TW'],
+      descs: safeDescs,
       value: Math.round(safeValue)
     };
   } catch {
@@ -1354,15 +1432,22 @@ async function generateLootFlavorWithAI(meta = {}) {
   }
 }
 
-function makeTradeGood(name, category, rarity, value, origin, desc = '') {
+function makeTradeGood(name, category, rarity, value, origin, desc = '', options = {}) {
+  const namePack = sanitizeLocalizedTextMap(
+    options?.names || buildItemNamePack(name),
+    buildItemNamePack(name)
+  );
+  const descPack = sanitizeLocalizedDescMap(options?.descs || { 'zh-TW': desc }, { 'zh-TW': desc });
   return {
     id: `good_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    name,
+    name: namePack['zh-TW'] || name,
+    names: namePack,
     category,
     rarity,
     value: Math.max(1, Math.floor(value)),
     origin: origin || '未知來源',
-    desc: desc || '',
+    desc: descPack['zh-TW'] || desc || '',
+    descs: descPack,
     createdAt: Date.now()
   };
 }
@@ -1394,7 +1479,8 @@ async function createCombatLoot(enemy, location = '', luck = 50, options = {}) {
     rarity.key,
     flavored.value,
     `${location} 戰鬥掉落`,
-    flavored.desc || `從 ${enemyName} 身上取得的戰鬥證物。`
+    flavored.desc || `從 ${enemyName} 身上取得的戰鬥證物。`,
+    { names: flavored.names, descs: flavored.descs }
   );
 }
 
@@ -1414,7 +1500,8 @@ async function createForageLoot(location = '', luck = 50, options = {}) {
     rarity.key,
     flavored.value,
     `${location} 採集`,
-    flavored.desc || '可作煉藥或交易素材。'
+    flavored.desc || '可作煉藥或交易素材。',
+    { names: flavored.names, descs: flavored.descs }
   );
 }
 
@@ -1435,7 +1522,8 @@ async function createHuntLoot(animalName = '獵物', location = '', luck = 50, o
     rarity.key,
     flavored.value,
     `${location} 狩獵`,
-    flavored.desc || '新鮮獵獲，適合賣給行商或廚商。'
+    flavored.desc || '新鮮獵獲，適合賣給行商或廚商。',
+    { names: flavored.names, descs: flavored.descs }
   );
 }
 
@@ -1455,7 +1543,8 @@ async function createTreasureLoot(location = '', luck = 50, options = {}) {
     rarity.key,
     flavored.value,
     `${location} 探索`,
-    flavored.desc || '高價值稀有素材。'
+    flavored.desc || '高價值稀有素材。',
+    { names: flavored.names, descs: flavored.descs }
   );
 }
 

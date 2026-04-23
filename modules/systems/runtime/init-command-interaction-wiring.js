@@ -124,6 +124,7 @@ function initCommandInteractionWiring(deps = {}) {
   const { handleMovesSelectMenu } = MOVES_SELECT_UTILS;
 
   const CLAIM_PET_INTERACTION_UTILS = createClaimPetInteractionUtils({
+    CORE,
     getPetCapacityForUser,
     showClaimPetElementPanel,
     showClaimPetNameModal,

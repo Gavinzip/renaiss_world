@@ -13,6 +13,7 @@ function createChoicePolicyUtils(deps = {}) {
     AGGRESSIVE_CHOICE_TARGET_RATE = 0.4,
     WANTED_AMBUSH_MIN_LEVEL = 3,
     getPortalDestinations,
+    getRouteNextHop = () => '',
     getLocationProfile,
     isDigitalMaskPhaseForPlayer,
     syncLocationArcLocation,
@@ -37,6 +38,7 @@ function createChoicePolicyUtils(deps = {}) {
     clearPendingConflictFollowup,
     markSystemChoiceExposure: markSystemChoiceExposureImpl
   } = deps;
+  const { getChoiceTag } = require('../../systems/runtime/utils/global-language-resources');
 
   function isPortalChoice(choice) {
     if (!choice || typeof choice !== 'object') return false;
@@ -110,6 +112,11 @@ function createChoicePolicyUtils(deps = {}) {
 
   function buildDirectedDestinationChoice(player = null, destination = '', storyText = '') {
     const currentLocation = String(player?.location || '').trim();
+    const stepDestination = currentLocation && typeof getRouteNextHop === 'function'
+      ? String(getRouteNextHop(currentLocation, destination) || destination).trim()
+      : String(destination || '').trim();
+    const finalDestination = String(destination || '').trim();
+    const isRouteStep = Boolean(stepDestination && finalDestination && stepDestination !== finalDestination);
     const clue = /灰帳|灰账/u.test(storyText)
       ? '灰帳記錄線'
       : (/物流|流向|供應鏈|供应链/u.test(storyText)
@@ -117,14 +124,18 @@ function createChoicePolicyUtils(deps = {}) {
         : (/刻印|零件|後加工|后加工/u.test(storyText)
           ? '零件刻印'
           : '當前線索'));
-    const fromHint = currentLocation && currentLocation !== destination ? `離開${currentLocation}，` : '';
+    const fromHint = currentLocation && currentLocation !== stepDestination ? `離開${currentLocation}，` : '';
     return {
       action: 'travel',
-      move_to: destination,
-      tag: '[🔍需探索]',
-      name: `前往${destination}`,
-      choice: `${fromHint}趕往${destination}追查${clue}背後來源`,
-      desc: `承接當前劇情，改在${destination}做交叉核對`
+      move_to: stepDestination,
+      tag: getChoiceTag('explore', player?.language || 'zh-TW'),
+      name: isRouteStep ? `先往${stepDestination}` : `前往${finalDestination}`,
+      choice: isRouteStep
+        ? `${fromHint}先趕往${stepDestination}，沿路追查通往${finalDestination}的${clue}`
+        : `${fromHint}趕往${finalDestination}追查${clue}背後來源`,
+      desc: isRouteStep
+        ? `承接當前劇情，先到${stepDestination}卡位，再朝${finalDestination}做交叉核對`
+        : `承接當前劇情，改在${finalDestination}做交叉核對`
     };
   }
 
@@ -205,7 +216,9 @@ function createChoicePolicyUtils(deps = {}) {
       ...choice,
       action: marketAction,
       move_to: '',
-      tag: marketAction === 'market_digital' ? '[🕳️神秘鑑價]' : '[🏪鑑價站]',
+      tag: marketAction === 'market_digital'
+        ? getChoiceTag('mystery_appraisal', player?.language || 'zh-TW')
+        : getChoiceTag('appraisal', player?.language || 'zh-TW'),
       name: marketAction === 'market_digital' ? '前往神秘鑑價站' : '前往附近鑑價站',
       choice: `先進入${location}附近鑑價站，再到櫃檯選擇刮刮樂`,
       desc: '刮刮樂只在鑑價站內操作，不會在主選項直接執行'
@@ -301,7 +314,7 @@ function createChoicePolicyUtils(deps = {}) {
     const location = String(player?.location || '附近據點');
     return {
       action: 'portal_intent',
-      tag: '[❓有驚喜]',
+      tag: getChoiceTag('surprise', player?.language || 'zh-TW'),
       name: '靠近傳送門節點',
       choice: `先前往${location}附近的傳送門節點查看可前往的地點`,
       desc: '可開啟主傳送門地圖並選擇下一個區域'
@@ -312,7 +325,7 @@ function createChoicePolicyUtils(deps = {}) {
     const location = String(player?.location || '附近據點');
     return {
       action: 'wish_pool',
-      tag: '[❓有驚喜]',
+      tag: getChoiceTag('surprise', player?.language || 'zh-TW'),
       name: '前往許願池',
       choice: `循著${location}的微光指引，去許願池嘗試許願`,
       desc: '可輸入自訂願望，結果可能實現、反轉或附帶代價'
@@ -429,7 +442,7 @@ function createChoicePolicyUtils(deps = {}) {
     if (preferRenaiss) {
       return {
         action: 'market_renaiss',
-        tag: '[🏪鑑價站]',
+        tag: getChoiceTag('appraisal', player?.language || 'zh-TW'),
         name: '前往附近鑑價站',
         choice: `帶著手邊素材到${location}附近鑑價站先做真偽檢測`,
         desc: '先看檢測結果與行情，再決定是否出售'
@@ -437,7 +450,9 @@ function createChoicePolicyUtils(deps = {}) {
     }
     return {
       action: 'market_digital',
-      tag: newbieMask ? '[🧩友善鑑價]' : '[🕳️神秘鑑價]',
+      tag: newbieMask
+        ? getChoiceTag('friendly_appraisal', player?.language || 'zh-TW')
+        : getChoiceTag('mystery_appraisal', player?.language || 'zh-TW'),
       name: '前往神秘鑑價站',
       choice: `在${location}附近找一間神秘鑑價站，先做檢測再議價`,
       desc: '表面條件看似優惠，簽之前先看細節'
@@ -492,21 +507,21 @@ function createChoicePolicyUtils(deps = {}) {
     const location = String(player?.location || '附近');
     const templates = [
       {
-        tag: '[🎁高回報]',
+        tag: getChoiceTag('reward', player?.language || 'zh-TW'),
         action: 'forage',
         name: '搜索路邊素材',
         choice: `沿著${location}邊緣採集可出售的草藥與素材`,
         desc: '穩定取得可交易物，適合前期快速累積資金'
       },
       {
-        tag: '[🔍需探索]',
+        tag: getChoiceTag('explore', player?.language || 'zh-TW'),
         action: 'treasure',
         name: '勘查碎礦脈',
         choice: `檢查${location}附近裂隙，嘗試撿到可賣碎晶`,
         desc: '有機會直接撿到高價素材，回報高於一般探索'
       },
       {
-        tag: '[⚔️會戰鬥]',
+        tag: getChoiceTag('combat', player?.language || 'zh-TW'),
         action: 'hunt',
         name: '追蹤可賣獵物',
         choice: `追蹤附近小型野獸，取得可出售獵物素材`,
@@ -552,7 +567,7 @@ function createChoicePolicyUtils(deps = {}) {
       : target.enemy;
     return {
       action: 'location_story_battle',
-      tag: '[⚔️會戰鬥]',
+      tag: getChoiceTag('combat', player?.language || 'zh-TW'),
       name: `攔截 ${displayNpcName}`,
       choice: choiceText,
       desc: descText,
@@ -620,7 +635,7 @@ function createChoicePolicyUtils(deps = {}) {
     const location = String(player?.location || '附近區域').trim() || '附近區域';
     return {
       action: 'location_story_battle',
-      tag: '[⚔️會戰鬥]',
+      tag: getChoiceTag('combat', player?.language || 'zh-TW'),
       name: '強奪可疑鑑價品',
       choice: `攔下剛在${location}兜售可疑鑑價品的人，直接打倒並奪下貨樣（會進入戰鬥）`,
       desc: '高風險：你選擇正面開打，嘗試奪取對方攜帶的可疑貨樣',
@@ -632,7 +647,7 @@ function createChoicePolicyUtils(deps = {}) {
     const location = String(player?.location || '附近區域').trim() || '附近區域';
     return {
       action: 'conflict',
-      tag: '[⚔️會戰鬥]',
+      tag: getChoiceTag('combat', player?.language || 'zh-TW'),
       name: '先行佈防追蹤',
       choice: `在${location}提前布置觀測點，追蹤可疑勢力下一步動向`,
       desc: '衝突節奏升溫中：先備戰，必要時再立刻交戰'
@@ -661,7 +676,7 @@ function createChoicePolicyUtils(deps = {}) {
         const location = String(player?.location || '附近區域').trim() || '附近區域';
         injected = {
           action: 'fight',
-          tag: '[⚔️會戰鬥]',
+          tag: getChoiceTag('combat', player?.language || 'zh-TW'),
           name: '主動迎擊可疑勢力',
           choice: `在${location}主動攔截尾隨你的可疑勢力（會進入戰鬥）`,
           desc: `戰鬥節奏點 ${cadence.step}/${cadence.span}：將衝突拉到正面對決`

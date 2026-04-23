@@ -15,6 +15,12 @@ function createMarketHelperUtils(deps = {}) {
     normalizePetMoveLoadout = (pet) => ({ activeMoveIds: Array.isArray(pet?.activeMoveIds) ? pet.activeMoveIds : [] }),
     getPetAttackMoves = (pet) => Array.isArray(pet?.moves) ? pet.moves : []
   } = deps;
+const {
+    getLocalizedItemName,
+    localizeScriptOnly,
+    formatSkillChipDisplay,
+    getSkillChipUiText
+  } = require('../runtime/utils/global-language-resources');
 
   function parseMarketTypeFromCustomId(customId = '', fallback = 'renaiss') {
     if (String(customId || '').includes('_digital')) return 'digital';
@@ -94,14 +100,15 @@ function createMarketHelperUtils(deps = {}) {
     return chunks.length > 0 ? chunks : [String(emptyText || '（空）')];
   }
 
-  function buildMarketListingLine(listing = {}, idx = 0) {
+  function buildMarketListingLine(listing = {}, idx = 0, lang = 'zh-TW') {
     const qty = Math.max(1, Number(listing?.quantity || 1));
     const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
     const total = Math.max(1, Number(listing?.totalPrice || qty * unitPrice));
     const owner = String(listing?.ownerName || '匿名玩家');
     const note = String(listing?.note || '').trim();
     const noteText = note ? `｜備註:${note}` : '';
-    const line = `${idx + 1}. ${listing.itemName} x${qty}｜單價 ${unitPrice}｜總價 ${total}｜掛單:${owner}${noteText}`;
+    const itemName = getLocalizedItemName(listing, lang) || String(listing?.itemName || '商品');
+    const line = `${idx + 1}. ${itemName} x${qty}｜單價 ${unitPrice}｜總價 ${total}｜掛單:${owner}${noteText}`;
     return line.length > 180 ? `${line.slice(0, 177)}...` : line;
   }
 
@@ -247,6 +254,7 @@ function createMarketHelperUtils(deps = {}) {
 
   function buildShopSellDraftOptions(player, ownerId) {
     ECON.ensurePlayerEconomy(player);
+    const uiLang = String(player?.language || 'zh-TW').trim() || 'zh-TW';
     const stacked = new Map();
 
     const addStack = (rawName, source, amount = 1, extra = {}) => {
@@ -303,12 +311,16 @@ function createMarketHelperUtils(deps = {}) {
       .map((entry) => ({
         kind: 'item',
         itemName: String(entry.itemName || '').trim(),
+        itemDisplayName: getLocalizedItemName(String(entry.itemName || '').trim(), uiLang),
         quantityMax: Math.max(1, Number(entry.quantity || 1)),
         itemRef: { kind: 'item', source: Array.isArray(entry.sources) ? entry.sources[0] : 'inventory' },
         rarity: normalizeListingRarity(entry.rarity || '普通'),
         referencePrice: Math.max(1, Math.floor(Number(entry.referencePrice || estimateStoryReferencePriceByName(entry.itemName || '')))),
-        label: `[${normalizeListingRarity(entry.rarity || '普通')}] ${String(entry.itemName || '')}`.slice(0, 100),
-        description: `庫存 ${Math.max(1, Number(entry.quantity || 1))}｜參考價 ${Math.max(1, Math.floor(Number(entry.referencePrice || 1)))} Rns`
+        label: `[${normalizeListingRarity(entry.rarity || '普通')}] ${getLocalizedItemName(String(entry.itemName || '').trim(), uiLang) || String(entry.itemName || '')}`.slice(0, 100),
+        description: localizeScriptOnly(
+          `庫存 ${Math.max(1, Number(entry.quantity || 1))}｜參考價 ${Math.max(1, Math.floor(Number(entry.referencePrice || 1)))} Rns`,
+          uiLang
+        )
       }));
 
     let blockedActiveSkillCount = 0;
@@ -333,9 +345,13 @@ function createMarketHelperUtils(deps = {}) {
             : '普通'
         );
         const moveRefPrice = estimateMoveReferencePriceByTier(Number(move?.tier || 1));
+        const canonicalItemName = formatSkillChipDisplay(moveId, moveName, 'zh-TW');
+        const localizedItemName = getLocalizedItemName(canonicalItemName, uiLang) || canonicalItemName;
+        const chipText = getSkillChipUiText(uiLang);
         options.push({
           kind: 'pet_move',
-          itemName: `技能晶片：${moveName}`,
+          itemName: canonicalItemName,
+          itemDisplayName: localizedItemName,
           quantityMax: 1,
           rarity: moveRarity,
           referencePrice: moveRefPrice,
@@ -346,8 +362,8 @@ function createMarketHelperUtils(deps = {}) {
             moveId,
             moveName
           },
-          label: `[${moveRarity}] ${pet.name}｜${moveName}`.slice(0, 100),
-          description: `技能晶片｜參考價 ${moveRefPrice} Rns｜未上陣`
+          label: `[${moveRarity}] ${pet.name}｜${localizedItemName}`.slice(0, 100),
+          description: chipText.notEquippedYet(moveRefPrice)
         });
       }
     }

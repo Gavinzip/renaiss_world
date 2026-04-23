@@ -16,6 +16,7 @@ function initStoryRuntimeUtils(deps = {}) {
     normalizeLangCode,
     getLanguageSection,
     formatPetHpWithRecovery,
+    getPetElementDisplayName,
     normalizeComparableStoryText,
     extractStoryDialogues,
     appendNpcDialogueLog,
@@ -40,6 +41,7 @@ function initStoryRuntimeUtils(deps = {}) {
     normalizeLangCode,
     getLanguageSection,
     formatPetHpWithRecovery,
+    getPetElementDisplayName,
     ISLAND_STORY,
     MAIN_STORY
   });

@@ -6,7 +6,11 @@
 const { sanitizeWorldObject } = require('../../core/style-sanitizer');
 const BATTLE = require('../../systems/battle/battle-system');
 const ISLAND_STORY = require('./island-story');
-const { getLocationPortalHub, getLocationStoryMetadata } = require('../world-map');
+const {
+  getLocationPortalHub,
+  getLocationStoryMetadata,
+  findLocationPath
+} = require('../world-map');
 
 const STORY_ACTS = {
   1: 'Act 1 誘惑（The Cheap Choice）',
@@ -199,6 +203,12 @@ function pickVariant(lines = [], seed = 0) {
 
 function clamp(num, min, max) {
   return Math.max(min, Math.min(max, Number(num || 0)));
+}
+
+function formatRoutePreview(path = [], maxStops = 4) {
+  const list = Array.isArray(path) ? path.filter(Boolean) : [];
+  if (list.length <= maxStops) return list.join(' → ');
+  return `${list.slice(0, maxStops).join(' → ')} → …`;
 }
 
 function getStoryWantedPressure(player, context = {}) {
@@ -505,6 +515,10 @@ function suggestMissionAutoTravel(player = null, context = {}) {
   const fromRegion = String(getRegionIdByLocation(currentLocation) || '').trim();
   const toRegion = String(getRegionIdByLocation(targetLocation) || '').trim();
   if (!fromRegion || !toRegion || fromRegion !== toRegion) return null;
+  const routePath = findLocationPath(currentLocation, targetLocation);
+  if (!Array.isArray(routePath) || routePath.length < 2) return null;
+  const nextHop = String(routePath[1] || '').trim();
+  if (!nextHop) return null;
 
   const missionState = ensureMissionState(state);
   const row = missionState?.regions?.[mission.regionId] || null;
@@ -526,16 +540,24 @@ function suggestMissionAutoTravel(player = null, context = {}) {
   state.lastMissionAutoTravelTurn = storyTurns;
   const npcName = String(mission.npcName || '關鍵NPC').trim() || '關鍵NPC';
   const evidenceName = String(mission.evidenceName || '關鍵證據').trim() || '關鍵證據';
-  const appendText = (storyTurns % 2 === 0)
-    ? `🧭 你把 ${currentLocation} 的線索先收束，沿著在地口供與物流路徑，低調轉往 **${targetLocation}**。\n🎯 目前目標鎖定：接觸 **${npcName}**，補齊「${evidenceName}」。`
-    : `🧭 你沒有硬闖下一段戰線，而是依照前面蒐到的口供，先移動到 **${targetLocation}** 佈點。\n🎯 下一步：在當地接觸 **${npcName}**，把「${evidenceName}」拿到手。`;
+  const routePreview = formatRoutePreview(routePath);
+  const appendText = nextHop === targetLocation
+    ? ((storyTurns % 2 === 0)
+      ? `🧭 你把 ${currentLocation} 的線索先收束，沿著在地口供與物流路徑，低調轉往 **${targetLocation}**。\n🎯 目前目標鎖定：接觸 **${npcName}**，補齊「${evidenceName}」。`
+      : `🧭 你沒有硬闖下一段戰線，而是依照前面蒐到的口供，先移動到 **${targetLocation}** 佈點。\n🎯 下一步：在當地接觸 **${npcName}**，把「${evidenceName}」拿到手。`)
+    : ((storyTurns % 2 === 0)
+      ? `🧭 你把 ${currentLocation} 的線索先收束，沿著地圖路線先轉往 **${nextHop}**，逐步接近 **${targetLocation}**。\n🗺️ 路線：${routePreview}\n🎯 目前目標鎖定：接觸 **${npcName}**，補齊「${evidenceName}」。`
+      : `🧭 你沒有直接硬闖到 **${targetLocation}**，而是依照前面蒐到的口供，先移動到 **${nextHop}** 卡位。\n🗺️ 路線：${routePreview}\n🎯 下一步：沿地圖路線接近 **${npcName}**，把「${evidenceName}」拿到手。`);
   return {
     fromLocation: currentLocation,
-    targetLocation,
+    targetLocation: nextHop,
+    finalTargetLocation: targetLocation,
     npcName,
     evidenceName,
     appendText,
-    memory: `你為了本區主線，從 ${currentLocation} 轉往 ${targetLocation} 追查 ${npcName}。`
+    memory: nextHop === targetLocation
+      ? `你為了本區主線，從 ${currentLocation} 轉往 ${targetLocation} 追查 ${npcName}。`
+      : `你為了本區主線，先由 ${currentLocation} 轉往 ${nextHop}，沿地圖路線逐步接近 ${targetLocation}。`
   };
 }
 

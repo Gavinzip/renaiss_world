@@ -1,5 +1,6 @@
 function createClaimPetInteractionUtils(deps = {}) {
   const {
+    CORE,
     getPetCapacityForUser = () => ({ availableSlots: 0, currentPets: 0, maxPets: 0 }),
     showClaimPetElementPanel = async () => {},
     showClaimPetNameModal = async () => {},
@@ -28,8 +29,9 @@ function createClaimPetInteractionUtils(deps = {}) {
         }).catch(() => {});
         return true;
       }
+      const player = typeof CORE?.loadPlayer === 'function' ? CORE.loadPlayer(user.id) : null;
       setPlayerTempData(user.id, 'claimPetElement', element);
-      await showClaimPetNameModal(interaction, element);
+      await showClaimPetNameModal(interaction, element, player?.language || 'zh-TW');
       return true;
     }
 
@@ -45,8 +47,10 @@ function createClaimPetInteractionUtils(deps = {}) {
       const pet = outcome.pet;
       const move = outcome.selectedMove;
       const cap = outcome.capacity || getPetCapacityForUser(user.id);
+      const player = typeof CORE?.loadPlayer === 'function' ? CORE.loadPlayer(user.id) : null;
+      const uiLang = player?.language || 'zh-TW';
       const msg =
-        `✅ 已領取新寵物：**${pet.name}**（${getPetElementDisplayName(pet.type)}）\n` +
+        `✅ 已領取新寵物：**${pet.name}**（${getPetElementDisplayName(pet.type, uiLang)}）\n` +
         `✨ 初始天賦：${move?.name || '未知'}\n` +
         `📦 目前寵物額度：${cap.currentPets}/${cap.maxPets}`;
       await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});

@@ -27,7 +27,21 @@ function createUiTextUtils(deps = {}) {
       hp: '生命',
       atk: '攻擊',
       def: '防禦',
-      gold: 'Rns 代幣'
+      gold: 'Rns 代幣',
+      pet: '寵物',
+      element: '屬性',
+      location: '位置',
+      luck: '幸運',
+      wanted: '通緝級',
+      speed: '速度',
+      name: '名字',
+      gender: '性別',
+      partnerElement: '夥伴屬性',
+      petCapacity: '寵物額度',
+      petList: '寵物列表',
+      petManagement: '寵物管理',
+      petNamed: '寵物已命名',
+      petNaming: '寵物命名'
     },
     'zh-CN': {
       welcome: '欢迎来到 Renaiss 星球！',
@@ -49,7 +63,21 @@ function createUiTextUtils(deps = {}) {
       hp: '生命',
       atk: '攻击',
       def: '防御',
-      gold: 'Rns 代币'
+      gold: 'Rns 代币',
+      pet: '宠物',
+      element: '属性',
+      location: '位置',
+      luck: '幸运',
+      wanted: '通缉级',
+      speed: '速度',
+      name: '名字',
+      gender: '性别',
+      partnerElement: '伙伴属性',
+      petCapacity: '宠物额度',
+      petList: '宠物列表',
+      petManagement: '宠物管理',
+      petNamed: '宠物已命名',
+      petNaming: '宠物命名'
     },
     en: {
       welcome: 'Welcome to Renaiss Planet!',
@@ -71,7 +99,21 @@ function createUiTextUtils(deps = {}) {
       hp: 'HP',
       atk: 'ATK',
       def: 'DEF',
-      gold: 'Rns Token'
+      gold: 'Rns',
+      pet: 'Pet',
+      element: 'Element',
+      location: 'Location',
+      luck: 'Luck',
+      wanted: 'Wanted Lv',
+      speed: 'Speed',
+      name: 'Name',
+      gender: 'Gender',
+      partnerElement: 'Partner Element',
+      petCapacity: 'Pet Capacity',
+      petList: 'Pet List',
+      petManagement: 'Pet Management',
+      petNamed: 'Pet Named',
+      petNaming: 'Pet Naming'
     }
   };
 

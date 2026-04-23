@@ -89,13 +89,13 @@ function createChoiceRenderUtils(deps = {}) {
       choice.choice || '',
       choice.desc || ''
     ].join(' ');
-    if (/(🔥|高風險)/u.test(tagText)) return 'high_risk';
-    if (/(💰|需花錢|花費|購買|買入)/u.test(tagText)) return 'spend';
-    if (/(🤝|需社交|社交|交談|談判)/u.test(tagText)) return 'social';
-    if (/(🔍|需探索|探索|搜尋|調查)/u.test(tagText)) return 'explore';
-    if (/(⚔️|會戰鬥|戰鬥|對戰|決鬥)/u.test(tagText)) return 'combat';
-    if (/(🎁|高回報|豐厚回報|報酬高)/u.test(tagText)) return 'high_reward';
-    if (/(❓|有驚喜|未知|奇遇|傳送|許願)/u.test(tagText)) return 'surprise';
+    if (/(🔥|高風險|高风险|high\s*risk)/iu.test(tagText)) return 'high_risk';
+    if (/(💰|需花錢|需花钱|花費|花费|購買|购买|買入|costs?\s*money|spend)/iu.test(tagText)) return 'spend';
+    if (/(🤝|需社交|社交|交談|交谈|談判|谈判|social|friendly\s*spar)/iu.test(tagText)) return 'social';
+    if (/(🔍|需探索|探索|搜尋|搜寻|調查|调查|explore)/iu.test(tagText)) return 'explore';
+    if (/(⚔️|會戰鬥|会战斗|戰鬥|战斗|對戰|对战|決鬥|决斗|combat)/iu.test(tagText)) return 'combat';
+    if (/(🎁|高回報|高回报|豐厚回報|丰厚回报|報酬高|high\s*reward)/iu.test(tagText)) return 'high_reward';
+    if (/(❓|有驚喜|有惊喜|未知|奇遇|傳送|传送|許願|许愿|uncertain|surprise)/iu.test(tagText)) return 'surprise';
     return 'unknown';
   }
 
@@ -107,7 +107,7 @@ function createChoiceRenderUtils(deps = {}) {
       .replace(/^【[^】]{1,16}】\s*/u, '')
       .replace(/^（[^）]{1,16}）\s*/u, '')
       .replace(/^[\p{Extended_Pictographic}]+\s*/u, '')
-      .replace(/^(探索|社交|戰鬥|購買|花錢|高風險|高回報|驚喜|傳送|許願)[：:]\s*/u, '');
+      .replace(/^(探索|社交|戰鬥|战斗|購買|购买|花錢|花钱|高風險|高风险|高回報|高回报|驚喜|惊喜|傳送|传送|許願|许愿|Explore|Social|Combat|Costs Money|High Risk|High Reward|Uncertain)[：:]\s*/iu, '');
     return clean.trim();
   }
 

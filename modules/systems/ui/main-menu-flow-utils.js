@@ -27,6 +27,7 @@ function createMainMenuFlowUtils(deps = {}) {
     finishGenerationState = () => {},
     getAdventureText,
     buildMainStatusBar,
+    buildMainStatusFields = null,
     buildChoiceOptionsText,
     buildMainlineProgressLine,
     getPetElementDisplayName = (v) => String(v || '未知屬性'),
@@ -56,6 +57,21 @@ function createMainMenuFlowUtils(deps = {}) {
     triggerMainlineForeshadowAIInBackground,
     releaseStoryLock
   } = deps;
+  const { getGenerationStatusText } = require('../runtime/utils/global-language-resources');
+  const buildStatusFields = typeof buildMainStatusFields === 'function'
+    ? buildMainStatusFields
+    : (player, pet, lang = '', options = {}) => [
+      {
+        name: '🐾 寵物',
+        value: `${pet?.name || 'Unknown'} (${getPetElementDisplayName(pet?.type || pet?.element || '', lang || player?.language || 'zh-TW')})`,
+        inline: true
+      },
+      { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
+      { name: '💰 Rns 代幣', value: String(player?.stats?.財富 || 0), inline: true },
+      { name: '📍 位置', value: String(player?.location || ''), inline: true },
+      { name: '🌟 幸運', value: String(player?.stats?.運氣 || 0), inline: true },
+      { name: '🚨 通緝級', value: String(Math.max(0, Number(options?.wantedLevel || 0))), inline: true }
+    ];
 
 function sanitizeStoryTurnMarkerLine(storyText = '') {
   const source = String(storyText || '');
@@ -220,16 +236,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       .setTitle(`⚔️ ${player.name} - ${pet.name}`)
       .setColor(getAlignmentColor(player.alignment))
       .setDescription(description)
-      .addFields(
-        { name: '🐾 寵物', value: `${pet.name} (${getPetElementDisplayName(pet.type)})`, inline: true },
-        { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
-        { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
-      )
-      .addFields(
-        { name: '📍 位置', value: player.location, inline: true },
-        { name: '🌟 幸運', value: String(player.stats.運氣), inline: true },
-        { name: '🚨 通緝級', value: String(wantedLevel), inline: true }
-      );
+      .addFields(...buildStatusFields(player, pet, player.language || 'zh-TW', { wantedLevel }));
     
     const buttons = buildEventChoiceButtons(choices, player.id);
     appendMainMenuUtilityButtons(buttons, player);
@@ -260,17 +267,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     if (isPendingGeneration && interaction) {
       const busyUiText = getAdventureText(player.language || 'zh-TW');
       const busyStatusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
-      const busyHintByPhase = {
-        loading: 'AI 說書人正在構思故事...',
-        memory_context: 'AI 說書人正在整理記憶脈絡...',
-        generating_story: 'AI 說書人正在撰寫故事...',
-        story_ready: '故事已送達，正在生成選項...',
-        generating_choices: '故事已送達，正在生成選項...',
-        choices_ready: '選項已完成，正在排版回傳...',
-        recovered_snapshot: '已恢復上次快照，正在整理畫面...',
-        resume_cached: '已恢復上次故事與選項，正在同步畫面...'
-      };
-      const busyHint = busyHintByPhase[generationPhase] || 'AI 說書人正在構思故事...';
+      const generationText = getGenerationStatusText(player.language || 'zh-TW');
+      const busyHint = generationText[generationPhase] || generationText.loading;
       const busyMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
       const busyDesc = `${financeNoticeBlock}${worldIntroBlock}**${busyUiText.statusLabel}：【${busyStatusBar}】**${busyMainlineLine ? `\n${busyMainlineLine}` : ''}\n\n⏳ *${busyHint}*${portalGuideBlock}`;
       const busyEmbed = new EmbedBuilder()
@@ -342,9 +340,12 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   const eventMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
 
   // 先用 Loading 訊息回覆（先故事、後選項）
+  const generationText = getGenerationStatusText(player.language || 'zh-TW');
   const loadingHint = hasRecoverableStoryOnly
-    ? 'AI 說書人正在補齊上次中斷的選項...'
-    : (forceFreshStory ? 'AI 說書人正在承接戰鬥結果重塑新篇章...' : 'AI 說書人正在構思故事...');
+    ? (generationText.recovering_choices || generationText.loading)
+    : (forceFreshStory
+      ? (generationText.battle_fresh_story || generationText.loading)
+      : generationText.loading);
   const loadingMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
   const loadingDesc = `${financeNoticeBlock}${worldIntroBlock}**${uiText.statusLabel}：【${statusBar}】**${loadingMainlineLine ? `\n${loadingMainlineLine}` : ''}\n\n⏳ *${loadingHint}*${portalGuideBlock}`;
   
@@ -367,7 +368,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   trackActiveGameMessage(player, thread.id, loadingMsg.id);
   updateGenerationState(player, { loadingMessageId: loadingMsg.id });
   CORE.savePlayer(player);
-  const stopLoadingAnimation = startLoadingAnimation(loadingMsg, loadingHint);
+  const stopLoadingAnimation = startLoadingAnimation(loadingMsg, loadingHint, player.language || 'zh-TW');
   const stopTypingIndicator = startTypingIndicator(thread);
 
   // 如果有 interaction（按鈕觸發），立即確認避免超時
@@ -482,8 +483,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
       const storyFirstDesc =
         `${financeNoticeBlock}${worldIntroBlock}**${uiText.statusLabel}：【${statusBar}】**${storyFirstMainlineLine ? `\n${storyFirstMainlineLine}` : ''}\n\n${storyText}${portalGuideBlock}\n\n` +
         (hasRecoverableStoryOnly
-          ? '⏳ *已恢復上次故事，正在補齊選項...*'
-          : '⏳ *故事已送達，正在生成選項...*');
+          ? `⏳ *${generationText.recovering_choices || generationText.loading}*`
+          : `⏳ *${generationText.story_generating_choices || generationText.generating_choices}*`);
 
       const storyFirstEmbed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)

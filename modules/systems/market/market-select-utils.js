@@ -9,6 +9,7 @@ function createMarketSelectUtils(deps = {}) {
     showWorldShopHaggleOffer = async () => {},
     showWorldShopHaggleAllOffer = async () => {}
   } = deps;
+  const { getLocalizedItemName } = require('../runtime/utils/global-language-resources');
 
   async function replyOrFollowUp(interaction, payload = {}) {
     if (!interaction) return false;
@@ -55,6 +56,10 @@ function createMarketSelectUtils(deps = {}) {
         return true;
       }
       CORE.savePlayer(buyer);
+      const displayItemName = getLocalizedItemName(
+        { itemName: outcome.itemName, itemNames: outcome.itemNames || null },
+        buyer.language || 'zh-TW'
+      ) || outcome.itemName;
       const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
         ? `｜${outcome.deliveryNotes.join('；')}`
         : '';
@@ -63,7 +68,7 @@ function createMarketSelectUtils(deps = {}) {
         interaction,
         user,
         outcome.marketType || marketType || 'renaiss',
-        `成交成功：買入 ${outcome.itemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}${deferredHint}`
+        `成交成功：買入 ${displayItemName} x${outcome.quantity}，支出 ${outcome.totalPrice} Rns${deliveryText}${deferredHint}`
       );
       return true;
     }
@@ -92,6 +97,10 @@ function createMarketSelectUtils(deps = {}) {
         return true;
       }
       CORE.savePlayer(buyer);
+      const displayItemName = getLocalizedItemName(
+        { itemName: outcome.itemName, itemNames: outcome.itemNames || null },
+        buyer.language || 'zh-TW'
+      ) || outcome.itemName;
       const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
         ? `｜${outcome.deliveryNotes.join('；')}`
         : '';
@@ -100,7 +109,7 @@ function createMarketSelectUtils(deps = {}) {
         interaction,
         user,
         outcome.marketType || marketType || 'renaiss',
-        `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}${deferredHint}`
+        `成交成功：${displayItemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}${deferredHint}`
       );
       return true;
     }

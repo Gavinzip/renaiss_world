@@ -550,7 +550,7 @@ function createBattleLayoutUtils(deps = {}) {
     const candidates = getBattleSwitchCandidates(player, combatant?.id);
     const options = candidates.slice(0, 25).map((p) => ({
       label: `${p.name}`.slice(0, 100),
-      description: `${getPetElementDisplayName(p.type)}｜HP ${p.hp}/${p.maxHp}`.slice(0, 100),
+      description: `${getPetElementDisplayName(p.type, player?.language || 'zh-TW')}｜HP ${p.hp}/${p.maxHp}`.slice(0, 100),
       value: String(p.id || '')
     }));
 

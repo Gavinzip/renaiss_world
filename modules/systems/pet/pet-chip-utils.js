@@ -1,6 +1,11 @@
+const {
+  getSkillChipPrefix,
+  stripSkillChipPrefix: stripLocalizedSkillChipPrefix
+} = require('../runtime/utils/global-language-resources');
+
 function createPetChipUtils(deps = {}) {
   const {
-    SKILL_CHIP_PREFIX = '技能晶片：',
+    SKILL_CHIP_PREFIX = getSkillChipPrefix('zh-TW'),
     PROTECTED_MOVE_IDS = new Set(),
     PET_MOVE_LOADOUT_LIMIT = 5,
     PET,
@@ -12,28 +17,6 @@ function createPetChipUtils(deps = {}) {
   const LEGACY_MOVE_NAME_ALIASES = new Map([
     ['火蓮碎', '日核裂解']
   ]);
-
-  function buildSkillChipPrefixAliases() {
-    const raw = String(SKILL_CHIP_PREFIX || '技能晶片：').trim();
-    const aliases = new Set();
-    if (raw) aliases.add(raw);
-    aliases.add('技能晶片：');
-    aliases.add('技能晶片:');
-    aliases.add('技能晶片-');
-    aliases.add('技能晶片－');
-    aliases.add('技能芯片：');
-    aliases.add('技能芯片:');
-    aliases.add('技能芯片-');
-    aliases.add('技能芯片－');
-    aliases.add('Skill Chip:');
-    aliases.add('Skill Chip: ');
-    aliases.add('Skill Chip -');
-    aliases.add('Skill Chip－');
-    aliases.add('SkillChip:');
-    return Array.from(aliases);
-  }
-
-  const SKILL_CHIP_PREFIX_ALIASES = buildSkillChipPrefixAliases();
 
   function normalizeMoveNameKey(name = '') {
     return String(name || '')
@@ -83,16 +66,7 @@ function createPetChipUtils(deps = {}) {
   }
 
   function stripSkillChipPrefix(name = '') {
-    const text = String(name || '').trim();
-    if (!text) return '';
-    for (const prefix of SKILL_CHIP_PREFIX_ALIASES) {
-      if (!prefix) continue;
-      if (!text.startsWith(prefix)) continue;
-      return text.slice(prefix.length).trim();
-    }
-    const regexMatch = text.match(/^(?:技能晶片|技能芯片|skill\s*chip)\s*[:：\-－]?\s*(.+)$/iu);
-    if (regexMatch?.[1]) return String(regexMatch[1] || '').trim();
-    return '';
+    return stripLocalizedSkillChipPrefix(name);
   }
 
   function extractSkillChipMoveName(rawItem = null) {

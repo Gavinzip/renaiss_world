@@ -121,8 +121,10 @@ function getMapText(lang = 'zh-TW') {
       mapDestinationSetNotice: (target) => `✅ 已設定目的地：${target}。下一段故事會朝這裡推進。`,
       mapAutoTravelLocked: (target) => `🧭 你想前往 **${target}**，但本地劇情尚未完成，只能先沿主線推進。`,
       mapAutoTravelCrossRegion: '🧭 區內移動僅限同一大區；跨區請使用主傳送門。',
+      mapAutoTravelNoRoute: (target, from) => `🧭 你想從 **${from}** 前往 **${target}**，但地圖上沒有合法路線。`,
       mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推進時感到壓力失衡（預估勝率 ${format1(winRate)}%），只好先在 **${from}** 整備。`,
       mapAutoTravelMoved: (from, target) => `🧭 你依照地圖座標離開 **${from}**，一路推進到 **${target}**。`,
+      mapAutoTravelMovedStep: (from, step, target) => `🧭 你依照地圖座標先離開 **${from}**，推進到 **${step}**，持續朝 **${target}** 前進。`,
       portalInvalidDestination: '⚠️ 無效的傳送目的地。',
       portalGateDenied: (target, winRate) => `🛑 無法前往 **${target}**：目前勝率 ${format1(winRate)}%（需要 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`,
       portalTeleportStory: (from, to, tail = '') => {
@@ -232,8 +234,10 @@ function getMapText(lang = 'zh-TW') {
       mapDestinationSetNotice: (target) => `✅ 已设置目的地：${target}。下一段故事会朝这里推进。`,
       mapAutoTravelLocked: (target) => `🧭 你想前往 **${target}**，但本地剧情尚未完成，只能先沿主线推进。`,
       mapAutoTravelCrossRegion: '🧭 区内移动仅限同一大区；跨区请使用主传送门。',
+      mapAutoTravelNoRoute: (target, from) => `🧭 你想从 **${from}** 前往 **${target}**，但地图上没有合法路线。`,
       mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 你朝 **${target}** 推进时感到压力失衡（预估胜率 ${format1(winRate)}%），只好先在 **${from}** 整备。`,
       mapAutoTravelMoved: (from, target) => `🧭 你依照地图坐标离开 **${from}**，一路推进到 **${target}**。`,
+      mapAutoTravelMovedStep: (from, step, target) => `🧭 你依照地图坐标先离开 **${from}**，推进到 **${step}**，持续朝 **${target}** 前进。`,
       portalInvalidDestination: '⚠️ 无效的传送目的地。',
       portalGateDenied: (target, winRate) => `🛑 无法前往 **${target}**：当前胜率 ${format1(winRate)}%（需要 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`,
       portalTeleportStory: (from, to, tail = '') => {
@@ -343,8 +347,10 @@ function getMapText(lang = 'zh-TW') {
       mapDestinationSetNotice: (target) => `✅ Destination set: ${target}. The next story step will move toward it.`,
       mapAutoTravelLocked: (target) => `🧭 You want to go to **${target}**, but local story is not completed yet. Continue the main arc first.`,
       mapAutoTravelCrossRegion: '🧭 In-region movement only supports same-region nodes; use portal for cross-region travel.',
+      mapAutoTravelNoRoute: (target, from) => `🧭 You want to travel from **${from}** to **${target}**, but the map has no legal route.`,
       mapAutoTravelGateBlocked: (target, from, winRate) => `🛑 You felt unstable pressure while advancing to **${target}** (estimated win rate ${format1(winRate)}%), so you regrouped at **${from}**.`,
       mapAutoTravelMoved: (from, target) => `🧭 Following map coordinates, you moved from **${from}** to **${target}**.`,
+      mapAutoTravelMovedStep: (from, step, target) => `🧭 Following map coordinates, you first moved from **${from}** to **${step}**, continuing toward **${target}**.`,
       portalInvalidDestination: '⚠️ Invalid portal destination.',
       portalGateDenied: (target, winRate) => `🛑 Cannot travel to **${target}**: current win rate ${format1(winRate)}% (required > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%).`,
       portalTeleportStory: (from, to, tail = '') => {

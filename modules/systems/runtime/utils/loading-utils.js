@@ -1,13 +1,19 @@
+const { getLoadingAnimationText } = require('./global-language-resources');
+
 function createLoadingUtils() {
-  function startLoadingAnimation(message, label = 'AI 說書人正在構思故事') {
+  function startLoadingAnimation(message, label = '', lang = 'zh-TW') {
     if (!message) return () => {};
 
+    const loadingText = getLoadingAnimationText(lang);
     const frames = ['⏳', '⌛', '🌀'];
-    const phases = ['鋪陳場景', '安排角色互動', '生成分支選項', '補完世界細節'];
+    const phases = Array.isArray(loadingText?.phases) && loadingText.phases.length > 0
+      ? loadingText.phases
+      : ['鋪陳場景', '安排角色互動', '生成分支選項', '補完世界細節'];
+    const displayLabel = String(label || loadingText?.defaultLabel || 'Loading').trim();
     const startAt = Date.now();
     let tick = 0;
 
-    message.edit({ content: `⏳ ${label}...（鋪陳場景）` }).catch(() => {});
+    message.edit({ content: `⏳ ${displayLabel}...（${phases[0]}）` }).catch(() => {});
 
     const timer = setInterval(() => {
       tick += 1;
@@ -15,7 +21,7 @@ function createLoadingUtils() {
       const dots = '.'.repeat((tick % 3) + 1);
       const elapsed = Math.floor((Date.now() - startAt) / 1000);
       const phase = phases[tick % phases.length];
-      message.edit({ content: `${icon} ${label}${dots}（${phase}｜${elapsed}s）` }).catch(() => {});
+      message.edit({ content: `${icon} ${displayLabel}${dots}（${phase}｜${elapsed}s）` }).catch(() => {});
     }, 1500);
 
     return () => clearInterval(timer);

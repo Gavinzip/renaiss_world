@@ -1,3 +1,10 @@
+const {
+  formatSkillChipDisplay,
+  getLocalizedItemName,
+  getSkillChipUiText,
+  joinLocalizedList
+} = require('../runtime/utils/global-language-resources');
+
 function createProfileSettingsGachaUtils(deps = {}) {
   const {
     CORE,
@@ -136,17 +143,17 @@ function createProfileSettingsGachaUtils(deps = {}) {
       )
       .addFields(
         { name: '📦 已開包數', value: `${profile.totalDraws} 包`, inline: true },
-        { name: '🐾 寵物', value: String(profile.currentPets), inline: true },
-        { name: '📍 位置', value: player.location, inline: true }
+        { name: `🐾 ${t('pet', uiLang)}`, value: String(profile.currentPets), inline: true },
+        { name: `📍 ${t('location', uiLang)}`, value: player.location, inline: true }
       )
       .addFields(
         { name: '📦 卡片 FMV', value: `$${petCapacity.cardFMV.toFixed(2)} USD（${petCapacity.cardCount} 張）`, inline: true },
-        { name: '🐾 寵物額度', value: `${petCapacity.currentPets}/${petCapacity.maxPets}`, inline: true },
+        { name: `🐾 ${t('petCapacity', uiLang)}`, value: `${petCapacity.currentPets}/${petCapacity.maxPets}`, inline: true },
         { name: '🆕 可領取', value: `${petCapacity.availableSlots} 隻`, inline: true }
       )
       .addFields({ name: '📏 額度規則', value: '>100U 可 2 隻｜>1000U 可 3 隻', inline: false })
       .addFields({ name: '💳 錢包', value: walletStatus, inline: false })
-      .addFields({ name: '🐾 寵物列表', value: petsList, inline: false });
+      .addFields({ name: `🐾 ${t('petList', uiLang)}`, value: petsList, inline: false });
 
     const rows = [];
     rows.push(new ActionRowBuilder().addComponents(
@@ -155,7 +162,7 @@ function createProfileSettingsGachaUtils(deps = {}) {
         .setLabel(walletBound ? '🔄 同步資產' : '💳 綁定錢包')
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('open_friends').setLabel('🤝 好友').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('show_moves').setLabel('🐾 寵物').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('show_moves').setLabel(`🐾 ${t('pet', uiLang)}`).setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('open_gacha').setLabel('🎰 去開包').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('main_menu').setLabel('返回').setStyle(ButtonStyle.Secondary)
     ));
@@ -246,10 +253,11 @@ function createProfileSettingsGachaUtils(deps = {}) {
     for (const draw of result.draws) {
       if (!draw?.move?.name) continue;
       if (!Array.isArray(player.inventory)) player.inventory = [];
-      const chipName = `技能晶片：${draw.move.name}`;
+      const chipName = formatSkillChipDisplay(draw?.move?.id || '', draw.move.name, 'zh-TW');
       player.inventory.unshift(chipName);
       gainedChips.push(chipName);
     }
+    const chipText = getSkillChipUiText(uiLang);
 
     const makeSpinEmbed = (revealCount, showSkill, phaseText) => new EmbedBuilder()
       .setTitle(`🎰 開包中 x${count}`)
@@ -262,17 +270,17 @@ function createProfileSettingsGachaUtils(deps = {}) {
       );
 
     const chipSummary = gainedChips.length > 0
-      ? gainedChips.join('、')
-      : '（本次無新增）';
+      ? joinLocalizedList(gainedChips.map((chipName) => getLocalizedItemName(chipName, uiLang) || chipName), uiLang)
+      : chipText.gachaNoNew;
 
     const finalEmbed = new EmbedBuilder()
       .setTitle(`🎰 開包結果 x${count}`)
       .setColor(0xffd700)
       .setDescription(`💰 花費 ${result.cost} Rns 代幣\n💡 拉霸規則：三格相同 = 5% 大獎（不改原本機率）\n\n**開到以下招式：**\n${resultsText}\n\n**總價值：${result.totalValue} Rns 代幣**\n**⭐ 獲得升級點數：+${result.earnedPoints} 點**\n**📊 已開包數：${result.totalDraws} 包**`)
       .addFields(
-        { name: '📚 本次獲取技能晶片', value: `${gainedChips.length} 枚\n${String(chipSummary).slice(0, 1000)}`, inline: false },
-        { name: '📌 學習規則', value: '抽到的是技能晶片；請到「🐾 寵物」頁面用下拉選單學習/取消學習。', inline: false },
-        { name: '📦 販賣規則', value: '商店掛賣時，會以「技能晶片」名稱販賣。', inline: false }
+        { name: chipText.gachaFieldChips, value: `${gainedChips.length}\n${String(chipSummary).slice(0, 1000)}`, inline: false },
+        { name: chipText.gachaLearnRuleTitle, value: chipText.gachaLearnRuleValue, inline: false },
+        { name: chipText.gachaSellRuleTitle, value: chipText.gachaSellRuleValue, inline: false }
       );
 
     CORE.savePlayer(player);
@@ -429,12 +437,12 @@ function createProfileSettingsGachaUtils(deps = {}) {
       .setDescription(`**${player.title}**`)
       .addFields(
         { name: '👤 性別', value: String(player.gender || '男'), inline: true },
-        { name: '🐾 夥伴屬性', value: getPetElementDisplayName(player.petElement || pet?.type || '水'), inline: true },
-        { name: '📍 位置', value: player.location, inline: true }
+        { name: `🐾 ${t('partnerElement', uiLang)}`, value: getPetElementDisplayName(player.petElement || pet?.type || '水', uiLang), inline: true },
+        { name: `📍 ${t('location', uiLang)}`, value: player.location, inline: true }
       )
       .addFields(
-        { name: '🚨 通緝級', value: String(wantedLevel), inline: true },
-        { name: '🍀 幸運值', value: String(player.stats.運氣), inline: true },
+        { name: `🚨 ${t('wanted', uiLang)}`, value: String(wantedLevel), inline: true },
+        { name: `🍀 ${t('luck', uiLang)}`, value: String(player.stats.運氣), inline: true },
         { name: t('hp', uiLang), value: `${player.stats.生命}/${player.maxStats.生命}`, inline: true },
         { name: t('gold', uiLang), value: String(player.stats.財富), inline: true },
         { name: '🎖️ 友誼賽成就', value: `${mentorCount} 位`, inline: true },
@@ -443,7 +451,7 @@ function createProfileSettingsGachaUtils(deps = {}) {
 
     if (pet) {
       embed.addFields(
-        { name: '---寵物---', value: `**${pet.name}** (${getPetElementDisplayName(pet.type)})`, inline: false },
+        { name: `---${t('pet', uiLang)}---`, value: `**${pet.name}** (${getPetElementDisplayName(pet.type, uiLang)})`, inline: false },
         { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
         { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
         { name: '🛡️ 防禦', value: String(pet.defense), inline: true }

@@ -1,4 +1,10 @@
 const FUSION = require('../equipment/equipment-fusion-agent');
+const {
+  getLocalizedItemName,
+  getLocalizedItemDesc,
+  getMoveLocalization,
+  localizeScriptOnly
+} = require('../runtime/utils/global-language-resources');
 
 function createPlayerPanelUtils(deps = {}) {
   const {
@@ -151,6 +157,10 @@ function getPanelMoveText(uiLang = 'zh-TW') {
   const base = getPlayerPanelText('zh-TW')?.moves || {};
   const localized = getPlayerPanelText(uiLang)?.moves || {};
   return { ...base, ...localized };
+}
+
+function getLocalizedMoveName(move = null, uiLang = 'zh-TW') {
+  return getMoveLocalization(move?.id || '', move?.name || '', uiLang) || String(move?.name || '').trim();
 }
 
 function getFinanceText(uiLang = 'zh-TW') {
@@ -384,6 +394,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     const isFlee = Boolean(m?.effect && m.effect.flee);
     const isProtected = isProtectedMoveId(m?.id);
     const statusMark = isFlee ? moveTx.statusFixed : (isProtected ? moveTx.statusInnate : moveTx.statusCarried);
+    const moveDisplayName = getLocalizedMoveName(m, uiLang);
     const dmg = buildMoveDamageBreakdown(m, selectedPet);
     const energyCost = isFlee ? '-' : BATTLE.getMoveEnergyCost(m);
     const moveSpeed = getMoveSpeedValue(m);
@@ -396,7 +407,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
     const instantLabel = moveTx.damageInstantLabel || 'Hit';
     const totalLabel = moveTx.damageTotalLabel || 'Total';
     const speedLabel = moveTx.speedLabel || 'Speed';
-    return `${tierEmoji} ${i + 1}. **${m.name}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | ${instantLabel}${format1(dmg.instant)} | ${totalLabel}${format1(dmg.total)} | ⚡${energyCost} | 🚀${speedLabel}${format1(moveSpeed)} | ${effectStr || moveTx.effectNone}${dotSecondLine}`;
+    return `${tierEmoji} ${i + 1}. **${moveDisplayName}** (${m.element}/${tierName})｜${statusMark}\n   💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | ${instantLabel}${format1(dmg.instant)} | ${totalLabel}${format1(dmg.total)} | ⚡${energyCost} | 🚀${speedLabel}${format1(moveSpeed)} | ${effectStr || moveTx.effectNone}${dotSecondLine}`;
   });
 
   const petSummary = ownedPets.map((pet, i) => {
@@ -416,6 +427,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
         const localizedReason = localizeChipReason(entry.reason, uiLang);
         const mark = entry.canLearn ? moveTx.markLearnable : (localizedReason === moveTx.reasonLearned ? moveTx.markLearned : moveTx.markBlocked);
         const reasonText = entry.canLearn ? '' : `（${localizedReason || moveTx.notLearnable}）`;
+        const moveDisplayName = getLocalizedMoveName(move, uiLang);
         const dmg = buildMoveDamageBreakdown(move, selectedPet);
         const energyCost = BATTLE.getMoveEnergyCost(move);
         const moveSpeed = getMoveSpeedValue(move);
@@ -423,7 +435,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
         const instantShort = moveTx.damageInstantShort || 'Hit';
         const totalShort = moveTx.damageTotalShort || 'Total';
         const unknownElement = moveTx.unknownElement || 'Unknown';
-        return `${idx + 1}. ${tierEmoji} **${move.name}** x${entry.count}｜${mark}${reasonText}\n   ${move.element || unknownElement}/${tierName} | 💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | ${instantShort}${format1(dmg.instant)} / ${totalShort}${format1(dmg.total)} | ⚡${energyCost} | 🚀${format1(moveSpeed)} | ${effectStr || moveTx.effectNone}`;
+        return `${idx + 1}. ${tierEmoji} **${moveDisplayName}** x${entry.count}｜${mark}${reasonText}\n   ${move.element || unknownElement}/${tierName} | 💥 ${format1(dmg.rawBase)}+${format1(dmg.attackBonus)} | ${instantShort}${format1(dmg.instant)} / ${totalShort}${format1(dmg.total)} | ⚡${energyCost} | 🚀${format1(moveSpeed)} | ${effectStr || moveTx.effectNone}`;
       })
     : [moveTx.noSkillChips];
 
@@ -446,7 +458,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
 
   const description = [
     noticeLine,
-    moveTx.manage(selectedPet.name, getPetElementDisplayName(selectedPet.type)),
+    moveTx.manage(selectedPet.name, getPetElementDisplayName(selectedPet.type, uiLang)),
     moveTx.formula,
     moveTx.petAtk(
       selectedAttack,
@@ -508,7 +520,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       const moveSpeed = getMoveSpeedValue(move);
       const effectShort = String(describeMoveEffects(move) || moveTx.effectNone).replace(/；/g, '/').slice(0, 44);
       return {
-        label: `${move.tier === 3 ? `🔮${moveTx.tierEpic}` : move.tier === 2 ? `💠${moveTx.tierRare}` : `⚪${moveTx.tierCommon}`}｜${move.name}`.slice(0, 100),
+        label: `${move.tier === 3 ? `🔮${moveTx.tierEpic}` : move.tier === 2 ? `💠${moveTx.tierRare}` : `⚪${moveTx.tierCommon}`}｜${getLocalizedMoveName(move, uiLang)}`.slice(0, 100),
         description: `${move.element || (moveTx.unknownElement || 'Unknown')}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
@@ -537,7 +549,7 @@ async function showMovesList(interaction, user, selectedPetId = '', notice = '',
       const moveSpeed = getMoveSpeedValue(move);
       const effectShort = String(describeMoveEffects(move) || moveTx.effectNone).replace(/；/g, '/').slice(0, 44);
       return {
-        label: `${move.tier === 3 ? `🔮${moveTx.tierEpic}` : move.tier === 2 ? `💠${moveTx.tierRare}` : `⚪${moveTx.tierCommon}`}｜${move.name}`.slice(0, 100),
+        label: `${move.tier === 3 ? `🔮${moveTx.tierEpic}` : move.tier === 2 ? `💠${moveTx.tierRare}` : `⚪${moveTx.tierCommon}`}｜${getLocalizedMoveName(move, uiLang)}`.slice(0, 100),
         description: `${move.element || (moveTx.unknownElement || 'Unknown')}/${tierText}｜${format1(dmg.rawBase)}+${format1(dmg.attackBonus)}⚡${energyCost}🚀${format1(moveSpeed)}｜${effectShort}`.slice(0, 100),
         value: `${selectedPet.id}::${move.id}`
       };
@@ -738,7 +750,7 @@ async function showPetEquipmentView(interaction, user, selectedPetId = '', notic
     .setTitle(eqTx.title || '🛡️ 寵物裝備管理')
     .setColor(0x64748b)
     .setDescription(
-      `${selectedPet ? `${eqTx.currentPet || '目前寵物'}：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type)}）\n` : ''}` +
+      `${selectedPet ? `${eqTx.currentPet || '目前寵物'}：**${selectedPet.name}**（${getPetElementDisplayName(selectedPet.type, uiLang)}）\n` : ''}` +
       `${notice ? `${notice}\n` : ''}` +
       `${eqTx.intro || '每隻寵物可獨立穿戴頭盔/盔甲/腰帶/鞋子。'}\n` +
       `${eqTx.totalBonus || '總加成'}：ATK +${Math.floor(Number(bonus.attack || 0))}｜HP +${Math.floor(Number(bonus.hp || 0))}｜DEF +${Math.floor(Number(bonus.defense || 0))}｜SPD +${Math.floor(Number(bonus.speed || 0))}`
@@ -1027,6 +1039,7 @@ async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', n
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
     return;
   }
+  const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const marketLabel = getMarketTypeLabel(safeMarket);
@@ -1046,7 +1059,7 @@ async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', n
     .setDescription(desc)
     .addFields(
       { name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true },
-      { name: '📍 位置', value: `${player.location}`, inline: true }
+      { name: `📍 ${t('location', uiLang)}`, value: `${player.location}`, inline: true }
     );
 
   const row1 = new ActionRowBuilder().addComponents(
@@ -1067,6 +1080,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
     return;
   }
+  const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const stockInfo = getTeleportDeviceStockInfo(player);
@@ -1080,7 +1094,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
   const listings = pager.items;
   const title = '🛒 可購買賣單';
   const listText = listings.length > 0
-    ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
+    ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i, uiLang)).join('\n')
     : '（目前沒有可成交掛單）';
 
   const embed = new EmbedBuilder()
@@ -1091,7 +1105,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
   const rows = [];
   if (listings.length > 0) {
     const selectOptions = listings.slice(0, 25).map((listing, idx) => {
-      const itemName = String(listing.itemName || '商品');
+      const itemName = getLocalizedItemName(listing, uiLang) || String(listing.itemName || '商品');
       const qty = Math.max(1, Number(listing.quantity || 1));
       const unitPrice = Math.max(1, Number(listing.unitPrice || 0));
       return {
@@ -1134,6 +1148,7 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss', p
     await interaction.update({ content: '❌ 找不到角色！', components: [] });
     return;
   }
+  const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const allMine = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 500 });
@@ -1141,7 +1156,7 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss', p
   const mine = pager.items;
 
   const text = mine.length > 0
-    ? mine.map((l, i) => `${pager.start + i + 1}. ${l.itemName} x${l.quantity}｜單價 ${l.unitPrice}｜總價 ${l.totalPrice}`).join('\n')
+    ? mine.map((l, i) => `${pager.start + i + 1}. ${getLocalizedItemName(l, uiLang) || l.itemName} x${l.quantity}｜單價 ${l.unitPrice}｜總價 ${l.totalPrice}`).join('\n')
     : '（你目前沒有掛單）';
 
   const embed = new EmbedBuilder()
@@ -1152,7 +1167,7 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss', p
   const cancelButtons = mine.slice(0, 3).map((listing) =>
     new ButtonBuilder()
       .setCustomId(`pmkt_cancel_${listing.id}`)
-      .setLabel(`取消 ${String(listing.itemName || '掛單').slice(0, 12)}`)
+      .setLabel(`取消 ${String(getLocalizedItemName(listing, uiLang) || listing.itemName || '掛單').slice(0, 12)}`)
       .setStyle(ButtonStyle.Danger)
   );
 
@@ -1505,7 +1520,7 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
   if (draft.options.length <= 0) {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('show_moves').setLabel('🐾 寵物管理').setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId('show_moves').setLabel(`🐾 ${t('petManagement', uiLang)}`).setStyle(ButtonStyle.Primary)
     );
     await interaction.update({ embeds: [embed], components: [row] });
     return;
@@ -1526,7 +1541,7 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
   const row1 = new ActionRowBuilder().addComponents(select);
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('show_moves').setLabel('🐾 寵物管理').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId('show_moves').setLabel(`🐾 ${t('petManagement', uiLang)}`).setStyle(ButtonStyle.Primary)
   );
   await interaction.update({ embeds: [embed], components: [row1, row2] });
 }
@@ -1618,7 +1633,7 @@ async function handleWorldShopSellModal(interaction, user, marketType = 'renaiss
   player.shopSession.pendingSellSpec = null;
   CORE.savePlayer(player);
   const listing = result.listing || {};
-  const successText = `賣單已上架：${listing.itemName} x${listing.quantity}（單價 ${listing.unitPrice}）`;
+  const successText = `賣單已上架：${getLocalizedItemName(listing, getPlayerUILang(player)) || listing.itemName} x${listing.quantity}（單價 ${listing.unitPrice}）`;
   const updated = await interaction.deferUpdate()
     .then(async () => {
       await showWorldShopScene(interaction, user, safeMarket, successText);
@@ -1712,7 +1727,7 @@ async function handleMarketPostModal(interaction, user, listingType = 'sell', ma
   }
 }
 
-function buildShopBuySelectOptions(listings = []) {
+function buildShopBuySelectOptions(listings = [], lang = 'zh-TW') {
   const source = Array.isArray(listings) ? listings : [];
   const options = [];
   const seenValues = new Set();
@@ -1721,12 +1736,12 @@ function buildShopBuySelectOptions(listings = []) {
   for (let idx = 0; idx < source.length; idx += 1) {
     const listing = source[idx];
     const listingId = String(listing?.id || '').trim();
-    const itemName = String(listing?.itemName || '商品').trim() || '商品';
+    const itemName = getLocalizedItemName(listing, lang) || String(listing?.itemName || '商品').trim() || '商品';
     const qty = Math.max(1, Number(listing?.quantity || 1));
     const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
     const value = `shopbuy_${listingId}`;
     const label = `${idx + 1}. ${itemName}`.slice(0, 100).trim();
-    const description = `x${qty}｜單價 ${unitPrice} Rns｜下拉選購`.slice(0, 100).trim();
+    const description = localizeScriptOnly(`x${qty}｜單價 ${unitPrice} Rns｜下拉選購`, lang).slice(0, 100).trim();
 
     if (!listingId || !label || !description || value.length > 100 || seenValues.has(value)) {
       droppedInvalid += 1;
@@ -1749,6 +1764,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     await safeUpdatePanelInteraction(interaction, { content: '❌ 找不到角色！', components: [] }, 'showWorldShopBuyPanel:not_found');
     return;
   }
+  const uiLang = getPlayerUILang(player);
   await deferPanelInteractionIfNeeded(interaction, 'showWorldShopBuyPanel');
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
@@ -1777,9 +1793,9 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     ? '⚠️ 神秘鑑價站規則：賣出牌價可能顯示九折，但實際入帳可能僅六折；成交品也可能只收到延後配送承諾。'
     : '✅ 公道鑑價站規則：賣出固定八折，牌價與入帳一致，成交品即時交付。';
   const listText = listings.length > 0
-    ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i)).join('\n')
+    ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i, uiLang)).join('\n')
     : '（目前沒有可購買商品）';
-  const { options: selectOptions, droppedInvalid: droppedInvalidOptions } = buildShopBuySelectOptions(listings);
+  const { options: selectOptions, droppedInvalid: droppedInvalidOptions } = buildShopBuySelectOptions(listings, uiLang);
   const totalDroppedCorrupted = droppedCorrupted + droppedInvalidOptions;
 
   const embed = new EmbedBuilder()
@@ -2412,10 +2428,11 @@ async function showInventory(interaction, user, page = 0, notice = '', viewMode 
   const equipmentBag = Array.isArray(player.equipmentBag) ? player.equipmentBag : [];
   const safeView = normalizeInventoryViewMode(viewMode);
 
-  const itemLines = items.map((item, i) => `${i + 1}. ${String(item || '')}`);
-  const herbLines = herbs.map((h, i) => `${i + 1}. ${String(h || '')}`);
+  const itemLines = items.map((item, i) => `${i + 1}. ${getLocalizedItemName(item, uiLang) || String(item || '')}`);
+  const herbLines = herbs.map((h, i) => `${i + 1}. ${getLocalizedItemName(h, uiLang) || String(h || '')}`);
   const goodLines = tradeGoods.map((g, i) =>
-    `${i + 1}. ${String(g?.name || '未命名藏品')}（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns）`
+    `${i + 1}. ${getLocalizedItemName(g, uiLang) || String(g?.name || '未命名藏品')}` +
+    `（${String(g?.rarity || '普通')}｜${Number(g?.value || 0)} Rns${getLocalizedItemDesc(g, uiLang) ? `｜${getLocalizedItemDesc(g, uiLang)}` : ''}）`
   );
   const equipmentBagLines = equipmentBag
     .map((row, i) => buildEquipmentBagLine(row, i, uiLang))
@@ -2784,7 +2801,7 @@ async function showSkillCodex(interaction, user) {
     if (Number(entry.chipCount || 0) > 0) tags.push(`晶片x${Number(entry.chipCount || 0)}`);
     if (entry.learned) tags.push('寵物已學');
     const source = tags.length > 0 ? `｜${tags.join('・')}` : '';
-    return `${idx + 1}. ${tierEmoji} ${entry.name}${source}`;
+    return `${idx + 1}. ${tierEmoji} ${getMoveLocalization(entry.id || '', entry.name || '', uiLang) || entry.name}${source}`;
   });
 
   const embed = new EmbedBuilder()

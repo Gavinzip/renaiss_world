@@ -1,6 +1,7 @@
-const { MAP_LOCATIONS } = require('./world-map');
+const { MAP_LOCATIONS, findLocationPath } = require('./world-map');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
 const { appendLootAudit } = require('../systems/data/loot-audit-log');
+const { getGenerationStatusText } = require('../systems/runtime/utils/global-language-resources');
 const SHOW_DYNAMIC_WORLD_METERS = String(process.env.SHOW_DYNAMIC_WORLD_METERS || '').trim() === '1';
 
 function formatBridgePreviewText(storyText = '') {
@@ -32,6 +33,12 @@ function formatBridgePreviewText(storyText = '') {
     });
 
   return lines.join('\n').trim();
+}
+
+function formatTravelRoutePreview(path = [], maxStops = 4) {
+  const list = Array.isArray(path) ? path.filter(Boolean) : [];
+  if (list.length <= maxStops) return list.join(' → ');
+  return `${list.slice(0, maxStops).join(' → ')} → …`;
 }
 
 function createEventHandlerUtils(deps = {}) {
@@ -126,6 +133,7 @@ function createEventHandlerUtils(deps = {}) {
     finishGenerationState,
     getAdventureText,
     buildMainStatusBar,
+    buildMainStatusFields = null,
     buildMainlineProgressLine,
     buildChoiceOptionsText,
     format1 = (v) => String(v ?? 0),
@@ -169,6 +177,20 @@ function createEventHandlerUtils(deps = {}) {
     executeEvent,
     negotiationPrompt
   } = deps;
+  const buildStatusFields = typeof buildMainStatusFields === 'function'
+    ? buildMainStatusFields
+    : (player, pet, lang = '', options = {}) => [
+      {
+        name: '🐾 寵物',
+        value: `${pet?.name || 'Unknown'} (${getPetElementDisplayName(pet?.type || pet?.element || '', lang || player?.language || 'zh-TW')})`,
+        inline: true
+      },
+      { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
+      { name: '💰 Rns 代幣', value: String(player?.stats?.財富 || 0), inline: true },
+      { name: '📍 位置', value: String(player?.location || ''), inline: true },
+      { name: '🌟 幸運', value: String(player?.stats?.運氣 || 0), inline: true },
+      { name: '🚨 通緝級', value: String(Math.max(0, Number(options?.wantedLevel || 0))), inline: true }
+    ];
 
 function isStorageLootContext(event = {}, result = {}, selectedChoice = '') {
   const text = [
@@ -1037,35 +1059,59 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     });
     const fromLocation = String(player.location || '').trim();
     if (declaredDestination && declaredDestination !== fromLocation) {
-      const entryGate = canEnterLocation(player, declaredDestination);
-      if (entryGate?.allowed) {
-        player.location = declaredDestination;
-        syncLocationArcLocation(player);
-        player.navigationTarget = declaredDestination;
-        const travelLine = `🧭 本回合移動：${fromLocation} → ${declaredDestination}`;
-        result.message = `${String(result.message || '').trim()}\n\n${travelLine}`.trim();
-        result.autoTravel = {
-          fromLocation,
-          targetLocation: declaredDestination,
-          reason: 'declared_destination'
-        };
-        queueMemory({
-          type: '移動',
-          content: `依選項路線移動`,
-          outcome: `${fromLocation} -> ${declaredDestination}`,
-          importance: 2,
-          tags: ['travel', 'choice_move', 'declared_destination']
-        });
-      } else {
-        const blockedLine = `🛑 你嘗試前往 **${declaredDestination}**，但目前勝率僅 **${format1(entryGate?.winRate)}%**（門檻 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`;
+      const routePath = findLocationPath(fromLocation, declaredDestination);
+      if (!Array.isArray(routePath) || routePath.length < 2) {
+        const blockedLine = `🛑 你想從 **${fromLocation}** 前往 **${declaredDestination}**，但地圖上沒有合法連線路徑。`;
         result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
         queueMemory({
           type: '移動',
           content: `嘗試依選項前往${declaredDestination}`,
-          outcome: `受阻｜勝率 ${format1(entryGate?.winRate)}%`,
+          outcome: '受阻｜地圖路線不存在',
           importance: 1,
-          tags: ['travel', 'choice_move', 'blocked', 'entry_gate']
+          tags: ['travel', 'choice_move', 'blocked', 'route_missing']
         });
+      } else {
+        const stepDestination = String(routePath[1] || '').trim();
+        const routePreview = formatTravelRoutePreview(routePath);
+        const entryGate = canEnterLocation(player, stepDestination);
+        if (entryGate?.allowed) {
+          player.location = stepDestination;
+          syncLocationArcLocation(player);
+          player.navigationTarget = declaredDestination;
+          const travelLine = stepDestination === declaredDestination
+            ? `🧭 本回合移動：${fromLocation} → ${declaredDestination}`
+            : `🧭 本回合移動：${fromLocation} → ${stepDestination}\n🗺️ 地圖路線：${routePreview}\n📍 你正沿路朝 **${declaredDestination}** 推進。`;
+          result.message = `${String(result.message || '').trim()}\n\n${travelLine}`.trim();
+          result.autoTravel = {
+            fromLocation,
+            targetLocation: stepDestination,
+            finalTargetLocation: declaredDestination,
+            reason: 'declared_destination'
+          };
+          queueMemory({
+            type: '移動',
+            content: stepDestination === declaredDestination
+              ? '依選項路線移動'
+              : '依選項沿地圖路線移動',
+            outcome: stepDestination === declaredDestination
+              ? `${fromLocation} -> ${declaredDestination}`
+              : `${fromLocation} -> ${stepDestination}（目標：${declaredDestination}）`,
+            importance: 2,
+            tags: ['travel', 'choice_move', 'declared_destination']
+          });
+        } else {
+          const blockedLine = `🛑 你嘗試前往 **${stepDestination}**，但目前勝率僅 **${format1(entryGate?.winRate)}%**（門檻 > ${format1(LOCATION_ENTRY_MIN_WINRATE)}%）。`;
+          result.message = `${String(result.message || '').trim()}\n\n${blockedLine}`.trim();
+          queueMemory({
+            type: '移動',
+            content: stepDestination === declaredDestination
+              ? `嘗試依選項前往${declaredDestination}`
+              : `嘗試沿地圖路線前往${declaredDestination}（下一站：${stepDestination}）`,
+            outcome: `受阻｜勝率 ${format1(entryGate?.winRate)}%`,
+            importance: 1,
+            tags: ['travel', 'choice_move', 'blocked', 'entry_gate']
+          });
+        }
       }
     }
   }
@@ -1164,7 +1210,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       if (targetLocation && targetLocation !== fromLocation) {
         player.location = targetLocation;
         syncLocationArcLocation(player);
-        player.navigationTarget = targetLocation;
+        player.navigationTarget = String(autoTravel.finalTargetLocation || targetLocation).trim() || targetLocation;
         const travelLine = String(autoTravel.appendText || '').trim()
           || `🧭 你沿著在地線索由 ${fromLocation} 轉往 **${targetLocation}**。`;
         result.message = `${String(result.message || '').trim()}\n\n${travelLine}`.trim();
@@ -1350,16 +1396,27 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     const missionEvidence = String(regionMissionAtCompletion?.evidenceName || '關鍵證據').trim();
     const shouldAutoMoveToMission = missionLocation && missionLocation !== completedLocation;
     if (shouldAutoMoveToMission) {
-      player.location = missionLocation;
+      const routePathToMission = findLocationPath(completedLocation, missionLocation);
+      const missionStepLocation = Array.isArray(routePathToMission) && routePathToMission.length >= 2
+        ? String(routePathToMission[1] || '').trim()
+        : missionLocation;
+      const routePreview = formatTravelRoutePreview(routePathToMission);
+      player.location = missionStepLocation;
       syncLocationArcLocation(player);
       player.navigationTarget = missionLocation;
       result.message = `${String(result.message || '').trim()}\n\n` +
-        `📍 ${completedChapterTitle}暫時收束，你沒有直接跨區，而是依線索先轉往 **${missionLocation}**。\n` +
-        `🎯 目前主線目標：接觸 **${missionNpc}**，補齊「${missionEvidence}」。`;
+        (missionStepLocation === missionLocation
+          ? `📍 ${completedChapterTitle}暫時收束，你沒有直接跨區，而是依線索先轉往 **${missionLocation}**。\n` +
+            `🎯 目前主線目標：接觸 **${missionNpc}**，補齊「${missionEvidence}」。`
+          : `📍 ${completedChapterTitle}暫時收束，你沒有直接跳到 **${missionLocation}**，而是先沿地圖路線轉往 **${missionStepLocation}**。\n` +
+            `🗺️ 路線：${routePreview}\n` +
+            `🎯 目前主線目標：接觸 **${missionNpc}**，補齊「${missionEvidence}」。`);
       queueMemory({
         type: '移動',
         content: '地區收尾後回補關鍵任務',
-        outcome: `${completedLocation} -> ${missionLocation}`,
+        outcome: missionStepLocation === missionLocation
+          ? `${completedLocation} -> ${missionLocation}`
+          : `${completedLocation} -> ${missionStepLocation}（目標：${missionLocation}）`,
         importance: 2,
         tags: ['travel', 'main_story', 'mission_hold']
       });
@@ -1592,8 +1649,14 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   }
   
   const uiText = getAdventureText(player.language || 'zh-TW');
+  const generationText = getGenerationStatusText(player.language || 'zh-TW');
   const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
   const eventMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
+  const panelWantedLevel = Math.max(
+    0,
+    Number(typeof CORE.getPlayerWantedLevel === 'function' ? CORE.getPlayerWantedLevel(player.id) : 0),
+    Number(player?.wanted || 0)
+  );
   
   // 發送一個「AI 正在思考」的訊息（帶上舊 story，讓 continuity 明顯）
   // choices 變數在 eventChoices 清除前就 capture 了，所以仍有效
@@ -1606,7 +1669,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     embeds: [{
       title: `⚔️ ${player.name} - ${pet.name}`,
       color: getAlignmentColor(player.alignment),
-      description: `**${uiText.statusLabel}：【${statusBar}】**${eventMainlineLine ? `\n${eventMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n⏳ *AI 說書人正在構思新故事...*${prevStoryBlock}${upcomingChoicesBlock}`
+      description: `**${uiText.statusLabel}：【${statusBar}】**${eventMainlineLine ? `\n${eventMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n⏳ *${generationText.thinking_new_story || generationText.loading}*${prevStoryBlock}${upcomingChoicesBlock}`
     }]
   });
 
@@ -1616,7 +1679,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     loadingMessageId: loadingMsg.id
   });
   CORE.savePlayer(player);
-  const stopLoadingAnimation = startLoadingAnimation(loadingMsg, 'AI 說書人正在構思新故事');
+  const stopLoadingAnimation = startLoadingAnimation(
+    loadingMsg,
+    generationText.thinking_new_story || generationText.loading,
+    player.language || 'zh-TW'
+  );
   const stopTypingIndicator = startTypingIndicator(interaction.channel);
   
   // 背景 AI 生成：先出故事，再補按鈕
@@ -1835,17 +1902,13 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       const storyOnlyDesc =
         `**${uiText.statusLabel}：【${statusBar}】**${storyOnlyMainlineLine ? `\n${storyOnlyMainlineLine}` : ''}\n\n**${uiText.lastChoice}：** ${selectedChoice}\n\n${storyText}` +
         `${rewardText.length > 0 ? '\n\n' + rewardText.join(' | ') : ''}` +
-        `${worldEventsText}${portalGuideBlock}\n\n⏳ *故事已送達，正在生成選項...*`;
+        `${worldEventsText}${portalGuideBlock}\n\n⏳ *${generationText.story_generating_choices || generationText.generating_choices}*`;
 
       const storyOnlyEmbed = new EmbedBuilder()
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
         .setColor(getAlignmentColor(player.alignment))
         .setDescription(storyOnlyDesc)
-        .addFields(
-          { name: '🐾 寵物', value: `${pet.name} (${getPetElementDisplayName(pet.type)})`, inline: true },
-          { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
-          { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
-        );
+        .addFields(...buildStatusFields(player, pet, player.language || 'zh-TW', { wantedLevel: panelWantedLevel }));
 
       stopLoadingAnimation();
       const storyOnlyMsg = await editOrSendFallback(
@@ -1912,11 +1975,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         .setTitle(`⚔️ ${player.name} - ${pet.name}`)
         .setColor(getAlignmentColor(player.alignment))
         .setDescription(description)
-        .addFields(
-          { name: '🐾 寵物', value: `${pet.name} (${getPetElementDisplayName(pet.type)})`, inline: true },
-          { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
-          { name: '💰 Rns 代幣', value: String(player.stats.財富), inline: true }
-        );
+        .addFields(...buildStatusFields(player, pet, player.language || 'zh-TW', { wantedLevel: panelWantedLevel }));
 
       const buttons = buildEventChoiceButtons(newChoices, player.id);
       appendMainMenuUtilityButtons(buttons, player);

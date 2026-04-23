@@ -7,6 +7,7 @@
 
 const PET = require('../pet/pet-system');
 const CORE = require('../../core/game-core');
+const { getSkillChipUiText } = require('../runtime/utils/global-language-resources');
 const PET_MOVE_LOADOUT_LIMIT = 5;
 
 function ensureAutoEquipOnLearn(pet, learnedMoveId) {
@@ -321,15 +322,17 @@ function learnDrawnMove(playerId, moveData) {
 // ============== 學習技能（並上陣）=============
 function learnMoveForBattle(playerId, moveData) {
   const pet = PET.loadPet(playerId);
+  const uiLang = CORE.loadPlayer(playerId)?.language || 'zh-TW';
+  const chipText = getSkillChipUiText(uiLang);
   if (!pet) {
     return { success: false, reason: '沒有寵物！' };
   }
   if (!moveData || typeof moveData !== 'object') {
-    return { success: false, reason: '技能晶片資料錯誤！' };
+    return { success: false, reason: chipText.invalidChipData };
   }
 
   const moveId = String(moveData.id || '').trim();
-  if (!moveId) return { success: false, reason: '技能晶片缺少技能 ID。' };
+  if (!moveId) return { success: false, reason: chipText.invalidChipData };
   if (!Array.isArray(pet.moves)) pet.moves = [];
 
   let knownMove = pet.moves.find((m) => String(m?.id || '').trim() === moveId) || null;
