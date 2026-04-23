@@ -156,6 +156,10 @@ function createBattleLayoutUtils(deps = {}) {
     return `${clipped}${' '.repeat(Math.max(0, safeWidth - used))}`;
   }
 
+  function padBattleLabel(text = '', width = 18) {
+    return padBattleCellText(text, width);
+  }
+
   function wrapBattleCellText(text = '', maxWidth = 18, maxLines = 2) {
     const source = String(text || '').trim();
     if (!source) return [''];
