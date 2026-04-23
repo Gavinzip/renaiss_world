@@ -47,6 +47,8 @@ function createProfileSettingsGachaUtils(deps = {}) {
           ? tx.langNameZhCn
           : currentLang === 'en'
             ? tx.langNameEn
+            : currentLang === 'ko'
+              ? (tx.langNameKo || '한국어')
             : tx.langNameZhTw;
     const walletBound = WALLET.isWalletBound(user.id);
     const walletData = WALLET.getWalletData(user.id);
@@ -68,22 +70,29 @@ function createProfileSettingsGachaUtils(deps = {}) {
         { name: tx.fieldWorldIntro, value: introPreview, inline: false }
       );
 
-    const row = new ActionRowBuilder().addComponents(
+    const rowLang = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('lang_zh-TW').setLabel('🇹🇼 繁體中文').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('lang_zh-CN').setLabel('🇨🇳 簡體中文').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('lang_ko').setLabel('🇰🇷 한국어').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(walletBound ? 'sync_wallet_now' : 'open_wallet_modal')
         .setLabel(walletBound ? tx.btnSyncWallet : tx.btnBindWallet)
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('settings_back').setLabel(tx.btnBack).setStyle(ButtonStyle.Secondary)
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    const rowActions = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('settings_back')
+        .setLabel(tx.btnBack)
+        .setStyle(ButtonStyle.Secondary)
     );
 
     const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('open_renaiss_world').setLabel(tx.btnWorld).setStyle(ButtonStyle.Success)
     );
 
-    await interaction.update({ embeds: [embed], components: [row, row2] });
+    await interaction.update({ embeds: [embed], components: [rowLang, rowActions, row2] });
   }
 
   async function showRenaissWorldGuide(interaction, user) {

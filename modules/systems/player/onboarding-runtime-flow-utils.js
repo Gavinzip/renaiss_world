@@ -494,12 +494,14 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
         { name: '🇹🇼 繁體中文', value: '繁體中文（台灣、香港）', inline: true },
         { name: '🇨🇳 簡體中文', value: '简体中文（中国）', inline: true },
         { name: '🇺🇸 English', value: 'English (US/EU)', inline: true },
+        { name: '🇰🇷 한국어', value: '한국어 (Korean)', inline: true },
         { name: '💳 錢包狀態', value: walletNote, inline: false }
       );
     const langRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('select_lang_zh-TW').setLabel('🇹🇼 繁體中文').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId('select_lang_zh-CN').setLabel('🇨🇳 簡體中文').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('select_lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('select_lang_en').setLabel('🇺🇸 English').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('select_lang_ko').setLabel('🇰🇷 한국어').setStyle(ButtonStyle.Secondary)
     );
 
     if (options.replaceCurrent) {

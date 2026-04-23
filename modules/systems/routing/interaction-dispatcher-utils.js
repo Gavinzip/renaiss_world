@@ -476,10 +476,22 @@ CLIENT.on('interactionCreate', async (interaction) => {
   }
   
   // ===== 設置頁面切換語言 =====
-  if (customId === 'lang_zh' || customId === 'lang_en' || customId === 'lang_zh-CN' || customId === 'lang_zh-TW') {
+  if (
+    customId === 'lang_zh' ||
+    customId === 'lang_en' ||
+    customId === 'lang_zh-CN' ||
+    customId === 'lang_zh-TW' ||
+    customId === 'lang_ko'
+  ) {
     const player = CORE.loadPlayer(user.id);
     if (player) {
-      const langMap = { 'lang_zh': 'zh-TW', 'lang_en': 'en', 'lang_zh-CN': 'zh-CN', 'lang_zh-TW': 'zh-TW' };
+      const langMap = {
+        'lang_zh': 'zh-TW',
+        'lang_en': 'en',
+        'lang_zh-CN': 'zh-CN',
+        'lang_zh-TW': 'zh-TW',
+        'lang_ko': 'ko'
+      };
       player.language = langMap[customId] || 'zh-TW';
       CORE.savePlayer(player);
     }
