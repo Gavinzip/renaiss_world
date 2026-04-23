@@ -3,6 +3,7 @@ const DYNAMIC_WORLD = require('./dynamic-world-utils');
 const { appendLootAudit } = require('../systems/data/loot-audit-log');
 const { getGenerationStatusText } = require('../systems/runtime/utils/global-language-resources');
 const SHOW_DYNAMIC_WORLD_METERS = String(process.env.SHOW_DYNAMIC_WORLD_METERS || '').trim() === '1';
+const LOOT_PITY_GUARANTEE_STREAK = 5;
 
 function formatBridgePreviewText(storyText = '') {
   const preservedMarkers = ['📌', '📖', '🧭', '📍', '⚠️'];
@@ -273,6 +274,22 @@ function inferStoryLootSourceType(storyText = '', fallbackContext = '') {
     return 'forage';
   }
   return 'forage';
+}
+
+function buildLootAuditReason({
+  pendingLoot = null,
+  declaredLootName = '',
+  storyHasLootAcquisition = false,
+  lootGranted = false
+} = {}) {
+  if (lootGranted) return 'marker_and_story_body_confirmed';
+  if (declaredLootName) {
+    return storyHasLootAcquisition
+      ? 'grant_construction_failed'
+      : 'marker_without_acquisition_in_story_body';
+  }
+  if (pendingLoot?.name) return 'pending_candidate_without_marker';
+  return 'no_candidate_or_marker';
 }
 
 function sanitizeStoryTurnMarkerLine(storyText = '') {
@@ -1024,9 +1041,9 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       isLootPityEligibleTurn(event, selectedChoice, result);
     lootEligibleForStreak = Boolean(eligibleForPity);
     if (!tradeGood && eligibleForPity) {
-      // 保底緩衝：連續未掉落時提高候選掉落機會，最終仍需故事判定「已取得」才入包。
+      // 保底緩衝：第 5 個連續 eligible 回合強制產生候選掉落，最終仍需故事判定「已取得」才入包。
       const currentStreak = Math.max(0, Number(player.noLootStreak || 0));
-      if (currentStreak >= 5 && Math.random() < 0.52) {
+      if (currentStreak + 1 >= LOOT_PITY_GUARANTEE_STREAK) {
         const luck = Number(player?.stats?.運氣 || 50);
         const pityText = [
           selectedChoice,
@@ -1742,9 +1759,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       }
 
       const declaredLootName = sanitizeLootMarkerName(extractLootGrantMarker(rawStoryText));
+      const storyHasLootAcquisition = declaredLootName
+        ? storyExplicitlyShowsLootAcquisition(rawStoryText, declaredLootName)
+        : false;
       let lootGranted = false;
       if (declaredLootName) {
-        const storyHasLootAcquisition = storyExplicitlyShowsLootAcquisition(rawStoryText, declaredLootName);
         let grantedLoot = null;
         if (storyHasLootAcquisition && pendingStoryLoot && storyMentionsLoot(declaredLootName, pendingStoryLoot)) {
           grantedLoot = { ...pendingStoryLoot };
@@ -1779,6 +1798,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
           });
         }
 
+      }
+      if (pendingStoryLoot || declaredLootName) {
         await appendLootAudit({
           playerId: String(player?.id || user?.id || '').trim(),
           playerName: String(player?.name || '').trim(),
@@ -1789,15 +1810,19 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
           pendingLootName: String(pendingStoryLoot?.name || '').trim(),
           storyHasLootAcquisition,
           status: lootGranted ? 'granted' : 'blocked',
-          reason: lootGranted
-            ? 'marker_and_story_body_confirmed'
-            : (storyHasLootAcquisition ? 'grant_construction_failed' : 'marker_without_acquisition_in_story_body'),
+          reason: buildLootAuditReason({
+            pendingLoot: pendingStoryLoot,
+            declaredLootName,
+            storyHasLootAcquisition,
+            lootGranted
+          }),
+          noLootStreakBefore: Math.max(0, Number(player.noLootStreak || 0)),
           grantedLoot: lootGranted
             ? {
-              name: String(grantedLoot?.name || '').trim(),
-              rarity: String(grantedLoot?.rarity || '').trim(),
-              category: String(grantedLoot?.category || '').trim(),
-              value: Math.max(1, Math.floor(Number(grantedLoot?.value || 0)))
+              name: String(result?.loot?.name || '').trim(),
+              rarity: String(result?.loot?.rarity || '').trim(),
+              category: String(result?.loot?.category || '').trim(),
+              value: Math.max(1, Math.floor(Number(result?.loot?.value || 0)))
             }
             : null,
           storyPreview: sanitizeStoryTurnMarkerLine(rawStoryText).slice(-600)

@@ -134,26 +134,13 @@ function createBattleLayoutUtils(deps = {}) {
   function clipBattleCellText(text = '', maxLen = 18) {
     const raw = String(text || '').trim() || '—';
     const safeMax = Math.max(4, Number(maxLen) || 18);
-    const WIDE_CHAR_RE = /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u;
-    const EMOJI_RE = /[\u{2600}-\u{27bf}\u{1f300}-\u{1faff}]/u;
-    const charWidth = (ch = '') => {
-      if (!ch) return 0;
-      if (/[\u0000-\u001f\u007f-\u009f]/u.test(ch)) return 0;
-      if (WIDE_CHAR_RE.test(ch) || EMOJI_RE.test(ch)) return 2;
-      return 1;
-    };
-    const textWidth = (source = '') => {
-      let total = 0;
-      for (const ch of String(source || '')) total += charWidth(ch);
-      return total;
-    };
-    if (textWidth(raw) <= safeMax) return raw;
+    if (getBattleTextWidth(raw) <= safeMax) return raw;
     const ellipsis = '…';
-    const keepWidth = Math.max(1, safeMax - textWidth(ellipsis));
+    const keepWidth = Math.max(1, safeMax - getBattleTextWidth(ellipsis));
     let out = '';
     let used = 0;
     for (const ch of raw) {
-      const w = charWidth(ch);
+      const w = getBattleCharWidth(ch);
       if (used + w > keepWidth) break;
       out += ch;
       used += w;
@@ -164,16 +151,8 @@ function createBattleLayoutUtils(deps = {}) {
   function padBattleCellText(text = '', width = 18) {
     const safeWidth = Math.max(4, Number(width) || 18);
     const clipped = clipBattleCellText(text, safeWidth);
-    const WIDE_CHAR_RE = /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u;
-    const EMOJI_RE = /[\u{2600}-\u{27bf}\u{1f300}-\u{1faff}]/u;
-    const charWidth = (ch = '') => {
-      if (!ch) return 0;
-      if (/[\u0000-\u001f\u007f-\u009f]/u.test(ch)) return 0;
-      if (WIDE_CHAR_RE.test(ch) || EMOJI_RE.test(ch)) return 2;
-      return 1;
-    };
     let used = 0;
-    for (const ch of clipped) used += charWidth(ch);
+    for (const ch of clipped) used += getBattleCharWidth(ch);
     return `${clipped}${' '.repeat(Math.max(0, safeWidth - used))}`;
   }
 
@@ -182,14 +161,6 @@ function createBattleLayoutUtils(deps = {}) {
     if (!source) return [''];
     const safeWidth = Math.max(4, Number(maxWidth) || 18);
     const safeLines = Math.max(1, Number(maxLines) || 1);
-    const WIDE_CHAR_RE = /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u;
-    const EMOJI_RE = /[\u{2600}-\u{27bf}\u{1f300}-\u{1faff}]/u;
-    const charWidth = (ch = '') => {
-      if (!ch) return 0;
-      if (/[\u0000-\u001f\u007f-\u009f]/u.test(ch)) return 0;
-      if (WIDE_CHAR_RE.test(ch) || EMOJI_RE.test(ch)) return 2;
-      return 1;
-    };
     const out = [];
     let line = '';
     let lineWidth = 0;
@@ -200,7 +171,7 @@ function createBattleLayoutUtils(deps = {}) {
         lineWidth = 0;
         continue;
       }
-      const w = charWidth(ch);
+      const w = getBattleCharWidth(ch);
       if (lineWidth + w > safeWidth && line) {
         out.push(line);
         line = ch;
@@ -215,6 +186,32 @@ function createBattleLayoutUtils(deps = {}) {
     const kept = out.slice(0, safeLines);
     kept[safeLines - 1] = clipBattleCellText(`${kept[safeLines - 1]}…`, safeWidth);
     return kept;
+  }
+
+  const BATTLE_WIDE_CHAR_RE = /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u;
+  const BATTLE_EMOJI_RE = /[\u{2600}-\u{27bf}\u{1f300}-\u{1faff}]/u;
+
+  function getBattleCharWidth(ch = '') {
+    if (!ch) return 0;
+    if (/[\u0000-\u001f\u007f-\u009f]/u.test(ch)) return 0;
+    if (BATTLE_WIDE_CHAR_RE.test(ch) || BATTLE_EMOJI_RE.test(ch)) return 2;
+    return 1;
+  }
+
+  function getBattleTextWidth(source = '') {
+    let total = 0;
+    for (const ch of String(source || '')) total += getBattleCharWidth(ch);
+    return total;
+  }
+
+  function getBattleBoxInnerWidth(lines = [], min = 24, max = 42) {
+    const safeMin = Math.max(18, Number(min) || 24);
+    const safeMax = Math.max(safeMin, Number(max) || 42);
+    let width = safeMin;
+    for (const line of Array.isArray(lines) ? lines : []) {
+      width = Math.max(width, getBattleTextWidth(String(line || '')));
+    }
+    return Math.min(safeMax, width);
   }
 
   function extractActionExtra(lines = [], fallback = '無') {
@@ -292,12 +289,6 @@ function createBattleLayoutUtils(deps = {}) {
       `對敵造成：${allyDamage}\n` +
       `附加：${allyExtra}`
     );
-  }
-
-  function padBattleLabel(text = '', width = 16) {
-    const raw = String(text || '');
-    if (raw.length >= width) return raw.slice(0, width);
-    return raw + ' '.repeat(width - raw.length);
   }
 
   function formatBattleHpValue(value, fallback = 0) {
@@ -418,8 +409,8 @@ function createBattleLayoutUtils(deps = {}) {
   }
 
   function buildManualBattleBoard(enemy, combatant, state) {
-    const enemyName = padBattleLabel(enemy?.name || '敵人', 14);
-    const allyName = padBattleLabel(combatant?.name || '我方', 14);
+    const enemyName = String(enemy?.name || '敵人').trim() || '敵人';
+    const allyName = String(combatant?.name || '我方').trim() || '我方';
     const enemyElement = formatBattleElementDisplay(resolveEnemyBattleElement(enemy));
     const allyElement = combatant?.isHuman
       ? '🧍 無屬性'
@@ -435,10 +426,34 @@ function createBattleLayoutUtils(deps = {}) {
     const turn = Number(state?.turn || 1);
     const energy = Number(state?.energy || 0);
     const roundText = `第 ${turn} 回合`;
-    const enemyIndent = ' '.repeat(33);
-    const roundLine = `${' '.repeat(Math.max(0, 58 - roundText.length))}${roundText}`;
     const allyRelation = `克制：${relationText}`;
-    const boxInnerWidth = 23;
+    const enemyHeader = `【敵方】 HP ${enemyHp}`;
+    const allyHeader = `【我方】 HP ${allyHp}`;
+    const enemyPreviewLines = [
+      enemyHeader,
+      `名稱 ${enemyName}`,
+      `HPBAR ${enemyHpBar.bar} ${enemyHpBar.percent}%`,
+      `屬性 ${enemyElement}`,
+      `ATK ${enemy?.attack || 0}`
+    ];
+    const allyPreviewLines = [
+      allyHeader,
+      `名稱 ${allyName}`,
+      `HPBAR ${allyHpBar.bar} ${allyHpBar.percent}%`,
+      `屬性 ${allyElement}`,
+      allyRelation,
+      `⚡ 能量 ${energy}（每回 +2，可結轉）`
+    ];
+    const boxInnerWidth = getBattleBoxInnerWidth(
+      enemyPreviewLines.concat(allyPreviewLines),
+      24,
+      40
+    );
+    const boardOuterWidth = boxInnerWidth + 4;
+    const boardTargetWidth = 66;
+    const enemyIndentWidth = Math.max(0, boardTargetWidth - boardOuterWidth);
+    const enemyIndent = ' '.repeat(enemyIndentWidth);
+    const roundLine = `${' '.repeat(Math.max(0, boardTargetWidth - getBattleTextWidth(roundText)))}${roundText}`;
     const enemyTop = `${enemyIndent}┌${'─'.repeat(boxInnerWidth + 2)}┐`;
     const enemyBottom = `${enemyIndent}└${'─'.repeat(boxInnerWidth + 2)}┘`;
     const allyTop = `┌${'─'.repeat(boxInnerWidth + 2)}┐`;
@@ -449,15 +464,15 @@ function createBattleLayoutUtils(deps = {}) {
       '```text\n' +
       `${roundLine}\n` +
       `${enemyTop}\n` +
-      `${enemyLine('【敵方】')}\n` +
-      `${enemyLine(`${enemyName} HP ${enemyHp}`)}\n` +
+      `${enemyLine(enemyHeader)}\n` +
+      `${enemyLine(`名稱 ${enemyName}`)}\n` +
       `${enemyLine(`HPBAR ${enemyHpBar.bar} ${enemyHpBar.percent}%`)}\n` +
       `${enemyLine(`屬性 ${enemyElement}`)}\n` +
       `${enemyLine(`ATK ${enemy?.attack || 0}`)}\n` +
       `${enemyBottom}\n\n` +
       `${allyTop}\n` +
-      `${allyLine('【我方】')}\n` +
-      `${allyLine(`${allyName} HP ${allyHp}`)}\n` +
+      `${allyLine(allyHeader)}\n` +
+      `${allyLine(`名稱 ${allyName}`)}\n` +
       `${allyLine(`HPBAR ${allyHpBar.bar} ${allyHpBar.percent}%`)}\n` +
       `${allyLine(`屬性 ${allyElement}`)}\n` +
       `${allyLine(allyRelation)}\n` +

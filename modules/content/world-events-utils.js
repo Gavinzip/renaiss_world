@@ -1,12 +1,45 @@
 function createWorldEventsUtils(deps = {}) {
   const { CORE = null, EVENTS = null } = deps;
 
+  function summarizeWorldEventMessage(message = '') {
+    const source = String(message || '').replace(/\r/g, '').trim();
+    if (!source) return '';
+    const firstLine = source
+      .split('\n')
+      .map((line) => String(line || '').trim())
+      .find(Boolean);
+    const base = firstLine || source;
+    return base.replace(/\s+/g, ' ').trim();
+  }
+
+  function buildWorldEventSummaryKey(message = '') {
+    return summarizeWorldEventMessage(message)
+      .replace(/[。．.!！?？]+$/u, '')
+      .trim();
+  }
+
   function normalizeWorldEventEntry(entry, source) {
     if (!entry) return null;
-    if (typeof entry === 'string') return { message: entry, timestamp: 0, source };
+    if (typeof entry === 'string') {
+      const summary = summarizeWorldEventMessage(entry);
+      return summary
+        ? {
+          message: summary,
+          rawMessage: String(entry),
+          dedupeKey: buildWorldEventSummaryKey(summary),
+          timestamp: 0,
+          source
+        }
+        : null;
+    }
     if (typeof entry !== 'object') return null;
+    const rawMessage = String(entry.message || '').trim();
+    const summary = summarizeWorldEventMessage(rawMessage);
+    if (!summary) return null;
     return {
-      message: String(entry.message || '').trim(),
+      message: summary,
+      rawMessage,
+      dedupeKey: buildWorldEventSummaryKey(summary),
       timestamp: Number.isFinite(Number(entry.timestamp)) ? Number(entry.timestamp) : 0,
       source
     };
@@ -33,8 +66,9 @@ function createWorldEventsUtils(deps = {}) {
     const uniq = [];
     const seen = new Set();
     for (const item of merged) {
-      if (seen.has(item.message)) continue;
-      seen.add(item.message);
+      const dedupeKey = String(item.dedupeKey || item.message || '').trim();
+      if (!dedupeKey || seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
       uniq.push(item);
       if (uniq.length >= targetLimit) break;
     }
@@ -82,6 +116,8 @@ function createWorldEventsUtils(deps = {}) {
   }
 
   return {
+    summarizeWorldEventMessage,
+    buildWorldEventSummaryKey,
     normalizeWorldEventEntry,
     getMergedWorldEvents,
     publishWorldEvent,
@@ -92,4 +128,3 @@ function createWorldEventsUtils(deps = {}) {
 module.exports = {
   createWorldEventsUtils
 };
-

@@ -162,17 +162,61 @@ function createStoryCodexUtils(deps = {}) {
     return picked.length > 0 ? picked.join('\n') : emptyText;
   }
 
+  function extractNarrativeSpeakerSeed(raw = '') {
+    const source = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!source) return '';
+    const rules = [
+      [/工坊試樣師/u, '工坊試樣師'],
+      [/老船伕|老船夫/u, '老船伕'],
+      [/聯絡員/u, '聯絡員'],
+      [/試樣師/u, '試樣師'],
+      [/船伕|船夫/u, '船伕'],
+      [/技師/u, '技師'],
+      [/守衛/u, '守衛'],
+      [/巡邏員/u, '巡邏員'],
+      [/倉管/u, '倉管'],
+      [/攤主/u, '攤主'],
+      [/商人/u, '商人'],
+      [/中年男子/u, '中年男子'],
+      [/中年女子/u, '中年女子'],
+      [/老人/u, '老人'],
+      [/婦人/u, '婦人'],
+      [/男子|男聲|男人|他/u, '男子'],
+      [/女子|女聲|女人|她/u, '女子'],
+      [/對方|对方/u, '對方']
+    ];
+    for (const [pattern, label] of rules) {
+      if (pattern.test(source)) return label;
+    }
+    return '';
+  }
+
+  function looksLikeNarrativeSpeakerFragment(text = '') {
+    const source = String(text || '').trim();
+    if (!source) return true;
+    if (/^(我|我們|我们|咱們|咱们|你|妳|你們|你们|妳們|妳们)/u.test(source)) return true;
+    return /(壓低聲音|压低声音|低聲|低声|回應|回应|說了一句|说了一句|說道|说道|開口|开口|提醒|補充|补充|沉默|皺起眉頭|皱起眉头|上下打量|看向|轉頭|转头|轉身|转身|消失在|握緊|握紧|抬腳|抬脚|停下腳步|停下脚步|探出頭|探出头|笑了笑|笑容|語氣|语气|目光|身影)/u.test(source);
+  }
+
   function normalizeStorySpeakerText(raw = '') {
-    let text = String(raw || '')
+    const original = String(raw || '')
       .replace(/\s+/g, ' ')
       .replace(/[「」『』"“”]/g, '')
       .trim();
-    if (!text) return '';
+    if (!original) return '';
+    const seededFromOriginal = extractNarrativeSpeakerSeed(original);
+    if (looksLikeNarrativeSpeakerFragment(original)) {
+      return seededFromOriginal;
+    }
+    let text = original;
     const chunks = text.split(/[，。！？!?：:]/).map((s) => s.trim()).filter(Boolean);
     if (chunks.length > 0) text = chunks[chunks.length - 1];
     text = text.replace(/^(一名|一位|某位|某個|那位|這位|該名|那名)/u, '').trim();
     text = text.replace(/(突然|輕聲|低聲|沙啞地|微笑著|笑著|開口|轉身|回頭)$/u, '').trim();
     if (!text) return '';
+    if (looksLikeNarrativeSpeakerFragment(text)) {
+      return seededFromOriginal || extractNarrativeSpeakerSeed(text);
+    }
     return text.slice(0, 24);
   }
 
@@ -229,6 +273,7 @@ function createStoryCodexUtils(deps = {}) {
       if (!quote || quote.length < 2) return;
       let speaker = normalizeStorySpeakerText(speakerRaw);
       if (!speaker) return;
+      if (/^(我|我們|我们|咱們|咱们|你|妳|你們|你们|妳們|妳们|旁白)$/u.test(speaker)) return;
       if (isGenericSpeaker(speaker)) {
         speaker = aliasGenericSpeaker(speaker, aliasState);
       }

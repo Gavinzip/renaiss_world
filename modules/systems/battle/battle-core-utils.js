@@ -48,13 +48,18 @@ function createBattleCoreUtils(deps = {}) {
     const humanState = battleState?.humanState && typeof battleState.humanState === 'object'
       ? battleState.humanState
       : null;
+    const effectiveHpFromState = Number(humanState?.effectiveHp);
     const hpFromState = Number(humanState?.hp);
-    const hpBase = Number.isFinite(hpFromState)
-      ? Math.max(0, hpFromState)
-      : Math.max(0, Number(player?.stats?.生命 || maxHpBase));
-    const hp = hpBase <= 0
-      ? 0
-      : Math.max(0, Math.min(maxHp, hpBase + Math.max(0, Number(equipBonus.hp || 0))));
+    const hp = Number.isFinite(effectiveHpFromState)
+      ? Math.max(0, Math.min(maxHp, effectiveHpFromState))
+      : (() => {
+          const hpBase = Number.isFinite(hpFromState)
+            ? Math.max(0, hpFromState)
+            : Math.max(0, Number(player?.stats?.生命 || maxHpBase));
+          return hpBase <= 0
+            ? 0
+            : Math.max(0, Math.min(maxHp, hpBase + Math.max(0, Number(equipBonus.hp || 0))));
+        })();
     return {
       id: `human_${String(player.id || '')}`,
       name: String(player.name || '冒險者'),
@@ -174,6 +179,7 @@ function createBattleCoreUtils(deps = {}) {
     if (!raw || typeof raw !== 'object') return null;
     return {
       hp: Number(raw.hp || 0),
+      effectiveHp: Number(raw.effectiveHp),
       status: cloneStatusState(raw.status)
     };
   }
@@ -187,6 +193,7 @@ function createBattleCoreUtils(deps = {}) {
     }
     player.battleState.petStates[key] = {
       hp: Number(snapshot.hp || 0),
+      effectiveHp: Number(snapshot.effectiveHp),
       status: cloneStatusState(snapshot.status)
     };
   }
@@ -229,8 +236,13 @@ function createBattleCoreUtils(deps = {}) {
     const snapshot = getBattlePetStateSnapshot(player, pet.id);
     const hpBonus = Math.max(0, Math.floor(Number(equipBonus.hp || 0)));
     const maxHp = Math.max(1, Number(pet.maxHp || 100) + hpBonus);
-    const hpRaw = snapshot ? Number(snapshot.hp || 0) : Number(pet.hp || 0);
-    const hpWithBonus = hpRaw <= 0 ? 0 : (hpRaw + hpBonus);
+    const snapshotEffectiveHp = Number(snapshot?.effectiveHp);
+    const hpWithBonus = Number.isFinite(snapshotEffectiveHp)
+      ? Math.max(0, Math.min(maxHp, snapshotEffectiveHp))
+      : (() => {
+          const hpRaw = snapshot ? Number(snapshot.hp || 0) : Number(pet.hp || 0);
+          return hpRaw <= 0 ? 0 : (hpRaw + hpBonus);
+        })();
     return {
       ...pet,
       hp: Math.max(0, Math.min(maxHp, hpWithBonus)),
@@ -400,11 +412,13 @@ function createBattleCoreUtils(deps = {}) {
     const statusSnapshot = cloneStatusState(combatant.status);
     if (combatant.isHuman) {
       const maxHp = Math.max(1, player?.maxStats?.生命 || 100);
-      const baseHp = Math.max(0, Math.min(maxHp, Number(combatant.hp || 0) - hpBonus));
+      const effectiveHp = Math.max(0, Math.min(Number(combatant.maxHp || maxHp), Number(combatant.hp || 0)));
+      const baseHp = Math.max(0, Math.min(maxHp, effectiveHp - hpBonus));
       player.stats.生命 = baseHp;
       if (player.battleState) {
         player.battleState.humanState = {
           hp: baseHp,
+          effectiveHp,
           status: statusSnapshot
         };
       }
@@ -421,10 +435,12 @@ function createBattleCoreUtils(deps = {}) {
     }
     if (!targetPet) return;
 
-    targetPet.hp = Math.max(0, Math.min(Number(targetPet.maxHp || 100), Number(combatant.hp || 0) - hpBonus));
+    const effectiveHp = Math.max(0, Math.min(Number(combatant.maxHp || (Number(targetPet.maxHp || 100) + hpBonus)), Number(combatant.hp || 0)));
+    targetPet.hp = Math.max(0, Math.min(Number(targetPet.maxHp || 100), effectiveHp - hpBonus));
     if (player.battleState) {
       setBattlePetStateSnapshot(player, targetPet.id, {
         hp: targetPet.hp,
+        effectiveHp,
         status: statusSnapshot
       });
     }

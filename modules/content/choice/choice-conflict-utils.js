@@ -158,7 +158,51 @@ function createChoiceConflictUtils(deps = {}) {
       .replace(/^(?:對方|对方)\s*/u, '')
       .trim();
     if (!text) return '';
+    const narrativeSeed = extractConflictTargetSeed(text);
+    if (looksLikeNarrativeConflictPhrase(text)) {
+      text = narrativeSeed;
+    }
+    if (!text) return '';
     return text.slice(0, AGGRESSIVE_FOLLOWUP_TARGET_MAX_LEN);
+  }
+
+  function extractConflictTargetSeed(text = '') {
+    const source = String(text || '').trim();
+    if (!source) return '';
+    const rules = [
+      [/工坊試樣師/u, '工坊試樣師'],
+      [/老船伕|老船夫/u, '老船伕'],
+      [/聯絡員/u, '聯絡員'],
+      [/試樣師/u, '試樣師'],
+      [/船伕|船夫/u, '船伕'],
+      [/技師/u, '技師'],
+      [/守衛/u, '守衛'],
+      [/巡邏員/u, '巡邏員'],
+      [/倉管/u, '倉管'],
+      [/攤主/u, '攤主'],
+      [/商人/u, '商人'],
+      [/中年男子/u, '神秘男子'],
+      [/中年女子/u, '神秘女子'],
+      [/老人|老者/u, '神秘老者'],
+      [/婦人/u, '神秘婦人'],
+      [/男子|男聲|男人|他/u, '神秘男子'],
+      [/女子|女聲|女人|她/u, '神秘女子'],
+      [/對方|对方/u, '可疑人士']
+    ];
+    for (const [pattern, label] of rules) {
+      if (pattern.test(source)) return label;
+    }
+    return '';
+  }
+
+  function looksLikeNarrativeConflictPhrase(text = '') {
+    const source = String(text || '').trim();
+    if (!source) return true;
+    return /(壓低聲音|压低声音|低聲|低声|回應|回应|說了一句|说了一句|說道|说道|開口|开口|提醒|補充|补充|沉默|皺起眉頭|皱起眉头|上下打量|看向|轉頭|转头|轉身|转身|消失在|握緊|握紧|抬腳|抬脚|停下腳步|停下脚步|探出頭|探出头|笑了笑|笑容|語氣|语气|目光|身影)/u.test(source);
+  }
+
+  function isLowSpecificityConflictTarget(text = '') {
+    return /^(?:神秘(?:男子|女子|人物)(?:[A-Z])?|可疑人士|男子|女子|人物|對方|对方)$/u.test(String(text || '').trim());
   }
 
   function scoreStoryBindingForNpc(npc = null, storyText = '', speakerHints = new Set()) {
@@ -207,6 +251,7 @@ function createChoiceConflictUtils(deps = {}) {
       if (!speaker) continue;
       if (playerName && (speaker === playerName || speaker.includes(playerName))) continue;
       if (/^(冒險者|冒险者|你|我|主角|旁白)$/u.test(speaker)) continue;
+      if (isLowSpecificityConflictTarget(speaker)) continue;
       return speaker;
     }
 
@@ -224,7 +269,7 @@ function createChoiceConflictUtils(deps = {}) {
     const directPhrase = tailSource.match(/(?:那名|那位|剛才那名|剛才那位|刚才那名|刚才那位)([^，。；、\n]{1,14})/u);
     if (directPhrase && directPhrase[1]) {
       const normalized = normalizeConflictTargetName(directPhrase[1]);
-      if (normalized) return normalized;
+      if (normalized && !isLowSpecificityConflictTarget(normalized)) return normalized;
     }
     if (/(女子|少女|女聲|女声|女人|姑娘|她)/u.test(tailSource)) return '神秘女子';
     if (/(男子|男聲|男声|男人|他)/u.test(tailSource)) return '神秘男子';
