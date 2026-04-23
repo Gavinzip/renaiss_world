@@ -39,6 +39,7 @@ function createChoicePolicyUtils(deps = {}) {
     markSystemChoiceExposure: markSystemChoiceExposureImpl
   } = deps;
   const { getChoiceTag } = require('../../systems/runtime/utils/global-language-resources');
+  const WANTED_PSUIT_CHOICE_RE = /(通緝|通缉|追兵|尾隨|尾随|盯上|主動接近|主动接近|bounty|wanted|hunter|tailing|tracked|현상금|추적|추격|매복)/iu;
 
   function isPortalChoice(choice) {
     if (!choice || typeof choice !== 'object') return false;
@@ -541,34 +542,79 @@ function createChoicePolicyUtils(deps = {}) {
       wantedLevel
     });
     if (!target?.enemy) return null;
-    const location = String(player?.location || '附近據點').trim() || '附近據點';
+    const rawLang = String(player?.language || 'zh-TW').trim().toLowerCase();
+    const isKo = rawLang === 'ko' || rawLang === 'ko-kr' || rawLang === 'kr' || rawLang.includes('korean') || rawLang.includes('한국');
+    const isEn = rawLang === 'en' || rawLang === 'en-us' || rawLang === 'en_us' || rawLang.startsWith('en-');
+    const isZhCN = rawLang === 'zh-cn' || rawLang === 'zh_cn' || rawLang === 'zh-hans' || rawLang === 'cn' || rawLang === 'sc' || rawLang.includes('简体');
+    const location = String(player?.location || (isKo ? '인근 거점' : (isEn ? 'nearby outpost' : (isZhCN ? '附近据点' : '附近據點')))).trim()
+      || (isKo ? '인근 거점' : (isEn ? 'nearby outpost' : (isZhCN ? '附近据点' : '附近據點')));
     const forcedDisplayName = normalizeConflictTargetName(options?.displayName || '');
     const displayNpcName = forcedDisplayName || (
       /匿名滲透者/u.test(String(target.npcName || ''))
-        ? '可疑尾隨者'
-        : String(target.npcName || '可疑敵手')
+        ? (isKo ? '수상한 추적자' : (isEn ? 'suspicious tail' : (isZhCN ? '可疑尾随者' : '可疑尾隨者')))
+        : String(target.npcName || (isKo ? '수상한 적대자' : (isEn ? 'suspicious hostile' : (isZhCN ? '可疑敌手' : '可疑敵手'))))
     );
     const reason = String(options?.reason || 'story').trim();
+    const battleMarker = isKo
+      ? '（전투 진입）'
+      : (isEn ? '(Immediate battle)' : (isZhCN ? '（会进入战斗）' : '（會進入戰鬥）'));
     const hunterText = escalation.active && escalation.hunterCount > 1
-      ? `${escalation.hunterCount} 組追兵`
-      : '追兵';
-    const choiceText = reason === 'wanted'
-      ? `察覺${location}周邊有${hunterText}盯上你，鎖定${displayNpcName}先發制人（會進入戰鬥）`
-      : (reason === 'aggressive_followup'
-        ? `攔下剛才出現在${location}的${displayNpcName}，正面逼問來源（會進入戰鬥）`
-        : `察覺${location}氣氛不對勁，鎖定${displayNpcName}動向先發制人（會進入戰鬥）`);
-    const descText = reason === 'wanted'
-      ? `通緝熱度 Lv.${wantedLevel}｜敵對勢力主動接近：${displayNpcName}`
-      : (reason === 'aggressive_followup'
-        ? '你選擇把剛才的衝突升級為正面交鋒，對方可能當場反擊'
-        : `地區篇章關鍵戰：對手來自${location}在地勢力`);
+      ? (isKo ? `${escalation.hunterCount}개 추격조` : (isEn ? `${escalation.hunterCount} hunter teams` : (isZhCN ? `${escalation.hunterCount} 组追兵` : `${escalation.hunterCount} 組追兵`)))
+      : (isKo ? '추격조' : (isEn ? 'hunters' : (isZhCN ? '追兵' : '追兵')));
+    let choiceText = '';
+    let descText = '';
+    if (isKo) {
+      choiceText = reason === 'wanted'
+        ? `${location} 주변에서 ${hunterText}가 너를 노린다는 낌새를 포착했고, ${displayNpcName}을 선제 차단한다 ${battleMarker}`
+        : (reason === 'aggressive_followup'
+          ? `방금 ${location}에 나타난 ${displayNpcName}을 붙잡아 정면으로 출처를 추궁한다 ${battleMarker}`
+          : `${location}의 분위기가 심상치 않다. ${displayNpcName}의 동선을 선제 차단한다 ${battleMarker}`);
+      descText = reason === 'wanted'
+        ? `수배 압력 Lv.${wantedLevel}｜적대 세력이 먼저 접근: ${displayNpcName}`
+        : (reason === 'aggressive_followup'
+          ? '방금 충돌을 정면 교전으로 끌어올린다. 상대가 즉시 반격할 수 있다'
+          : `${location} 지역 서사의 핵심 교전: 현지 적대 세력과 충돌`);
+    } else if (isEn) {
+      choiceText = reason === 'wanted'
+        ? `You detect ${hunterText} locking onto you near ${location}, and preemptively intercept ${displayNpcName} ${battleMarker}`
+        : (reason === 'aggressive_followup'
+          ? `Stop ${displayNpcName}, who just appeared in ${location}, and force a face-to-face source check ${battleMarker}`
+          : `The atmosphere around ${location} turns hostile. Preemptively cut off ${displayNpcName}'s movement ${battleMarker}`);
+      descText = reason === 'wanted'
+        ? `Wanted pressure Lv.${wantedLevel} | Hostile side closes in first: ${displayNpcName}`
+        : (reason === 'aggressive_followup'
+          ? 'You escalate the latest friction into direct confrontation, expecting immediate retaliation'
+          : `Key clash in the local arc: opponent is tied to ${location}`);
+    } else if (isZhCN) {
+      choiceText = reason === 'wanted'
+        ? `察觉${location}周边有${hunterText}盯上你，锁定${displayNpcName}先发制人${battleMarker}`
+        : (reason === 'aggressive_followup'
+          ? `拦下刚出现在${location}的${displayNpcName}，正面逼问来源${battleMarker}`
+          : `察觉${location}气氛不对劲，锁定${displayNpcName}动向先发制人${battleMarker}`);
+      descText = reason === 'wanted'
+        ? `通缉热度 Lv.${wantedLevel}｜敌对势力主动接近：${displayNpcName}`
+        : (reason === 'aggressive_followup'
+          ? '你选择把刚才的冲突升级为正面交锋，对方可能当场反击'
+          : `地区篇章关键战：对手来自${location}在地势力`);
+    } else {
+      choiceText = reason === 'wanted'
+        ? `察覺${location}周邊有${hunterText}盯上你，鎖定${displayNpcName}先發制人${battleMarker}`
+        : (reason === 'aggressive_followup'
+          ? `攔下剛才出現在${location}的${displayNpcName}，正面逼問來源${battleMarker}`
+          : `察覺${location}氣氛不對勁，鎖定${displayNpcName}動向先發制人${battleMarker}`);
+      descText = reason === 'wanted'
+        ? `通緝熱度 Lv.${wantedLevel}｜敵對勢力主動接近：${displayNpcName}`
+        : (reason === 'aggressive_followup'
+          ? '你選擇把剛才的衝突升級為正面交鋒，對方可能當場反擊'
+          : `地區篇章關鍵戰：對手來自${location}在地勢力`);
+    }
     const enemy = target?.enemy && typeof target.enemy === 'object'
       ? { ...target.enemy, name: displayNpcName, storyPersonaName: displayNpcName }
       : target.enemy;
     return {
       action: 'location_story_battle',
       tag: getChoiceTag('combat', player?.language || 'zh-TW'),
-      name: `攔截 ${displayNpcName}`,
+      name: isKo ? `요격 ${displayNpcName}` : (isEn ? `Intercept ${displayNpcName}` : (isZhCN ? `拦截 ${displayNpcName}` : `攔截 ${displayNpcName}`)),
       choice: choiceText,
       desc: descText,
       npcId: target.npcId,
@@ -616,6 +662,46 @@ function createChoicePolicyUtils(deps = {}) {
       if (!protectedActions.has(String(list[i]?.action || ''))) {
         replaceIdx = i;
         break;
+      }
+    }
+    list[replaceIdx] = injected;
+    return list.slice(0, CHOICE_DISPLAY_COUNT);
+  }
+
+  function choiceHasWantedPursuitCue(choice = {}) {
+    if (!choice || typeof choice !== 'object') return false;
+    const text = [choice.name || '', choice.choice || '', choice.desc || '', choice.tag || ''].join(' ');
+    return WANTED_PSUIT_CHOICE_RE.test(text);
+  }
+
+  function ensureWantedPressurePursuitChoice(player, choices = []) {
+    const list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
+    if (!player || list.length === 0) return list;
+    const wantedPressure = getPlayerWantedPressure(player);
+    const escalation = getWantedEscalationProfile(wantedPressure);
+    if (!escalation.active) return list;
+    const pending = typeof getPendingConflictFollowup === 'function' ? getPendingConflictFollowup(player) : null;
+    if (pending?.active) return list;
+    if (list.some(choiceHasWantedPursuitCue)) return list;
+
+    const storyText = String(player?.currentStory || player?.generationState?.storySnapshot || '').trim();
+    const injected = createGuaranteedLocationStoryBattleChoice(player, storyText, {
+      allowLooseSelection: true,
+      preferVillain: true,
+      wantedLevel: wantedPressure,
+      reason: 'wanted'
+    });
+    if (!injected) return list;
+
+    const protectedActions = new Set(['portal_intent', 'wish_pool', 'market_renaiss', 'market_digital', 'scratch_lottery', 'custom_input', 'mentor_spar']);
+    let replaceIdx = list.findIndex((choice) => isImmediateBattleChoice(choice));
+    if (replaceIdx < 0) {
+      replaceIdx = list.length - 1;
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (!protectedActions.has(String(list[i]?.action || '').trim())) {
+          replaceIdx = i;
+          break;
+        }
       }
     }
     list[replaceIdx] = injected;
@@ -817,11 +903,10 @@ function createChoicePolicyUtils(deps = {}) {
   function applyChoicePolicy(player, choices = []) {
     let list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
     if (!player || list.length === 0) return list;
-    // Prompt-only 選項策略：
-    // 只做安全性修正（如威脅場景下的即時戰鬥降級），不再本地注入模板選項。
-    // 所有可玩性/主線/系統可用性由 AI 提示詞直接產生。
+    // Prompt-first 選項策略：以 AI 選項為主，僅在必要時做保底修正。
     list = ensurePendingConflictImmediateBattleChoice(player, list);
     list = applyStoryThreatGate(player, list);
+    list = ensureWantedPressurePursuitChoice(player, list);
     if (typeof markSystemChoiceExposureImpl === 'function') {
       markSystemChoiceExposureImpl(player, list);
     }
@@ -852,6 +937,7 @@ function createChoicePolicyUtils(deps = {}) {
     createGuaranteedIncomeChoice,
     createGuaranteedLocationStoryBattleChoice,
     ensureLocationStoryBattleChoiceAvailability,
+    ensureWantedPressurePursuitChoice,
     isAggressiveChoice,
     createGuaranteedAggressiveChoice,
     createCadenceConflictPrepChoice,

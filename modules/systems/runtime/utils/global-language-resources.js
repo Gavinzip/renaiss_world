@@ -58,12 +58,33 @@ function createGlobalLanguageResources(deps = {}) {
     return value;
   }
 
+  function isPlainObject(value = null) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function mergeLocalizedKoreanValue(baseValue = null, overrideValue = null) {
+    if (overrideValue === undefined) return baseValue;
+    if (baseValue === undefined) return overrideValue;
+    if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
+      const out = { ...baseValue };
+      for (const [key, value] of Object.entries(overrideValue)) {
+        out[key] = mergeLocalizedKoreanValue(baseValue[key], value);
+      }
+      return out;
+    }
+    return overrideValue;
+  }
+
   function getKoreanSection(section = '', rows = {}) {
     const key = String(section || '').trim();
     if (!key) return {};
     if (koreanSectionCache.has(key)) return koreanSectionCache.get(key);
-    const source = rows?.ko || rows?.en || rows?.['zh-TW'] || {};
-    const localized = localizeValueToKorean(source);
+    const hasKoOverride = Object.prototype.hasOwnProperty.call(rows || {}, 'ko');
+    const baseSource = rows?.en || rows?.['zh-TW'] || rows?.ko || {};
+    const baseLocalized = localizeValueToKorean(baseSource);
+    const localized = hasKoOverride
+      ? mergeLocalizedKoreanValue(baseLocalized, localizeValueToKorean(rows?.ko))
+      : baseLocalized;
     koreanSectionCache.set(key, localized);
     return localized;
   }
@@ -438,6 +459,29 @@ function createGlobalLanguageResources(deps = {}) {
         lastChoice: '📍 Previous Choice',
         sectionPrevStory: '📜 Previous Context',
         sectionUpcomingChoices: '🆕 Incoming Choices'
+      },
+      ko: {
+        statusLabel: '상태',
+        statusHp: 'HP',
+        statusEnergy: '에너지',
+        statusCurrency: 'Rns 토큰',
+        fieldPet: '🐾 펫',
+        fieldHp: '⚔️ HP',
+        fieldCurrency: '💰 Rns',
+        fieldLocation: '📍 위치',
+        fieldLuck: '🌟 행운',
+        fieldWanted: '🚨 수배 레벨',
+        mainlineDone: (location) => `📖 지역 메인라인: 완료 (${location})`,
+        mainlineProgress: (location) => `📖 지역 메인라인: 진행 중 (${location})`,
+        missionBoss: (done) => ` | 핵심 임무: 4대 지휘관 전원 격파 (${done ? '완료' : '진행 중'})`,
+        missionNpc: (name, location, done) => ` | 핵심 NPC: ${name}@${location} (${done ? '완료' : '진행 중'})`,
+        sectionChoices: '🆕 선택지',
+        sectionNewChoices: '🆕 새 선택지',
+        chooseNumber: (max) => `번호를 선택하세요 (1-${max})`,
+        sectionWorldEvents: '📢 세계 이벤트',
+        lastChoice: '📍 이전 선택',
+        sectionPrevStory: '📜 이전 스토리',
+        sectionUpcomingChoices: '🆕 곧 갱신될 선택지'
       }
     },
 
@@ -904,6 +948,69 @@ function createGlobalLanguageResources(deps = {}) {
           unequipSuccess: (unequippedName) => `↩️ 已拆下：${unequippedName}`
         }
       },
+      ko: {
+        skillChipPrefix: '스킬 칩: ',
+        fusionBlockedItems: ['건량 한 팩', '물 주머니'],
+        fusionSlots: {
+          helmet: '헬멧 (공격력)',
+          armor: '갑옷 (HP+방어력)',
+          belt: '벨트 (HP)',
+          shoes: '신발 (속도)',
+          unknown: '알 수 없는 슬롯'
+        },
+        inventory: {
+          notFoundPlayer: '❌ 캐릭터를 찾을 수 없습니다!',
+          bagTitle: (name) => `🎒 ${name}의 가방`,
+          pageLabel: (view, page, total) => `현재 탭: ${view} (페이지 ${page}/${total})`,
+          carrying: '현재 소지 중인 아이템',
+          fusionReady: (count) => `융합: 사용 가능한 수집품 ${count}개 (필요 3개)`,
+          tabItems: '📦 아이템',
+          tabGoods: '🧰 수집품',
+          tabEquipment: '🛡️ 장비',
+          goodsField: (p, t) => `🧰 수집품 (페이지 ${p}/${t})`,
+          equipWorn: (count) => `🛡️ 장착 중 (가방 ${count})`,
+          equipBonus: '📈 장비 보너스',
+          equipBag: (p, t) => `🎒 장비 가방 (페이지 ${p}/${t})`,
+          itemField: (p, t) => `📦 아이템 (페이지 ${p}/${t})`,
+          herbField: (p, t) => `🌿 약초 (페이지 ${p}/${t})`,
+          prevPage: '⬅️ 이전',
+          nextPage: '➡️ 다음',
+          fusionButton: '🧪 수집품 융합',
+          empty: '(비어 있음)',
+          tokenUnit: 'Rns',
+          sourceLabelInventory: '가방',
+          sourceLabelGoods: '수집품'
+        },
+        equipment: {
+          notEquipped: '장착 안 됨',
+          unnamedGear: '이름 없는 장비',
+          estimateLabel: '평가가',
+          totalBonus: '총 보너스',
+          noPetEquipmentData: '(펫 장비 데이터가 없습니다)',
+          noPetEquipped: '(장비를 착용한 펫이 아직 없습니다)',
+          petLabel: '펫',
+          notFoundPlayer: '❌ 캐릭터를 찾을 수 없습니다!',
+          title: '🛡️ 펫 장비 관리',
+          currentPet: '현재 펫',
+          intro: '각 펫은 헬멧/갑옷/벨트/신발 슬롯을 독립적으로 사용합니다.',
+          slotsTitle: '🎯 장비 슬롯',
+          loreTitle: '📜 장비 설명',
+          loreEmpty: '(장비 설명이 없습니다)',
+          ownershipTitle: '🐾 장비 소유 현황',
+          equipPlaceholder: '가방에서 현재 펫에게 장착',
+          unequipPlaceholder: '현재 펫 슬롯 장비 해제',
+          backPetPanel: '🐾 펫 관리로 돌아가기',
+          profile: '💳 프로필',
+          bagNo: '가방',
+          unequipHint: '해제하면 장비 가방으로 돌아갑니다',
+          petDataExpired: '⚠️ 펫 데이터가 만료되었습니다. 장비 페이지를 다시 열어 주세요.',
+          equipFailed: '⚠️ 장착할 수 없습니다. 다시 선택해 주세요.',
+          unequipFailed: '⚠️ 해제에 실패했습니다. 다시 시도해 주세요.',
+          gearWord: '장비',
+          equipSuccess: (petName, equippedName) => `✅ ${petName}에게 장착: ${equippedName}`,
+          unequipSuccess: (unequippedName) => `↩️ 장비 해제: ${unequippedName}`
+        }
+      },
       en: {
         skillChipPrefix: 'Skill Chip: ',
         fusionBlockedItems: ['Ration Pack', 'Water Flask'],
@@ -1092,6 +1199,12 @@ function createGlobalLanguageResources(deps = {}) {
         outputFullstop: '请使用简体中文输出。',
         plain: '请用简体中文',
         narrate: '请用简体中文讲述'
+      },
+      ko: {
+        output: '모든 출력을 한국어로 작성해 주세요',
+        outputFullstop: '모든 출력을 한국어로 작성해 주세요.',
+        plain: '한국어로 작성해 주세요',
+        narrate: '한국어로 이야기해 주세요'
       },
       en: {
         output: 'Please output in English',

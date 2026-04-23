@@ -223,7 +223,7 @@ function getLocationPlaystylePromptBlock(location = '', playerLang = 'zh-TW') {
 
 function classifyChoiceCluster(action = '', text = '', resultType = '') {
   const merged = [action, resultType, text].filter(Boolean).join(' ');
-  if (/(fight|combat|location_story_battle|mentor_spar|攔截|強攻|迎戰|戰鬥|會進入戰鬥)/iu.test(merged)) return 'combat';
+  if (/(fight|combat|location_story_battle|mentor_spar|攔截|拦截|強攻|强攻|迎戰|迎战|戰鬥|战斗|會進入戰鬥|会进入战斗|전투|전투\s*진입|교전)/iu.test(merged)) return 'combat';
   if (/(market|shop|trade|buy|purchase|議價|開價|成交|交易|鑑價|鑑定)/iu.test(merged)) return 'trade';
   if (/(social|quest|help|gossip|談判|交涉|口供|詢問|社交)/iu.test(merged)) return 'social';
   if (/(investigate|trace|verify|追查|線索|比對|查驗|調取|驗證|紀錄)/iu.test(merged)) return 'investigate';

@@ -33,11 +33,13 @@ const {
   getLocationWeatherProfile
 } = require('./location-weather');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
+const { computeAlignmentProfileFromPlayer } = require('./alignment-profile-utils');
 const {
   getChoiceTag,
   localizeChoiceTag,
   getChoiceTagPromptLines,
-  isAggressiveChoiceTag
+  isAggressiveChoiceTag,
+  normalizeLangCode
 } = require('../systems/runtime/utils/global-language-resources');
 
 const LANGUAGE_RESOURCES = createGlobalLanguageResources({
@@ -400,12 +402,15 @@ function isHostileNpcRecord(npc = null) {
 function getWantedPressure(player = null) {
   if (!player || typeof player !== 'object') return 0;
   const localWanted = Math.max(0, Number(player?.wanted || 0));
+  const alignment = computeAlignmentProfileFromPlayer(player, String(player?.location || '').trim());
+  const wantedFloor = Math.max(0, Number(alignment?.wantedFloor || 0));
+  const wantedBoost = Math.max(0, Number(alignment?.wantedBoost || 0));
   const playerId = String(player?.id || '').trim();
   let coreWanted = 0;
   if (playerId && CORE && typeof CORE.getPlayerWantedLevel === 'function') {
     coreWanted = Math.max(0, Number(CORE.getPlayerWantedLevel(playerId) || 0));
   }
-  return Math.max(localWanted, coreWanted);
+  return Math.max(localWanted, coreWanted, wantedFloor + wantedBoost);
 }
 
 function getBattleCadenceInfo(player = null) {
@@ -585,9 +590,28 @@ function normalizeOutputByLanguage(text, playerLang = 'zh-TW') {
   const source = typeof text === 'string' ? text : String(text || '');
   if (!source) return '';
   const sanitized = sanitizeNarrativeText(source);
-  if (playerLang === 'zh-TW') return convertCNToTW(sanitized);
-  if (playerLang === 'zh-CN') return convertTWToCN(sanitized);
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  if (langCode === 'zh-TW') return convertCNToTW(sanitized);
+  if (langCode === 'zh-CN') return convertTWToCN(sanitized);
   return sanitized;
+}
+
+function countRegexMatches(text = '', regex = null) {
+  const source = String(text || '');
+  if (!source || !(regex instanceof RegExp)) return 0;
+  const match = source.match(regex);
+  return Array.isArray(match) ? match.length : 0;
+}
+
+function getLanguageComplianceIssue(text = '', playerLang = 'zh-TW', mode = 'story') {
+  const source = String(text || '');
+  if (!source) return '';
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  if (langCode !== 'ko') return '';
+  const hangulCount = countRegexMatches(source, /[가-힣]/g);
+  const minHangul = mode === 'story' ? 80 : 8;
+  if (hangulCount >= minHangul) return '';
+  return `語言違規：目前語言是韓文（ko），但輸出韓文字元不足（${hangulCount}/${minHangul}）`;
 }
 
 function normalizeChoiceByLanguage(choice, playerLang = 'zh-TW') {
@@ -640,6 +664,7 @@ function normalizeChoiceRouteForMap(choice = {}, player = null, location = '') {
 
   const routePreview = buildChoiceRoutePreview(routePath);
   const playerLang = String(player?.language || 'zh-TW').trim();
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
   const replaceTarget = (text = '') => String(text || '').replace(new RegExp(escapeRegex(finalTarget), 'u'), nextHop);
   const tweakLead = (text = '') => String(text || '')
     .replace(/^前往/u, '先往')
@@ -648,7 +673,7 @@ function normalizeChoiceRouteForMap(choice = {}, player = null, location = '') {
     .replace(/^Go to /u, 'Head to ')
     .replace(/^Move to /u, 'Move to ');
 
-  if (playerLang === 'en') {
+  if (langCode === 'en') {
     const originalName = String(choice.name || '').trim();
     const originalChoice = String(choice.choice || '').trim();
     const originalDesc = String(choice.desc || '').trim();
@@ -659,6 +684,22 @@ function normalizeChoiceRouteForMap(choice = {}, player = null, location = '') {
     let descText = originalDesc ? replaceTarget(originalDesc) : `Secure ${nextHop} first, then continue toward ${finalTarget}`;
     if (!descText.includes(finalTarget)) descText = `${descText.replace(/[.]\s*$/u, '')} | Final target: ${finalTarget}`;
     if (routePreview) descText = `${descText} | Route: ${routePreview}`;
+    next.desc = descText;
+    return next;
+  }
+  if (langCode === 'ko') {
+    const originalName = String(choice.name || '').trim();
+    const originalChoice = String(choice.choice || '').trim();
+    const originalDesc = String(choice.desc || '').trim();
+    next.name = originalName ? tweakLead(replaceTarget(originalName)) : `${nextHop} 선행 이동`;
+    let choiceText = originalChoice ? tweakLead(replaceTarget(originalChoice)) : `${nextHop}로 먼저 이동한다`;
+    if (!choiceText.includes(finalTarget)) {
+      choiceText = `${choiceText.replace(/[.。；;]\s*$/u, '')}, ${finalTarget} 방향 경로를 이어간다`;
+    }
+    next.choice = choiceText;
+    let descText = originalDesc ? replaceTarget(originalDesc) : `${nextHop}에서 먼저 진입 거점을 확보한 뒤 ${finalTarget}로 밀어붙인다`;
+    if (!descText.includes(finalTarget)) descText = `${descText.replace(/[.。；;]\s*$/u, '')} | 최종 목표: ${finalTarget}`;
+    if (routePreview) descText = `${descText} | 경로: ${routePreview}`;
     next.desc = descText;
     return next;
   }
@@ -699,6 +740,7 @@ function sanitizeMainlineBridgeChoiceTone(choice = {}, {
   progressText = ''
 } = {}) {
   if (!choice || typeof choice !== 'object') return choice;
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
   const safeLocation = String(location || '當前區域').trim() || '當前區域';
   const safeProgress = String(progressText || '').trim() || '地區進度 1/8';
   const next = { ...choice };
@@ -724,22 +766,34 @@ function sanitizeMainlineBridgeChoiceTone(choice = {}, {
   // 若仍呈現系統測試語氣，改成自然敘事版主線動作。
   const merged = [next.name || '', next.choice || '', next.desc || ''].join(' ');
   if (/測試|是否可用|可不可用/u.test(merged)) {
-    next.name = playerLang === 'en' ? 'Trace transfer route' : '追查跨區路線';
-    next.choice = playerLang === 'en'
-      ? `Go to the main gate near ${safeLocation} and confirm route records before moving on`
-      : `先到${safeLocation}主傳送門核對跨區航線紀錄，再決定下一步`;
-    next.desc = playerLang === 'en'
-      ? `${safeProgress} | Keep continuity by linking current clues to the next area`
-      : `${safeProgress}｜承接現場線索，先做跨區前的資訊核對`;
+    if (langCode === 'en') {
+      next.name = 'Trace transfer route';
+      next.choice = `Go to the main gate near ${safeLocation} and confirm route records before moving on`;
+      next.desc = `${safeProgress} | Keep continuity by linking current clues to the next area`;
+    } else if (langCode === 'ko') {
+      next.name = '이동 경로 추적';
+      next.choice = `${safeLocation} 인근 주 관문에서 이동 기록을 대조한 뒤 다음 경로를 결정한다`;
+      next.desc = `${safeProgress} | 현장 단서를 이어 다음 구역 연결을 준비한다`;
+    } else {
+      next.name = '追查跨區路線';
+      next.choice = `先到${safeLocation}主傳送門核對跨區航線紀錄，再決定下一步`;
+      next.desc = `${safeProgress}｜承接現場線索，先做跨區前的資訊核對`;
+    }
   }
   if (/主傳送門.*前往.*接續線索核查/u.test(merged) || /主傳送門.*前往.*追查/u.test(merged)) {
-    next.name = playerLang === 'en' ? 'Verify local witness timing' : '核對現場目擊時序';
-    next.choice = playerLang === 'en'
-      ? `Re-check witness timeline near ${safeLocation} before deciding cross-zone movement`
-      : `先在${safeLocation}回頭核對目擊時序與服務來源，再決定是否跨區`;
-    next.desc = playerLang === 'en'
-      ? `${safeProgress} | Keep continuity by closing local evidence first`
-      : `${safeProgress}｜先補齊本地證據鏈，避免跨區後線索斷裂`;
+    if (langCode === 'en') {
+      next.name = 'Verify local witness timing';
+      next.choice = `Re-check witness timeline near ${safeLocation} before deciding cross-zone movement`;
+      next.desc = `${safeProgress} | Keep continuity by closing local evidence first`;
+    } else if (langCode === 'ko') {
+      next.name = '현장 목격 시점 재확인';
+      next.choice = `${safeLocation}에서 목격 시간대와 접촉 출처를 다시 맞춘 뒤 이동 여부를 정한다`;
+      next.desc = `${safeProgress} | 지역 증거 사슬을 먼저 닫아 흐름 단절을 막는다`;
+    } else {
+      next.name = '核對現場目擊時序';
+      next.choice = `先在${safeLocation}回頭核對目擊時序與服務來源，再決定是否跨區`;
+      next.desc = `${safeProgress}｜先補齊本地證據鏈，避免跨區後線索斷裂`;
+    }
   }
   return next;
 }
@@ -1007,13 +1061,17 @@ function sanitizeMarketChoiceText(choice = {}, playerLang = 'zh-TW') {
   const action = String(choice.action || '').trim();
   if (action !== 'market_renaiss' && action !== 'market_digital') return choice;
 
-  const isEn = playerLang === 'en';
-  const isCn = playerLang === 'zh-CN';
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  const isEn = langCode === 'en';
+  const isCn = langCode === 'zh-CN';
+  const isKo = langCode === 'ko';
   const stationLabel = isEn
     ? (action === 'market_digital' ? 'mysterious appraisal station' : 'appraisal station')
-    : (isCn
-      ? (action === 'market_digital' ? '神秘鉴价站' : '鉴价站')
-      : (action === 'market_digital' ? '神秘鑑價站' : '鑑價站'));
+    : (isKo
+      ? (action === 'market_digital' ? '수상한 감정소' : '감정소')
+      : (isCn
+        ? (action === 'market_digital' ? '神秘鉴价站' : '鉴价站')
+        : (action === 'market_digital' ? '神秘鑑價站' : '鑑價站')));
 
   const replaceBrand = (value = '') => String(value || '')
     .replace(/\bRenaiss\b/giu, stationLabel)
@@ -1027,10 +1085,12 @@ function sanitizeMarketChoiceText(choice = {}, playerLang = 'zh-TW') {
   next.desc = replaceBrand(next.desc);
 
   if (action === 'market_renaiss' && /神秘/u.test(String(next.name || ''))) {
-    next.name = isEn ? 'Visit nearby appraisal station' : (isCn ? '前往附近鉴价站' : '前往附近鑑價站');
+    next.name = isEn ? 'Visit nearby appraisal station'
+      : (isKo ? '근처 감정소로 이동' : (isCn ? '前往附近鉴价站' : '前往附近鑑價站'));
   }
-  if (action === 'market_digital' && !/神秘|mysterious/iu.test(String(next.name || ''))) {
-    next.name = isEn ? 'Visit mysterious appraisal station' : (isCn ? '前往神秘鉴价站' : '前往神秘鑑價站');
+  if (action === 'market_digital' && !/神秘|mysterious|수상한/iu.test(String(next.name || ''))) {
+    next.name = isEn ? 'Visit mysterious appraisal station'
+      : (isKo ? '수상한 감정소로 이동' : (isCn ? '前往神秘鉴价站' : '前往神秘鑑價站'));
   }
   return next;
 }
@@ -1503,9 +1563,11 @@ function getRecentNpcDialogueEvidence(player, limit = 10, options = {}) {
 }
 
 function buildNpcDialogueEvidenceText(evidence = [], playerLang = 'zh-TW') {
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
   if (!Array.isArray(evidence) || evidence.length <= 0) {
-    if (playerLang === 'en') return '(No verified prior NPC lines.)';
-    if (playerLang === 'zh-CN') return '（目前没有可验证的 NPC 旧对话原句）';
+    if (langCode === 'en') return '(No verified prior NPC lines.)';
+    if (langCode === 'ko') return '(검증 가능한 기존 NPC 대사가 아직 없습니다)';
+    if (langCode === 'zh-CN') return '（目前没有可验证的 NPC 旧对话原句）';
     return '（目前沒有可驗證的 NPC 舊對話原句）';
   }
   return evidence
@@ -1577,9 +1639,11 @@ function getActiveMainlineForeshadowPins(player, limit = 6, options = {}) {
 }
 
 function buildMainlineForeshadowText(pins = [], playerLang = 'zh-TW') {
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
   if (!Array.isArray(pins) || pins.length === 0) {
-    if (playerLang === 'en') return '(No preserved mainline foreshadowing in this phase.)';
-    if (playerLang === 'zh-CN') return '（当前没有需保留的主线铺陈）';
+    if (langCode === 'en') return '(No preserved mainline foreshadowing in this phase.)';
+    if (langCode === 'ko') return '(현재 단계에서 유지할 메인라인 복선이 없습니다)';
+    if (langCode === 'zh-CN') return '（当前没有需保留的主线铺陈）';
     return '（目前沒有需要保留的主線鋪陳）';
   }
   return pins
@@ -1627,10 +1691,12 @@ function extractCarryItemNames(player = {}) {
 }
 
 function buildInventoryContextText(player = {}, playerLang = 'zh-TW') {
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
   const items = extractCarryItemNames(player);
   if (items.length <= 0) {
-    if (playerLang === 'en') return '(Backpack is currently empty.)';
-    if (playerLang === 'zh-CN') return '（背包当前为空）';
+    if (langCode === 'en') return '(Backpack is currently empty.)';
+    if (langCode === 'ko') return '(가방이 비어 있습니다)';
+    if (langCode === 'zh-CN') return '（背包当前为空）';
     return '（背包目前為空）';
   }
   return items.slice(0, 24).join('、');
@@ -2004,7 +2070,13 @@ function pickTopChoicesFromPool(pool = [], context = {}, maxCount = CHOICE_OUTPU
   return out;
 }
 
-function validateChoiceSet(choices = [], { anchors = [], location = '', previousStory = '', locationPlaystyle = null } = {}) {
+function validateChoiceSet(choices = [], {
+  anchors = [],
+  location = '',
+  previousStory = '',
+  locationPlaystyle = null,
+  playerLang = 'zh-TW'
+} = {}) {
   const issues = [];
   const list = Array.isArray(choices) ? choices.filter(Boolean) : [];
   if (list.length !== CHOICE_OUTPUT_COUNT) {
@@ -2027,6 +2099,7 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
   const locationRegex = location
     ? new RegExp(`把[「"]?${escapeRegex(location)}[」"]?\\s*(送|帶去|拿去|送去)`, 'u')
     : null;
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
 
   for (let i = 0; i < list.length; i++) {
     const choice = list[i];
@@ -2050,6 +2123,13 @@ function validateChoiceSet(choices = [], { anchors = [], location = '', previous
     if (hasCityMoveIntent && !moveTo) issues.push(`第 ${i + 1} 個是跨城移動選項但缺少 move_to 欄位`);
     if (moveTo && adjacentSet.size > 0 && moveTo !== location && !adjacentSet.has(moveTo)) {
       issues.push(`第 ${i + 1} 個 move_to=${moveTo} 與目前位置 ${location} 不相鄰；若要去更遠城市，必須改成第一跳城市`);
+    }
+    if (langCode === 'ko') {
+      const coreText = [choice?.name || '', choice?.choice || '', choice?.desc || ''].join(' ');
+      const hangulCount = countRegexMatches(coreText, /[가-힣]/g);
+      if (hangulCount < 6) {
+        issues.push(`第 ${i + 1} 個選項不是韓文輸出（韓文字元不足）`);
+      }
     }
 
     if (anchorList.length > 0 && anchorList.some((anchor) => text.includes(anchor))) {
@@ -2137,6 +2217,61 @@ function hasThreatCue(text = '') {
   const tail = getTailWindow(text, 360);
   if (!hasThreatKeyword(tail)) return false;
   return !THREAT_RESOLVED_KEYWORDS.some((keyword) => tail.includes(keyword));
+}
+
+const WANTED_IMMERSION_CUE_RE = /(通緝|通缉|追兵|尾隨|尾随|盯上|賞金獵人|赏金猎人|bounty|wanted|hunter|hunters|tailing|tracked|현상금|추적|추격|추적자|매복)/iu;
+
+function hasWantedImmersionCue(story = '') {
+  return WANTED_IMMERSION_CUE_RE.test(String(story || ''));
+}
+
+function buildWantedImmersionLine(playerLang = 'zh-TW', wantedPressure = 0, hostileNames = []) {
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  const names = Array.isArray(hostileNames)
+    ? hostileNames.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const nameJoiner = (langCode === 'en' || langCode === 'ko') ? ', ' : '、';
+  const primaryTarget = names.length > 0 ? names.slice(0, 2).join(nameJoiner) : '';
+  const level = Math.max(0, Number(wantedPressure || 0));
+  if (langCode === 'en') {
+    if (primaryTarget) {
+      return `Bounty pressure Lv.${level}: hostile spotters tied to ${primaryTarget} start shadowing your route, and contact feels imminent.`;
+    }
+    return `Bounty pressure Lv.${level}: unfamiliar spotters keep tracking your route, signaling that a hostile probe is closing in.`;
+  }
+  if (langCode === 'ko') {
+    if (primaryTarget) {
+      return `수배 압력 Lv.${level}: ${primaryTarget}와 연계된 적대 감시자들이 동선을 미행하기 시작했고, 곧 접촉이 예상된다.`;
+    }
+    return `수배 압력 Lv.${level}: 정체불명의 감시자들이 동선을 계속 추적하며 적대 세력의 접근이 가까워지고 있다.`;
+  }
+  if (langCode === 'zh-CN') {
+    if (primaryTarget) {
+      return `通缉压力 Lv.${level}：与${primaryTarget}有关的敌对眼线开始跟踪你的动线，接触风险正在上升。`;
+    }
+    return `通缉压力 Lv.${level}：陌生眼线持续跟踪你的动线，敌对试探正在逼近。`;
+  }
+  if (primaryTarget) {
+    return `通緝壓力 Lv.${level}：與${primaryTarget}有關的敵對眼線開始跟監你的動線，接觸風險正在升高。`;
+  }
+  return `通緝壓力 Lv.${level}：陌生眼線持續跟監你的動線，敵對試探正在逼近。`;
+}
+
+function ensureWantedImmersionNarrative(story = '', options = {}) {
+  const source = String(story || '').trim();
+  if (!source) return source;
+  const wantedPressure = Math.max(0, Number(options?.wantedPressure || 0));
+  const threshold = Math.max(1, Number(options?.minLevel || WANTED_AMBUSH_MIN_LEVEL));
+  if (wantedPressure < threshold) return source;
+  if (hasWantedImmersionCue(source)) return source;
+  const line = buildWantedImmersionLine(
+    String(options?.playerLang || 'zh-TW').trim(),
+    wantedPressure,
+    Array.isArray(options?.hostileNames) ? options.hostileNames : []
+  );
+  if (!line) return source;
+  const joiner = /[。！？.!?]$/u.test(source) ? '\n' : '。\n';
+  return `${source}${joiner}${line}`;
 }
 
 function buildNpcMentionPattern(name = '') {
@@ -2242,8 +2377,9 @@ function buildDeterministicFallbackStory({
   const action = String(previousAction || '繼續探索').trim();
   const outcome = String(previousOutcome || '').trim();
   const summary = String(previousStorySummary || '').trim();
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
 
-  if (playerLang === 'en') {
+  if (langCode === 'en') {
     return (
       `${safeName} and ${safePet} moved through ${safeLocation} while regrouping after "${action}". ` +
       `${outcome ? `Current result: ${outcome}. ` : ''}` +
@@ -2252,7 +2388,16 @@ function buildDeterministicFallbackStory({
       `The atmosphere stayed tense, but the route ahead remained open for the next decision.`
     );
   }
-  if (playerLang === 'zh-CN') {
+  if (langCode === 'ko') {
+    return (
+      `${safeName}와 ${safePet}은 ${safeLocation} 일대에서 대형을 다시 정비하며 방금 선택한 행동 "${action}"의 흐름을 이어갔다.` +
+      `${outcome ? ` 현재 결과: ${outcome}.` : ''}` +
+      ` 두 사람은 주변 상점과 봉인 캐니스터 표기를 다시 확인하고, 다음 장면으로 이어질 핵심 단서 두 갈래를 추려냈다.` +
+      `${summary ? ` 이전 맥락: ${summary.slice(0, 90)}.` : ''}` +
+      ' 현장 긴장은 유지되고 있으며, 다음 행동으로 바로 이어질 창구가 열려 있다.'
+    );
+  }
+  if (langCode === 'zh-CN') {
     return (
       `${safeName}与${safePet}在${safeLocation}一带重新整队，承接你刚才的行动「${action}」。` +
       `${outcome ? `目前结果：${outcome}。` : ''}` +
@@ -2270,6 +2415,271 @@ function buildDeterministicFallbackStory({
   );
 }
 
+function buildDeterministicFallbackChoices({
+  location = '',
+  connectedLocations = [],
+  directedDestination = '',
+  stageGoal = '',
+  playerLang = 'zh-TW'
+} = {}) {
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  const currentLocation = String(location || '河港鎮').trim() || '河港鎮';
+  const connected = Array.isArray(connectedLocations)
+    ? connectedLocations.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const connectedSet = new Set(connected);
+  const directed = String(directedDestination || '').trim();
+  const moveTo = directed && connectedSet.has(directed)
+    ? directed
+    : (connected[0] || '');
+  const immediateBattleMarker = langCode === 'ko'
+    ? '（전투 진입）'
+    : (langCode === 'en' ? '(Immediate battle)' : (langCode === 'zh-CN' ? '（会进入战斗）' : '（會進入戰鬥）'));
+  const stageHint = String(stageGoal || '').trim();
+
+  const baseMeta = {
+    explore: { law: 1, harm: -1, trust: 1, selfInterest: 0, targetFaction: 'none', witnessRisk: 0.12 },
+    social: { law: 1, harm: -1, trust: 1, selfInterest: 0, targetFaction: 'civic', witnessRisk: 0.16 },
+    trade: { law: 1, harm: -1, trust: 0, selfInterest: 1, targetFaction: 'beacon', witnessRisk: 0.08 },
+    route: { law: 0, harm: 0, trust: 0, selfInterest: 1, targetFaction: 'none', witnessRisk: 0.22 },
+    fight: { law: -1, harm: 1, trust: -1, selfInterest: 1, targetFaction: 'digital', witnessRisk: 0.74 }
+  };
+
+  if (langCode === 'ko') {
+    return [
+      {
+        action: 'explore',
+        name: '현장 단서 재확인',
+        choice: `${currentLocation} 주변에서 방금 드러난 단서를 다시 대조해 빈칸을 메운다`,
+        desc: `${stageHint ? `현재 단계: ${stageHint} | ` : ''}무리하지 않고 정보 정확도를 끌어올린다`,
+        tag: getChoiceTag('explore', playerLang),
+        styleTag: '穩健',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.explore }
+      },
+      {
+        action: 'social',
+        name: '목격자 접촉',
+        choice: `${currentLocation}의 목격자 한 명을 설득해 적대 세력 동선을 캐묻는다`,
+        desc: '대화 중심으로 위험을 낮추면서 다음 분기를 연다',
+        tag: getChoiceTag('social', playerLang),
+        styleTag: '交涉',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.social }
+      },
+      {
+        action: 'trade',
+        name: '감정소 대조',
+        choice: '가까운 감정소에서 확보한 샘플의 출처 흔적을 교차 검증한다',
+        desc: '거래 전에 진위와 공급 경로를 먼저 고정한다',
+        tag: getChoiceTag('appraisal', playerLang),
+        styleTag: '佈局',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.trade }
+      },
+      {
+        action: 'explore',
+        name: moveTo ? `${moveTo} 선행 이동` : '추적선 압축',
+        choice: moveTo
+          ? `보급을 정리한 뒤 ${moveTo}로 먼저 전진해 다음 구간을 잇는다`
+          : '상대가 빠진 경로를 짧게 추적해 다음 접점을 특정한다',
+        desc: moveTo
+          ? '이동 선택: 이번 턴 첫 이동 거점을 확정한다'
+          : '즉시 교전 없이 동선 우위를 확보한다',
+        tag: getChoiceTag('explore', playerLang),
+        styleTag: moveTo ? '佈局' : '追獵',
+        move_to: moveTo,
+        hiddenMeta: { ...baseMeta.route }
+      },
+      {
+        action: 'fight',
+        name: '즉시 요격',
+        choice: `근처 미행 인원을 먼저 차단해 정면으로 충돌한다${immediateBattleMarker}`,
+        desc: '고위험 선택: 즉시 교전으로 전환될 수 있다',
+        tag: getChoiceTag('combat', playerLang),
+        styleTag: '強奪',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.fight }
+      }
+    ];
+  }
+
+  if (langCode === 'en') {
+    return [
+      {
+        action: 'explore',
+        name: 'Recheck scene clues',
+        choice: `Return to the latest scene in ${currentLocation} and verify each suspicious trace`,
+        desc: `${stageHint ? `Current stage: ${stageHint} | ` : ''}Stabilize facts before committing`,
+        tag: getChoiceTag('explore', playerLang),
+        styleTag: '穩健',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.explore }
+      },
+      {
+        action: 'social',
+        name: 'Question a witness',
+        choice: `Stop a local witness in ${currentLocation} and ask where the target group moved`,
+        desc: 'Trade dialogue for intel while keeping escalation low',
+        tag: getChoiceTag('social', playerLang),
+        styleTag: '交涉',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.social }
+      },
+      {
+        action: 'trade',
+        name: 'Cross-check appraisal',
+        choice: 'Bring your sample to a nearby appraisal desk and cross-check origin marks',
+        desc: 'Confirm authenticity and route evidence before any sale',
+        tag: getChoiceTag('appraisal', playerLang),
+        styleTag: '佈局',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.trade }
+      },
+      {
+        action: 'explore',
+        name: moveTo ? `Advance to ${moveTo}` : 'Compress pursuit line',
+        choice: moveTo
+          ? `Restock and advance to ${moveTo} as the first hop toward the next segment`
+          : 'Trace the retreat lane at short range and lock the next contact point',
+        desc: moveTo
+          ? 'Travel option: secure first-hop continuity this turn'
+          : 'Hold pressure without opening combat immediately',
+        tag: getChoiceTag('explore', playerLang),
+        styleTag: moveTo ? '佈局' : '追獵',
+        move_to: moveTo,
+        hiddenMeta: { ...baseMeta.route }
+      },
+      {
+        action: 'fight',
+        name: 'Preemptive intercept',
+        choice: `Intercept the nearby tailing unit before they regroup ${immediateBattleMarker}`,
+        desc: 'High-risk line: likely to trigger immediate combat',
+        tag: getChoiceTag('combat', playerLang),
+        styleTag: '強奪',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.fight }
+      }
+    ];
+  }
+
+  if (langCode === 'zh-CN') {
+    return [
+      {
+        action: 'explore',
+        name: '重查现场线索',
+        choice: `回到${currentLocation}的上一处现场，逐项核对刚出现的可疑痕迹`,
+        desc: `${stageHint ? `当前阶段：${stageHint}｜` : ''}先补齐信息再决策`,
+        tag: getChoiceTag('explore', playerLang),
+        styleTag: '穩健',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.explore }
+      },
+      {
+        action: 'social',
+        name: '接触目击者',
+        choice: `在${currentLocation}拦住一名目击者，追问刚才那批人的去向`,
+        desc: '以交涉换情报，降低正面冲突风险',
+        tag: getChoiceTag('social', playerLang),
+        styleTag: '交涉',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.social }
+      },
+      {
+        action: 'trade',
+        name: '送鉴价比对',
+        choice: '把手上样本送到附近鉴价站做来源比对',
+        desc: '先确认真伪与来源路径，再决定是否交易',
+        tag: getChoiceTag('appraisal', playerLang),
+        styleTag: '佈局',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.trade }
+      },
+      {
+        action: 'explore',
+        name: moveTo ? `转进 ${moveTo}` : '压线追踪',
+        choice: moveTo
+          ? `整备补给后先往${moveTo}推进，衔接下一段路线`
+          : '沿着对方撤离路线做短程追踪，确认下一个接点',
+        desc: moveTo
+          ? '移动型选项：先走第一跳城市，维持剧情连续'
+          : '先跟上动线，不直接开打',
+        tag: getChoiceTag('explore', playerLang),
+        styleTag: moveTo ? '佈局' : '追獵',
+        move_to: moveTo,
+        hiddenMeta: { ...baseMeta.route }
+      },
+      {
+        action: 'fight',
+        name: '先发拦截',
+        choice: `对附近可疑尾随者发动先手拦截${immediateBattleMarker}`,
+        desc: '高风险行动：可能立刻进入正面交锋',
+        tag: getChoiceTag('combat', playerLang),
+        styleTag: '強奪',
+        move_to: '',
+        hiddenMeta: { ...baseMeta.fight }
+      }
+    ];
+  }
+
+  return [
+    {
+      action: 'explore',
+      name: '重查現場線索',
+      choice: `回到${currentLocation}的上一個現場，逐項核對剛出現的可疑痕跡`,
+      desc: `${stageHint ? `當前階段：${stageHint}｜` : ''}先補齊資訊再決策`,
+      tag: getChoiceTag('explore', playerLang),
+      styleTag: '穩健',
+      move_to: '',
+      hiddenMeta: { ...baseMeta.explore }
+    },
+    {
+      action: 'social',
+      name: '接觸目擊者',
+      choice: `在${currentLocation}攔住一名目擊者，追問剛才那批人的去向`,
+      desc: '以交涉換情報，降低正面衝突風險',
+      tag: getChoiceTag('social', playerLang),
+      styleTag: '交涉',
+      move_to: '',
+      hiddenMeta: { ...baseMeta.social }
+    },
+    {
+      action: 'trade',
+      name: '送鑑價比對',
+      choice: '把手上樣本送到附近鑑價站做來源比對',
+      desc: '先確認真偽與來源路徑，再決定是否交易',
+      tag: getChoiceTag('appraisal', playerLang),
+      styleTag: '佈局',
+      move_to: '',
+      hiddenMeta: { ...baseMeta.trade }
+    },
+    {
+      action: 'explore',
+      name: moveTo ? `轉進 ${moveTo}` : '壓線追蹤',
+      choice: moveTo
+        ? `整備補給後先往${moveTo}推進，銜接下一段路線`
+        : '沿著對方撤離路線做短程追蹤，確認下一個接點',
+      desc: moveTo
+        ? '移動型選項：先走第一跳城市，維持劇情連續'
+        : '先跟上動線，不直接開打',
+      tag: getChoiceTag('explore', playerLang),
+      styleTag: moveTo ? '佈局' : '追獵',
+      move_to: moveTo,
+      hiddenMeta: { ...baseMeta.route }
+    },
+    {
+      action: 'fight',
+      name: '先發攔截',
+      choice: `對附近可疑尾隨者發動先手攔截${immediateBattleMarker}`,
+      desc: '高風險行動：可能立刻進入正面交鋒',
+      tag: getChoiceTag('combat', playerLang),
+      styleTag: '強奪',
+      move_to: '',
+      hiddenMeta: { ...baseMeta.fight }
+    }
+  ];
+}
+
 function choiceMentionsThreat(choice) {
   if (!choice || typeof choice !== 'object') return false;
   const text = [choice.name || '', choice.choice || '', choice.desc || '', choice.tag || ''].join(' ');
@@ -2280,7 +2690,8 @@ function isImmediateBattleChoice(choice) {
   if (!choice || typeof choice !== 'object') return false;
   if (String(choice.action || '') === 'fight') return true;
   const text = [choice.choice || '', choice.desc || '', choice.name || ''].join(' ');
-  return /[（(]\s*會進入戰鬥\s*[)）]/u.test(text) || /(即時戰鬥|立刻開打|立即戰鬥)/u.test(text);
+  return /[（(]\s*(?:會進入戰鬥|会进入战斗|전투\s*진입|Immediate\s*battle)\s*[)）]/iu.test(text)
+    || /(即時戰鬥|即时战斗|立刻開打|立刻开打|立即戰鬥|立即战斗|즉시\s*전투|바로\s*전투|immediate\s*battle)/iu.test(text);
 }
 
 async function injectSystemChoicesSafely(
@@ -2707,6 +3118,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 4. 故事要有懸念，讓人想繼續看
 5. 嚴格使用對應語言，${langInstruction.replace('請用', '全部')}
 6. 若語言設定為 zh-TW，嚴禁使用簡體字
+6a. 若語言設定為 ko，整段故事必須是自然韓文敘事，禁止以中文或英文句子作為主體內容
 7. 若【玩家之前的足跡】提到同地點人物/衝突/情緒，優先做出連貫呼應（例如老闆記得你、壞人記得你、你記得天空與環境）
 8. 若角色說出抽象口號（例如「真實的代價」），必須在接下來 1-2 句交代具體含義（要付出什麼代價）
 9. 禁止出現武俠相關詞：江湖、俠客、門派、武功、內力、打坐、修煉等
@@ -2735,7 +3147,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 30. 嚴格遵守【島嶼知識邊界】：未解鎖段落不可提前揭露為已知真相，只能做模糊預告
 30a. 若【跨島真相邊界】指定「唯一來源 NPC + 城市」，只有在該 NPC 且該城市才能寫成「已取得關鍵證據」；其他情況最多只能寫成傳聞或疑點
 31. 戰鬥節奏僅作敘事節拍參考：第 4/5 可拉高張力、第 5/5 可推向衝突，但不可硬跳不連貫場景
-32. 若通緝熱度 >= ${WANTED_AMBUSH_MIN_LEVEL}，可讓敵對勢力主動接近，但要明確交代「誰靠近、如何接觸」
+32. 若通緝熱度 >= ${WANTED_AMBUSH_MIN_LEVEL}，本回合正文必須至少一次讓敵對勢力主動接近，且明確交代「誰靠近、如何接觸」
 33. 若要讓 NPC 主動出現，必須在當前地點或附近可互動地點內合理登場，不可跨區瞬移
 34. 高通緝壓迫需採「漸進式」：先可疑視線/尾隨，再試探接觸，最後才進入正面衝突；不可一開場就連續跳多名追兵
 35. 若提到「可鑑定品」，優先使用「可被鑑定的物件示例」中的物件，避免憑空造出不合世界觀的品項
@@ -2800,6 +3212,20 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
           throw new Error(continuityIssues[0]);
         }
 
+        normalizedStory = ensureWantedImmersionNarrative(normalizedStory, {
+          wantedPressure,
+          minLevel: WANTED_AMBUSH_MIN_LEVEL,
+          playerLang,
+          hostileNames: nearbyHostile?.names || []
+        });
+        const languageIssue = getLanguageComplianceIssue(normalizedStory, playerLang, 'story');
+        if (languageIssue) {
+          repairIssues = [languageIssue];
+          console.warn(`[Storyteller] generateStory language retry: ${languageIssue}`);
+          if (pass < 1) continue;
+          throw new Error(languageIssue);
+        }
+
         if (normalizedStory.length > 2600) {
           recordAIPerf('story', Date.now() - startedAt);
           return normalizedStory.substring(0, 2600) + '...[故事過長已截斷]';
@@ -2827,6 +3253,12 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
   );
   let safeFallbackStory = canonicalizeKingCodenamesText(fallbackStory);
   safeFallbackStory = sanitizeStoryTurnMarker(safeFallbackStory);
+  safeFallbackStory = ensureWantedImmersionNarrative(safeFallbackStory, {
+    wantedPressure,
+    minLevel: WANTED_AMBUSH_MIN_LEVEL,
+    playerLang,
+    hostileNames: nearbyHostile?.names || []
+  });
   recordAIPerf('story', Date.now() - startedAt);
   console.warn('[Storyteller] generateStory 使用本地保底故事，避免中斷流程');
   return safeFallbackStory;
@@ -2894,7 +3326,14 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   }
   
   const playerLang = player?.language || 'zh-TW';
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
   const langInstruction = getAiLanguageDirective(playerLang, 'output');
+  const choiceValidationPasses = langCode === 'ko'
+    ? Math.max(2, CHOICE_VALIDATION_PASSES)
+    : CHOICE_VALIDATION_PASSES;
+  const immediateBattleMarker = langCode === 'ko'
+    ? '（전투 진입）'
+    : (langCode === 'en' ? '(Immediate battle)' : (langCode === 'zh-CN' ? '（会进入战斗）' : '（會進入戰鬥）'));
   const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
   const locationWeatherProfile = getLocationWeatherProfile(location);
   const locationWeatherPrompt = getLocationWeatherPrompt(location, playerLang);
@@ -3118,6 +3557,7 @@ ${anchorText}
 3e. 禁止「文案寫跨城但 move_to 空白」與「move_to 有城市但文案沒提該城市」兩種錯誤
 3f. styleTag 必填，且僅能為：穩健、交涉、灰線、強奪、追獵、佈局
 3g. hiddenMeta 必填，且只作系統判讀，不要在文案中出現善惡分數字眼
+3h. 若語言設定為 ko，5 個選項的 name/choice/desc 必須全部使用自然韓文，不可混用中文或英文當主句
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前人物、場景或衝突
 4a. ${destinationContinuityRule}
 5. 至少 1 個選項必須包含「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
@@ -3154,7 +3594,7 @@ ${pendingConflictRule ? `${pendingConflictRuleNumber}. ${pendingConflictRule}` :
 ${getChoiceTagPromptLines(playerLang)}
 
 額外規則：
-1. 只有「立刻進入戰鬥」的選項，才在句尾加上「（會進入戰鬥）」。
+1. 只有「立刻進入戰鬥」的選項，才在句尾加上「${immediateBattleMarker}」。
 2. 其餘戰鬥張力標籤只代表故事走向偏向衝突，不要馬上開打。
 3. 若故事「結尾段」仍有明確威脅（例如正在逼近、尚未解除），至少要有 1 個衝突相關選項（可為備戰、追蹤、佈防、談判、撤離或立即戰鬥）。
 4. 是否立刻開打由情境判斷：若尚在鋪陳，可先給非即時衝突選項；若已正面對峙，再給立即戰鬥選項。
@@ -3179,7 +3619,7 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
     let feedbackText = '';
     let choicePool = [];
 
-    for (let pass = 0; pass < CHOICE_VALIDATION_PASSES; pass++) {
+    for (let pass = 0; pass < choiceValidationPasses; pass++) {
       const passPrompt = feedbackText
         ? `${prompt}\n\n【上一輪違規問題】\n${feedbackText}\n\n請完全重寫 5 個選項，不可沿用上一輪句子。`
         : prompt;
@@ -3205,7 +3645,8 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
         anchors: storyAnchors,
         location,
         previousStory: fullStoryText,
-        locationPlaystyle
+        locationPlaystyle,
+        playerLang
       });
       if (issues.length === 0) {
         validatedChoices = candidateChoices.slice(0, CHOICE_OUTPUT_COUNT);
@@ -3223,11 +3664,37 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
         previousStory: fullStoryText,
         locationPlaystyle
       }, CHOICE_OUTPUT_COUNT);
-      if (mergedChoices.length === CHOICE_OUTPUT_COUNT) {
+      const mergedIssues = validateChoiceSet(mergedChoices, {
+        anchors: storyAnchors,
+        location,
+        previousStory: fullStoryText,
+        locationPlaystyle,
+        playerLang
+      });
+      if (mergedChoices.length === CHOICE_OUTPUT_COUNT && mergedIssues.length === 0) {
         console.warn(`[AI][choices] use merged pool fallback, issues=${lastIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
         validatedChoices = mergedChoices;
       } else {
-        throw new Error(`choice validation failed: ${lastIssues.join(' | ') || 'unknown issue'}`);
+        const deterministicFallback = buildDeterministicFallbackChoices({
+          location,
+          connectedLocations,
+          directedDestination,
+          stageGoal,
+          playerLang
+        }).slice(0, CHOICE_OUTPUT_COUNT);
+        const fallbackIssues = validateChoiceSet(deterministicFallback, {
+          anchors: storyAnchors,
+          location,
+          previousStory: fullStoryText,
+          locationPlaystyle,
+          playerLang
+        });
+        if (deterministicFallback.length === CHOICE_OUTPUT_COUNT && fallbackIssues.length === 0) {
+          console.warn(`[AI][choices] use deterministic fallback, mergedIssues=${mergedIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
+          validatedChoices = deterministicFallback;
+        } else {
+          throw new Error(`choice validation failed: ${lastIssues.join(' | ') || mergedIssues.join(' | ') || fallbackIssues.join(' | ') || 'unknown issue'}`);
+        }
       }
     }
 

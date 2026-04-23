@@ -13,6 +13,52 @@ function createChoiceRenderUtils(deps = {}) {
     format1
   } = deps;
 
+  const IMMEDIATE_BATTLE_MARKER_RE = /[（(]\s*(?:會進入戰鬥|会进入战斗|전투\s*진입|Immediate\s*battle)\s*(?:｜[^)）]+)?\s*[)）]/iu;
+  const IMMEDIATE_BATTLE_KEYWORD_RE = /(即時戰鬥|即时战斗|立刻開打|立刻开打|立即戰鬥|立即战斗|즉시\s*전투|바로\s*전투|immediate\s*battle)/iu;
+  const KOREAN_CHAR_RE = /[가-힣]/u;
+  const CJK_CHAR_RE = /[\u3400-\u9FFF]/u;
+  const STYLE_TAG_LABELS = Object.freeze({
+    ko: Object.freeze({
+      '穩健': '안정',
+      '交涉': '협상',
+      '灰線': '회색선',
+      '強奪': '강탈',
+      '追獵': '추적',
+      '佈局': '포석'
+    }),
+    en: Object.freeze({
+      '穩健': 'Steady',
+      '交涉': 'Negotiate',
+      '灰線': 'Grayline',
+      '強奪': 'Raid',
+      '追獵': 'Hunt',
+      '佈局': 'Setup'
+    })
+  });
+
+  function detectTextLang(text = '') {
+    const source = String(text || '');
+    if (KOREAN_CHAR_RE.test(source)) return 'ko';
+    if (!CJK_CHAR_RE.test(source) && /[A-Za-z]/.test(source)) return 'en';
+    return 'zh-TW';
+  }
+
+  function localizeStyleTag(styleTag = '', text = '') {
+    const source = String(styleTag || '').trim();
+    if (!source) return '';
+    const langCode = detectTextLang(text);
+    const table = STYLE_TAG_LABELS[langCode];
+    if (!table || typeof table !== 'object') return source;
+    return table[source] || source;
+  }
+
+  function getImmediateBattleMarkerForText(text = '') {
+    const source = String(text || '');
+    if (KOREAN_CHAR_RE.test(source)) return '（전투 진입）';
+    if (!CJK_CHAR_RE.test(source) && /[A-Za-z]/.test(source)) return '(Immediate battle)';
+    return '（會進入戰鬥）';
+  }
+
   function isCombatChoice(choice) {
     if (!choice || typeof choice !== 'object') return false;
     if (String(choice.action || '') === 'fight' || String(choice.action || '') === 'mentor_spar') return true;
@@ -51,7 +97,7 @@ function createChoiceRenderUtils(deps = {}) {
       choice.choice || '',
       choice.desc || ''
     ].join(' ');
-    return /[（(]\s*會進入戰鬥\s*[)）]/u.test(text) || /(即時戰鬥|立刻開打|立即戰鬥)/u.test(text);
+    return IMMEDIATE_BATTLE_MARKER_RE.test(text) || IMMEDIATE_BATTLE_KEYWORD_RE.test(text);
   }
 
   function isHostileImmediateBattleChoice(choice) {
@@ -65,15 +111,15 @@ function createChoiceRenderUtils(deps = {}) {
       choice.desc || ''
     ].join(' ');
     if (/(友誼賽|切磋|比試)/u.test(text)) return false;
-    return /[（(]\s*會進入戰鬥\s*[)）]/u.test(text) || /(即時戰鬥|立刻開打|立即戰鬥)/u.test(text);
+    return IMMEDIATE_BATTLE_MARKER_RE.test(text) || IMMEDIATE_BATTLE_KEYWORD_RE.test(text);
   }
 
   function ensureBattleMarkerSuffix(text, choice) {
     const source = String(text || '').trim();
     if (!source) return source;
     if (!isImmediateBattleChoice(choice)) return source;
-    if (/[（(]\s*會進入戰鬥\s*[)）]/u.test(source)) return source;
-    return `${source}（會進入戰鬥）`;
+    if (IMMEDIATE_BATTLE_MARKER_RE.test(source)) return source;
+    return `${source}${getImmediateBattleMarkerForText(source)}`;
   }
 
   function getChoiceRiskCategory(choice) {
@@ -115,8 +161,8 @@ function createChoiceRenderUtils(deps = {}) {
     let cleaned = String(text || '').trim();
     if (!cleaned) return cleaned;
     cleaned = cleaned
-      .replace(/[（(]\s*會進入戰鬥(?:｜[^)）]+)?\s*[)）]/gu, '')
-      .replace(/(?:，|、)?\s*(即時戰鬥|立刻開打|立即戰鬥)\s*/gu, ' ')
+      .replace(/[（(]\s*(?:會進入戰鬥|会进入战斗|전투\s*진입|Immediate\s*battle)(?:｜[^)）]+)?\s*[)）]/giu, '')
+      .replace(/(?:，|、)?\s*(即時戰鬥|即时战斗|立刻開打|立刻开打|立即戰鬥|立即战斗|즉시\s*전투|바로\s*전투|immediate\s*battle)\s*/giu, ' ')
       .replace(/\s{2,}/g, ' ')
       .trim();
     return cleaned;
@@ -173,14 +219,23 @@ function createChoiceRenderUtils(deps = {}) {
     if (!isHostileImmediateBattleChoice(choice)) return choice;
     const next = { ...choice };
     const rawChoice = String(next.choice || next.name || '').trim();
+    const langCode = detectTextLang([next.choice || '', next.name || '', next.desc || ''].join(' '));
     const cleanedChoice = stripImmediateBattleMarker(rawChoice);
-    next.choice = cleanedChoice || `${rawChoice}（先偵查局勢）`;
-    next.desc = stripImmediateBattleMarker(String(next.desc || '').trim()) || '先觀察局勢並整備，必要時再戰。';
+    next.choice = cleanedChoice || (
+      langCode === 'en'
+        ? `${rawChoice}(Scout first)`
+        : (langCode === 'ko' ? `${rawChoice}(먼저 정찰)` : `${rawChoice}（先偵查局勢）`)
+    );
+    next.desc = stripImmediateBattleMarker(String(next.desc || '').trim()) || (
+      langCode === 'en'
+        ? 'Observe and regroup first, then fight if needed.'
+        : (langCode === 'ko' ? '먼저 상황을 관찰하고 정비한 뒤, 필요하면 교전한다.' : '先觀察局勢並整備，必要時再戰。')
+    );
     if (String(next.action || '') === 'fight') {
       next.action = 'conflict';
     }
     if (/[⚔️]/u.test(String(next.tag || '')) || /會戰鬥/u.test(String(next.tag || ''))) {
-      next.tag = '[🔥高風險]';
+      next.tag = langCode === 'en' || langCode === 'ko' ? '[🔥High Risk]' : '[🔥高風險]';
     }
     return next;
   }
@@ -202,8 +257,9 @@ function createChoiceRenderUtils(deps = {}) {
     const raw = String(choice?.choice || choice?.name || '').trim();
     if (!raw || raw === 'true' || raw === 'false') return '';
     const clean = stripChoicePrefix(raw);
-    const styleTag = String(choice?.styleTag || '').replace(/[【】\[\]]/g, '').trim().slice(0, 6);
+    const styleTagRaw = String(choice?.styleTag || '').replace(/[【】\[\]]/g, '').trim().slice(0, 6);
     const base = ensureBattleMarkerSuffix(clean || raw, choice);
+    const styleTag = localizeStyleTag(styleTagRaw, base || clean || raw);
     if (!styleTag) return base;
     if (String(base || '').includes(`【${styleTag}】`)) return base;
     return `【${styleTag}】${base}`;
@@ -234,7 +290,10 @@ function createChoiceRenderUtils(deps = {}) {
 
   function buildBattlePreviewHint(choice, context = {}) {
     if (!isImmediateBattleChoice(choice)) return '';
+    const langCode = detectTextLang([choice?.choice || '', choice?.name || '', choice?.desc || ''].join(' '));
     if (String(choice?.action || '') === 'mentor_spar') {
+      if (langCode === 'en') return 'Friendly spar | lower mentor HP to pass';
+      if (langCode === 'ko') return '우호 대련 | 멘토 HP를 낮추면 통과';
       return '友誼賽｜壓低導師血量即可通過';
     }
     const player = context?.player;
@@ -253,7 +312,10 @@ function createChoiceRenderUtils(deps = {}) {
 
     const fighterType = CORE?.canPetFight?.(pet) ? 'pet' : 'player';
     const estimate = estimateBattleOutcome(player, pet, previewEnemy, fighterType);
-    return `預估:${estimate.rank} ${typeof format1 === 'function' ? format1(estimate.winRate) : estimate.winRate}%`;
+    const winRate = typeof format1 === 'function' ? format1(estimate.winRate) : estimate.winRate;
+    if (langCode === 'en') return `Est:${estimate.rank} ${winRate}%`;
+    if (langCode === 'ko') return `예측:${estimate.rank} ${winRate}%`;
+    return `預估:${estimate.rank} ${winRate}%`;
   }
 
   function appendBattlePreviewToChoice(text, choice, context = {}) {
@@ -262,10 +324,12 @@ function createChoiceRenderUtils(deps = {}) {
     const hint = buildBattlePreviewHint(choice, context);
     if (!hint) return source;
 
-    if (/[（(]\s*會進入戰鬥\s*[)）]/u.test(source)) {
-      return source.replace(/[（(]\s*會進入戰鬥\s*[)）]/u, `（會進入戰鬥｜${hint}）`);
+    if (IMMEDIATE_BATTLE_MARKER_RE.test(source)) {
+      const marker = getImmediateBattleMarkerForText(source);
+      return source.replace(IMMEDIATE_BATTLE_MARKER_RE, `${marker.slice(0, -1)}｜${hint}${marker.endsWith('）') ? '）' : ')'}`);
     }
-    return `${source}（會進入戰鬥｜${hint}）`;
+    const marker = getImmediateBattleMarkerForText(source);
+    return `${source}${marker.slice(0, -1)}｜${hint}${marker.endsWith('）') ? '）' : ')'}`;
   }
 
   function buildChoiceOptionsText(choices = [], context = {}) {

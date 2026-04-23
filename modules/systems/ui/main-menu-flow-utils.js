@@ -57,7 +57,10 @@ function createMainMenuFlowUtils(deps = {}) {
     triggerMainlineForeshadowAIInBackground,
     releaseStoryLock
   } = deps;
-  const { getGenerationStatusText } = require('../runtime/utils/global-language-resources');
+  const {
+    getGenerationStatusText,
+    normalizeLangCode
+  } = require('../runtime/utils/global-language-resources');
   const buildStatusFields = typeof buildMainStatusFields === 'function'
     ? buildMainStatusFields
     : (player, pet, lang = '', options = {}) => [
@@ -101,6 +104,32 @@ function getWantedLevelForPlayer(CORE, player) {
     : 0;
   const byPlayer = Number(player?.wanted || 0);
   return Math.max(0, byCore, byPlayer);
+}
+
+function getMainMenuStaticText(lang = 'zh-TW') {
+  const code = normalizeLangCode(lang || 'zh-TW');
+  if (code === 'en') {
+    return {
+      worldIntroTitle: '🌍 **World Briefing**',
+      financeNoticeTitle: '📬 **Trade Notices**'
+    };
+  }
+  if (code === 'ko') {
+    return {
+      worldIntroTitle: '🌍 **세계 배경 안내**',
+      financeNoticeTitle: '📬 **거래 알림**'
+    };
+  }
+  if (code === 'zh-CN') {
+    return {
+      worldIntroTitle: '🌍 **世界背景导读**',
+      financeNoticeTitle: '📬 **交易通知**'
+    };
+  }
+  return {
+    worldIntroTitle: '🌍 **世界背景導讀**',
+    financeNoticeTitle: '📬 **交易通知**'
+  };
 }
 
 const MENU_RENDER_GUARD = new Set();
@@ -158,7 +187,8 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
   }
 
   const worldIntro = consumeWorldIntroOnce(player);
-  const worldIntroBlock = worldIntro ? `🌍 **世界背景導讀**\n${worldIntro}\n\n` : '';
+  const staticText = getMainMenuStaticText(player?.language || 'zh-TW');
+  const worldIntroBlock = worldIntro ? `${staticText.worldIntroTitle}\n${worldIntro}\n\n` : '';
   const financeNotices = typeof ECON.consumeFinanceNotices === 'function'
     ? ECON.consumeFinanceNotices(player, 3)
     : [];
@@ -167,7 +197,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     CORE.savePlayer(player);
   }
   const financeNoticeBlock = financeNotices.length > 0
-    ? `📬 **交易通知**\n${financeNotices.map((line) => `• ${line}`).join('\n')}\n\n`
+    ? `${staticText.financeNoticeTitle}\n${financeNotices.map((line) => `• ${line}`).join('\n')}\n\n`
     : '';
   const portalGuideBlock = player?.portalMenuOpen ? `\n\n${buildPortalUsageGuide(player)}` : '';
   let forceFreshStory = Boolean(getPendingStoryTrigger(player)?.forceFreshStory);

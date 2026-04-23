@@ -663,6 +663,21 @@ const GENERATION_STATUS_TEXT = Object.freeze({
     recovering_choices: 'AI 说书人正在补齐上次中断的选项...',
     battle_fresh_story: 'AI 说书人正在承接战斗结果重塑新篇章...'
   },
+  ko: {
+    loading: 'AI 스토리텔러가 이야기를 구상하는 중...',
+    memory_context: 'AI 스토리텔러가 기억 맥락을 정리하는 중...',
+    generating_story: 'AI 스토리텔러가 이야기를 작성하는 중...',
+    story_ready: '스토리 전송 완료, 선택지를 생성하는 중...',
+    generating_choices: '스토리 전송 완료, 선택지를 생성하는 중...',
+    choices_ready: '선택지 생성 완료, 화면을 정리하는 중...',
+    recovered_snapshot: '이전 스냅샷을 복구했고 화면을 갱신하는 중...',
+    resume_cached: '이전 스토리와 선택지를 복구했고 화면을 동기화하는 중...',
+    thinking_new_story: 'AI 스토리텔러가 새로운 장면을 구상하는 중...',
+    writing_new_story: 'AI 스토리텔러가 새로운 장면을 작성하는 중...',
+    story_generating_choices: '스토리 전송 완료, 선택지를 생성하는 중...',
+    recovering_choices: 'AI 스토리텔러가 중단된 선택지를 복구하는 중...',
+    battle_fresh_story: 'AI 스토리텔러가 전투 결과를 반영해 다음 장면을 재구성하는 중...'
+  },
   en: {
     loading: 'The AI storyteller is outlining the story...',
     memory_context: 'The AI storyteller is organizing memory context...',
@@ -688,6 +703,10 @@ const LOADING_ANIMATION_TEXT = Object.freeze({
   'zh-CN': {
     defaultLabel: 'AI 说书人正在构思故事',
     phases: ['铺陈场景', '安排角色互动', '生成分支选项', '补完世界细节']
+  },
+  ko: {
+    defaultLabel: 'AI 스토리텔러가 이야기를 구상하는 중',
+    phases: ['장면 구도 정리', '인물 상호작용 배치', '분기 선택지 생성', '세계 디테일 보강']
   },
   en: {
     defaultLabel: 'The AI storyteller is outlining the story',
@@ -1606,6 +1625,9 @@ function isAggressiveChoiceTag(tag = '') {
 function getGenerationStatusText(lang = 'zh-TW') {
   const code = normalizeLangCode(lang);
   if (code === 'ko') {
+    if (GENERATION_STATUS_TEXT.ko && typeof GENERATION_STATUS_TEXT.ko === 'object') {
+      return GENERATION_STATUS_TEXT.ko;
+    }
     return localizeObjectToKorean(GENERATION_STATUS_TEXT.en || GENERATION_STATUS_TEXT['zh-TW'] || {});
   }
   return GENERATION_STATUS_TEXT[code] || GENERATION_STATUS_TEXT['zh-TW'];
@@ -1614,6 +1636,9 @@ function getGenerationStatusText(lang = 'zh-TW') {
 function getLoadingAnimationText(lang = 'zh-TW') {
   const code = normalizeLangCode(lang);
   if (code === 'ko') {
+    if (LOADING_ANIMATION_TEXT.ko && typeof LOADING_ANIMATION_TEXT.ko === 'object') {
+      return LOADING_ANIMATION_TEXT.ko;
+    }
     return localizeObjectToKorean(LOADING_ANIMATION_TEXT.en || LOADING_ANIMATION_TEXT['zh-TW'] || {});
   }
   return LOADING_ANIMATION_TEXT[code] || LOADING_ANIMATION_TEXT['zh-TW'];

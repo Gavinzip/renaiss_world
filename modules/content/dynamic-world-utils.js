@@ -34,6 +34,10 @@ function normalizeStyleTag(raw = '') {
 }
 
 const SECRET_REALM_COOLDOWN_TURNS = clampInt(process.env.SECRET_REALM_COOLDOWN_TURNS, 3, 30, 8);
+const COMBAT_WANTED_CUE_RE = /(⚔️會戰鬥|⚔️会战斗|會進入戰鬥|会进入战斗|戰鬥|战斗|交戰|交战|battle|搏鬥|搏斗|對戰|对战|전투|교전|전투\s*진입)/iu;
+const ROBBERY_WANTED_CUE_RE = /(強奪|搶奪|搶劫|打劫|劫掠|掠奪|勒索|劫道)/u;
+const AGGRESSIVE_WANTED_CUE_RE = /(🔥高風險|攔截|突襲|夜襲|伏擊|劫)/u;
+const SOCIAL_SOFT_CUE_RE = /(🤝需社交|談判|協商|拜訪|詢問|聯絡|交涉)/u;
 
 function buildDefaultState() {
   return {
@@ -218,6 +222,52 @@ function inferStyleTag(choice = {}, hiddenMeta = null) {
   return '佈局';
 }
 
+function extractWantedChoiceCues(actionText = '') {
+  const text = String(actionText || '');
+  const combat = COMBAT_WANTED_CUE_RE.test(text);
+  const robbery = ROBBERY_WANTED_CUE_RE.test(text);
+  return {
+    combat,
+    robbery,
+    aggressive: AGGRESSIVE_WANTED_CUE_RE.test(text) || combat || robbery,
+    socialSoft: SOCIAL_SOFT_CUE_RE.test(text)
+  };
+}
+
+function computeChoiceWantedDelta(hiddenMeta = {}, cues = {}) {
+  const lawRisk = Math.max(0, -Number(hiddenMeta.law || 0));
+  const harmRisk = Math.max(0, Number(hiddenMeta.harm || 0));
+  const witnessAdd = hiddenMeta.witnessRisk >= 0.66 ? 2 : (hiddenMeta.witnessRisk >= 0.4 ? 1 : 0);
+  const isMajorCrime = Boolean(cues.combat || cues.robbery);
+
+  let wantedDelta = 0;
+  if (isMajorCrime) {
+    const majorCrimeScore =
+      0.95 +
+      lawRisk * 0.35 +
+      harmRisk * 0.6 +
+      witnessAdd * 0.45 +
+      (cues.robbery ? 0.35 : 0) +
+      (cues.combat ? 0.25 : 0);
+    wantedDelta = clampInt(majorCrimeScore, 1, 4, 1);
+  } else {
+    // Keep normal choices close to zero; non-combat actions should rarely spike wanted.
+    const generalRiskScore =
+      lawRisk * 0.22 +
+      harmRisk * 0.34 +
+      witnessAdd * 0.24 +
+      (cues.aggressive ? 0.2 : 0);
+    wantedDelta = clampInt(Math.floor(generalRiskScore), 0, 1, 0);
+    if (harmRisk >= 2 && witnessAdd >= 1) wantedDelta = 1;
+  }
+
+  if (hiddenMeta.law >= 1 && hiddenMeta.harm <= 0 && cues.socialSoft) {
+    wantedDelta = Math.max(0, wantedDelta - 1);
+  }
+
+  return wantedDelta;
+}
+
 function applyChoiceConsequences(player = null, choice = {}, options = {}) {
   const ensured = ensureDynamicWorldState(player);
   const state = ensured.state;
@@ -239,8 +289,9 @@ function applyChoiceConsequences(player = null, choice = {}, options = {}) {
   const styleTag = inferStyleTag(choice, hiddenMeta);
 
   const actionText = [choice?.tag || '', choice?.name || '', choice?.choice || '', choice?.desc || '', styleTag].join(' ');
-  const aggressiveCue = /(🔥高風險|⚔️會戰鬥|會進入戰鬥|攔截|突襲|夜襲|強奪|搶奪|劫|伏擊)/u.test(actionText) ? 1 : 0;
-  const socialSoftCue = /(🤝需社交|談判|協商|拜訪|詢問|聯絡|交涉)/u.test(actionText) ? 1 : 0;
+  const cues = extractWantedChoiceCues(actionText);
+  const aggressiveCue = cues.aggressive ? 1 : 0;
+  const socialSoftCue = cues.socialSoft ? 1 : 0;
 
   const factionDelta = {
     beacon: hiddenMeta.law + hiddenMeta.trust - Math.max(0, hiddenMeta.harm),
@@ -255,15 +306,7 @@ function applyChoiceConsequences(player = null, choice = {}, options = {}) {
     factionDelta[target] = clampInt((factionDelta[target] || 0) + targetDelta, -6, 6, factionDelta[target] || 0);
   }
 
-  const witnessAdd = hiddenMeta.witnessRisk >= 0.66 ? 2 : (hiddenMeta.witnessRisk >= 0.4 ? 1 : 0);
-  let wantedDelta =
-    Math.max(0, -hiddenMeta.law) +
-    Math.max(0, hiddenMeta.harm) +
-    witnessAdd +
-    aggressiveCue;
-
-  if (hiddenMeta.law >= 1 && hiddenMeta.harm <= 0 && socialSoftCue > 0) wantedDelta = Math.max(0, wantedDelta - 1);
-  wantedDelta = clampInt(wantedDelta, 0, 5, 0);
+  const wantedDelta = computeChoiceWantedDelta(hiddenMeta, cues);
 
   let pressureDelta =
     0.65 +
@@ -560,7 +603,7 @@ function resolveDynamicEventAfterChoice(player = null, choice = {}, result = {},
   const storyTurn = Math.max(0, Number(options.storyTurn || player?.storyTurns || 0));
   const success = result?.success !== false;
   const outcomeType = String(result?.type || '').trim();
-  const wasCombat = outcomeType === 'combat' || /(會進入戰鬥|battle)/i.test(String(choice?.choice || ''));
+  const wasCombat = outcomeType === 'combat' || /(會進入戰鬥|会进入战斗|전투\s*진입|battle)/iu.test(String(choice?.choice || ''));
 
   let pressureAdjust = success ? -0.9 : 0.85;
   let wantedAdjust = success ? -0.4 : 0.9;
