@@ -168,8 +168,10 @@ function createOnboardingProfileUtils(deps = {}) {
   }
 
   function getUnknownElementLabel(lang = 'zh-TW') {
-    if (String(lang || 'zh-TW') === 'en') return 'Unknown Element';
-    if (String(lang || 'zh-TW') === 'zh-CN') return '未知属性';
+    const code = String(lang || 'zh-TW');
+    if (code === 'en') return 'Unknown Element';
+    if (code === 'zh-CN') return '未知属性';
+    if (code === 'ko') return '알 수 없는 속성';
     return '未知屬性';
   }
 

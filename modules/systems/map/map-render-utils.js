@@ -32,8 +32,18 @@ function createMapRenderUtils(deps = {}) {
 
   function normalizeMapLang(lang = 'zh-TW') {
     const raw = String(lang || '').trim();
+    const lower = raw.toLowerCase();
     if (raw === 'zh-CN') return 'zh-CN';
     if (raw === 'en') return 'en';
+    if (
+      raw === 'ko' ||
+      raw === 'ko-KR' ||
+      lower === 'ko' ||
+      lower === 'ko-kr' ||
+      lower === 'kr' ||
+      lower === 'korean' ||
+      lower.includes('한국')
+    ) return 'ko';
     return 'zh-TW';
   }
 

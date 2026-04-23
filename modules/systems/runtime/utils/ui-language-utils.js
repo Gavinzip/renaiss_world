@@ -44,6 +44,15 @@ function createUiLanguageUtils(deps = {}) {
       lower === 'en-us' ||
       lower.startsWith('en-')
     ) return 'en';
+    if (
+      raw === 'ko' ||
+      raw === 'ko-KR' ||
+      lower === 'ko' ||
+      lower === 'ko-kr' ||
+      lower === 'kr' ||
+      lower === 'korean' ||
+      lower.includes('한국')
+    ) return 'ko';
     return 'zh-TW';
   }
 

@@ -400,6 +400,8 @@ function buildFusionPrompt(items = [], options = {}) {
   const lang = String(options.lang || 'zh-TW');
   const languageRule = lang === 'en'
     ? 'Output all text fields in English.'
+    : lang === 'ko'
+      ? '모든 텍스트 필드는 한국어로 출력하세요.'
     : lang === 'zh-CN'
       ? '请使用简体中文输出文本字段。'
       : '請使用繁體中文輸出文字欄位。';

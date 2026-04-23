@@ -542,6 +542,14 @@ function createGlobalLanguageResources(deps = {}) {
         'Renaiss frontline operations are coordinated by Winchman, Tom, Harry, Kathy, and Ryan to keep routes and civilian hubs stable.',
         'This is an open world with no fixed main-story button; chapters, rumors, and outcomes are passively triggered by your choices.',
         'The world remembers your actions and propagates the consequences as shared long-term rumors.'
+      ].join('\n'),
+      ko: [
+        '당신은 Renaiss 해역에 있습니다. 이 성역은 오랫동안 Renaiss가 유지해 온 항로, 거래, 거주 질서의 핵심입니다.',
+        '겉으로 보이는 질서 뒤에서는 또 다른 세력이 기존 체계와 장기적으로 충돌하며 각 지역 거점에서 줄다리기를 이어가고 있습니다.',
+        '주인공은 당신과 파트너 펫입니다. 탐험, 거래, 전투, 후퇴의 모든 선택이 다음 장면의 전개를 바꿉니다.',
+        'Renaiss 전선 핵심은 Winchman, Tom, Harry, Kathy, Ryan이 협력해 유지하며, 항로와 민생 거점을 지키는 것이 최우선입니다.',
+        '이곳은 고정 메인 퀘스트 버튼이 없는 오픈 월드입니다. 장면, 소문, 전황, 인물 운명은 당신의 선택에 따라 수동적으로 진행됩니다.',
+        '세계는 당신의 행동을 기억하고, 그 결과를 모든 플레이어가 볼 수 있는 장기 소문으로 확산합니다.'
       ].join('\n')
     },
 

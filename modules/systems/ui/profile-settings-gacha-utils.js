@@ -183,7 +183,13 @@ function createProfileSettingsGachaUtils(deps = {}) {
         .setDisabled(petCapacity.availableSlots <= 0),
       new ButtonBuilder()
         .setCustomId('show_memory_recap')
-        .setLabel(uiLang === 'en' ? '🧠 Memory Recap' : (uiLang === 'zh-CN' ? '🧠 记忆回顾' : '🧠 記憶回顧'))
+        .setLabel(
+          uiLang === 'en'
+            ? '🧠 Memory Recap'
+            : (uiLang === 'zh-CN'
+              ? '🧠 记忆回顾'
+              : (uiLang === 'ko' ? '🧠 메모리 회고' : '🧠 記憶回顧'))
+        )
         .setStyle(ButtonStyle.Secondary)
     ));
 

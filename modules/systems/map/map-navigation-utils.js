@@ -41,7 +41,7 @@ function createMapNavigationUtils(deps = {}) {
   function joinByLang(items = [], lang = 'zh-TW') {
     const list = Array.isArray(items) ? items.filter(Boolean).map((item) => String(item).trim()).filter(Boolean) : [];
     if (list.length === 0) return '';
-    return list.join(lang === 'en' ? ', ' : '、');
+    return list.join(lang === 'en' || lang === 'ko' ? ', ' : '、');
   }
 
   function buildPortalUsageGuide(player, lang = '') {
@@ -64,7 +64,7 @@ function createMapNavigationUtils(deps = {}) {
     const profile = typeof getLocationProfile === 'function' ? getLocationProfile(name) : null;
     const region = String(profile?.region || '').trim();
     if (!region) return name;
-    return uiLang === 'en' ? `${name} (${region})` : `${name}（${region}）`;
+    return uiLang === 'en' || uiLang === 'ko' ? `${name} (${region})` : `${name}（${region}）`;
   }
 
   function getRegionNameByLocation(location = '') {
@@ -217,7 +217,9 @@ function createMapNavigationUtils(deps = {}) {
     const preview = Array.isArray(allInRegion) && allInRegion.length > 0
       ? joinByLang(allInRegion.filter((loc) => String(loc || '').trim() !== String(player?.location || '').trim()).slice(0, 3), uiLang)
       : tx.mapNoCities;
-    const ttlText = info.count > 0 ? formatTeleportDeviceRemaining(info.soonestRemainingMs) : (uiLang === 'en' ? 'N/A' : '無');
+    const ttlText = info.count > 0
+      ? formatTeleportDeviceRemaining(info.soonestRemainingMs)
+      : (uiLang === 'en' || uiLang === 'ko' ? 'N/A' : '無');
     return tx.mapDeviceGuide(preview || tx.mapNoCities, info.count, ttlText);
   }
 

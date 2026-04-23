@@ -43,7 +43,32 @@ const {
 const LANGUAGE_RESOURCES = createGlobalLanguageResources({
   normalizeLangCode: (lang = 'zh-TW') => {
     const raw = String(lang || '').trim();
-    if (raw === 'zh-CN' || raw === 'en') return raw;
+    const lower = raw.toLowerCase();
+    if (
+      raw === 'zh-CN' ||
+      lower === 'zh-cn' ||
+      lower === 'zh_cn' ||
+      lower === 'zh-hans' ||
+      lower === 'cn' ||
+      lower === 'sc' ||
+      lower.includes('简体')
+    ) return 'zh-CN';
+    if (
+      raw === 'en' ||
+      lower === 'english' ||
+      lower === 'en_us' ||
+      lower === 'en-us' ||
+      lower.startsWith('en-')
+    ) return 'en';
+    if (
+      raw === 'ko' ||
+      raw === 'ko-KR' ||
+      lower === 'ko' ||
+      lower === 'ko-kr' ||
+      lower === 'kr' ||
+      lower === 'korean' ||
+      lower.includes('한국')
+    ) return 'ko';
     return 'zh-TW';
   }
 });

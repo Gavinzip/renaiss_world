@@ -147,7 +147,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
   const locationSummary = Array.isArray(regionSnapshot?.locations)
     ? regionSnapshot.locations
       .map((row) => `${row.isCurrent ? '◉' : (row.isPortalHub ? '◎' : '●')} ${row.location}`)
-      .join(uiLang === 'en' ? ', ' : '、')
+      .join(uiLang === 'en' || uiLang === 'ko' ? ', ' : '、')
     : '';
   const mapBlock = useWideAnsiMap
     ? (regionSnapshot

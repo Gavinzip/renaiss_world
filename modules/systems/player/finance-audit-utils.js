@@ -28,6 +28,7 @@ function createFinanceAuditUtils(deps = {}) {
 
   function buildMemoryAuditText(rows = [], lang = 'zh-TW') {
     if (!Array.isArray(rows) || rows.length === 0) {
+      if (lang === 'ko') return '(메모리 기록이 아직 없습니다)';
       return lang === 'en'
         ? '(No memory records yet)'
         : lang === 'zh-CN'
