@@ -75,6 +75,7 @@ function initBattleRuntimeDomain(deps = {}) {
     PET_PASSIVE_HEAL_PER_STORY_TURN,
     isImmediateBattleChoice,
     getPlayerUILang,
+    getLanguageSection,
     HUMAN_COMBAT_MOVE
   } = deps;
 
@@ -264,7 +265,9 @@ function initBattleRuntimeDomain(deps = {}) {
     buildDualActionPanels,
     PET_MOVE_LOADOUT_LIMIT,
     FRIEND_DUEL_ONLINE_TURN_MS: () => FRIEND_DUEL_ONLINE_TURN_MS,
-    WAIT_COMBAT_MOVE: (() => WAIT_COMBAT_MOVE)
+    WAIT_COMBAT_MOVE: (() => WAIT_COMBAT_MOVE),
+    getPlayerUILang,
+    getLanguageSection
   });
   const {
     parseOnlineFriendDuelAction,
@@ -319,7 +322,8 @@ function initBattleRuntimeDomain(deps = {}) {
     rememberPlayer,
     queuePendingStoryTrigger,
     formatRecoveryTurnsShort,
-    appendStoryContinuation
+    appendStoryContinuation,
+    getLanguageSection
   });
   const {
     summarizeBattleDetailForStory,
@@ -349,7 +353,9 @@ function initBattleRuntimeDomain(deps = {}) {
     getPlayerOwnedPets,
     recordCashflow,
     renderManualBattle: (...args) => renderManualBattle(...args),
-    formatRecoveryTurnsShort
+    formatRecoveryTurnsShort,
+    getPlayerUILang,
+    getLanguageSection
   });
   const {
     showTrueGameOver,

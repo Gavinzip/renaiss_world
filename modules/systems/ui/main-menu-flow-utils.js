@@ -61,6 +61,7 @@ function createMainMenuFlowUtils(deps = {}) {
     getGenerationStatusText,
     normalizeLangCode
   } = require('../runtime/utils/global-language-resources');
+  const { capWantedLevel } = require('../../content/wanted-utils');
   const buildStatusFields = typeof buildMainStatusFields === 'function'
     ? buildMainStatusFields
     : (player, pet, lang = '', options = {}) => [
@@ -69,7 +70,7 @@ function createMainMenuFlowUtils(deps = {}) {
         value: `${pet?.name || 'Unknown'} (${getPetElementDisplayName(pet?.type || pet?.element || '', lang || player?.language || 'zh-TW')})`,
         inline: true
       },
-      { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
+      { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet, lang || player?.language || 'zh-TW'), inline: true },
       { name: '💰 Rns 代幣', value: String(player?.stats?.財富 || 0), inline: true },
       { name: '📍 位置', value: String(player?.location || ''), inline: true },
       { name: '🌟 幸運', value: String(player?.stats?.運氣 || 0), inline: true },
@@ -103,7 +104,7 @@ function getWantedLevelForPlayer(CORE, player) {
     ? Number(CORE.getPlayerWantedLevel(player.id) || 0)
     : 0;
   const byPlayer = Number(player?.wanted || 0);
-  return Math.max(0, byCore, byPlayer);
+  return capWantedLevel(Math.max(0, byCore, byPlayer));
 }
 
 function hasCorruptedStoryText(story = '') {

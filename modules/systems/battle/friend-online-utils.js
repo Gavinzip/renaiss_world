@@ -104,6 +104,26 @@ function createFriendOnlineUtils(deps = {}) {
     ? deps.advanceBattleTurnEnergy
     : (() => ({ turn: 1, energy: 2 }));
   const EmbedBuilder = deps.EmbedBuilder;
+  const getPlayerUILang = typeof deps.getPlayerUILang === 'function'
+    ? deps.getPlayerUILang
+    : ((player) => String(player?.language || 'zh-TW'));
+  const getLanguageSection = typeof deps.getLanguageSection === 'function'
+    ? deps.getLanguageSection
+    : null;
+
+  function getFriendOnlineText(player = null) {
+    const lang = getPlayerUILang(player);
+    let base = {};
+    let localized = {};
+    try {
+      base = getLanguageSection ? (getLanguageSection('friendOnlineText', 'zh-TW') || {}) : {};
+      localized = getLanguageSection ? (getLanguageSection('friendOnlineText', lang) || {}) : {};
+    } catch {
+      base = {};
+      localized = {};
+    }
+    return { ...base, ...localized };
+  }
 
   function parseOnlineFriendDuelAction(customId = '') {
     const text = String(customId || '').trim();
@@ -660,6 +680,7 @@ function createFriendOnlineUtils(deps = {}) {
   }
 
   function buildOnlineFriendDuelPayload(hostPlayer, hostPet, options = {}) {
+    const tx = getFriendOnlineText(hostPlayer);
     const online = getOnlineFriendDuelState(hostPlayer);
     const enemy = hostPlayer?.battleState?.enemy;
     const combatant = getActiveCombatant(hostPlayer, hostPet);
@@ -688,44 +709,45 @@ function createFriendOnlineUtils(deps = {}) {
     const hostSubmitted = Boolean(hostChoice);
     const rivalSubmitted = Boolean(rivalChoice);
     const waitingHint = (hostSubmitted && !rivalSubmitted)
-      ? '⏳ 你已提交，正在等待對手按下按鈕...'
+      ? (tx.waitingSubmittedSelf || '⏳ 你已提交，正在等待對手按下按鈕...')
       : (!hostSubmitted && rivalSubmitted)
-        ? '⏳ 對手已提交，請你按下招式按鈕...'
+        ? (tx.waitingSubmittedRival || '⏳ 對手已提交，請你按下招式按鈕...')
         : '';
     const noticeBlock = [notice, waitingHint].filter(Boolean).join('\n');
     const readyText =
-      `提交狀態：${hostName} ${formatOnlineFriendChoiceText(hostChoice, hostMoves)} ｜ ${rivalName} ${formatOnlineFriendChoiceText(rivalChoice, rivalMoves)}`;
+      (typeof tx.readyText === 'function'
+        ? tx.readyText(hostName, formatOnlineFriendChoiceText(hostChoice, hostMoves), rivalName, formatOnlineFriendChoiceText(rivalChoice, rivalMoves))
+        : `提交狀態：${hostName} ${formatOnlineFriendChoiceText(hostChoice, hostMoves)} ｜ ${rivalName} ${formatOnlineFriendChoiceText(rivalChoice, rivalMoves)}`);
 
     if (online?.awaitingRival) {
       const waitingContent =
-        `🌐 **好友手動對戰（線上模式）**\n` +
-        `🕒 正在等待對手加入本場即時戰鬥...\n` +
-        `就緒狀態：${hostName} ✅ ｜ ${rivalName} ⌛\n\n` +
-        '請對手按下「✅ 加入即時戰鬥」後開打。\n' +
-        '（若對手未加入，你也可以改用其他模式）';
+        `${tx.title || '🌐 **好友手動對戰（線上模式）**'}\n` +
+        `${tx.waitingJoin || '🕒 正在等待對手加入本場即時戰鬥...'}\n` +
+        `${typeof tx.waitingReady === 'function' ? tx.waitingReady(hostName, rivalName) : `就緒狀態：${hostName} ✅ ｜ ${rivalName} ⌛`}\n\n` +
+        `${tx.waitingPrompt || '請對手按下「✅ 加入即時戰鬥」後開打。\n（若對手未加入，你也可以改用其他模式）'}`;
       const readyRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`fdonline_join_${hostId}`).setLabel('✅ 加入即時戰鬥').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel('⚔️ 改用手動（對手AI）').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('battle_mode_ai').setLabel('🤖 改用AI戰鬥').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel('↩️ 返回').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`fdonline_join_${hostId}`).setLabel(tx.joinButton || '✅ 加入即時戰鬥').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('battle_mode_manual_offline').setLabel(tx.manualAiButton || '⚔️ 改用手動（對手AI）').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('battle_mode_ai').setLabel(tx.aiButton || '🤖 改用AI戰鬥').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel(tx.backButton || '↩️ 返回').setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`fdonline_view_${hostId}`)
-          .setLabel(layoutMode === 'mobile' ? '🖥️ 電腦版' : '📱 手機版')
+          .setLabel(layoutMode === 'mobile' ? (tx.desktopButton || '🖥️ 電腦版') : (tx.mobileButton || '📱 手機版'))
           .setStyle(ButtonStyle.Secondary)
       );
       return { content: waitingContent, embeds: [], components: [readyRow] };
     }
 
     const content =
-      `🌐 **好友手動對戰（線上模式）**\n` +
-      `⏳ 本回合倒數：${remainSec} 秒（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）\n` +
-      `⚡ 能量：${hostName} ${hostEnergy} ｜ ${rivalName} ${rivalEnergy}\n` +
+      `${tx.title || '🌐 **好友手動對戰（線上模式）**'}\n` +
+      `${typeof tx.countdown === 'function' ? tx.countdown(remainSec, Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)) : `⏳ 本回合倒數：${remainSec} 秒（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）`}\n` +
+      `${typeof tx.energyLine === 'function' ? tx.energyLine(hostName, hostEnergy, rivalName, rivalEnergy) : `⚡ 能量：${hostName} ${hostEnergy} ｜ ${rivalName} ${rivalEnergy}`}\n` +
       `${readyText}\n` +
       `${board}${actionPanels ? `\n\n${actionPanels}` : ''}` +
       `${summaryBlock}` +
       `${noticeBlock ? `\n${noticeBlock}\n` : ''}` +
-      `\n**招式：**\n${formatOnlineHostMoveDetails(hostMoves, combatant, enemy, hostEnergy)}\n` +
-      '\n在倒數內可改選；雙方都提交後會立即結算。';
+      `\n${tx.moveHeader || '**招式：**'}\n${formatOnlineHostMoveDetails(hostMoves, combatant, enemy, hostEnergy)}\n` +
+      `\n${tx.reselectionHint || '在倒數內可改選；雙方都提交後會立即結算。'}`;
 
     return {
       content,
@@ -736,11 +758,12 @@ function createFriendOnlineUtils(deps = {}) {
 
   async function startManualBattleOnline(interaction, user) {
     const player = loadPlayer(user.id);
+    const tx = getFriendOnlineText(player);
     const fallbackPet = PET?.loadPet?.(user.id);
     const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
     const pet = petResolved?.pet || fallbackPet;
     if (!player || !pet || !player?.battleState?.enemy || !player?.battleState?.friendDuel) {
-      await interaction.reply({ content: '❌ 目前不是可啟用線上模式的好友友誼戰。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.invalidStart || '❌ 目前不是可啟用線上模式的好友友誼戰。', ephemeral: true }).catch(() => {});
       return;
     }
     if (petResolved?.changed && typeof CORE?.savePlayer === 'function') CORE.savePlayer(player);
@@ -748,7 +771,7 @@ function createFriendOnlineUtils(deps = {}) {
     const duel = player.battleState.friendDuel || {};
     const friendId = String(duel.friendId || '').trim();
     if (!friendId) {
-      await interaction.reply({ content: '❌ 找不到好友對戰對象。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.noTarget || '❌ 找不到好友對戰對象。', ephemeral: true }).catch(() => {});
       return;
     }
 
@@ -778,7 +801,9 @@ function createFriendOnlineUtils(deps = {}) {
       const rivalPet = rivalPetResolved?.pet || rivalFallbackPet;
       if (rivalPetResolved?.changed && typeof CORE?.savePlayer === 'function') CORE.savePlayer(rivalHost);
       const payload = buildOnlineFriendDuelPayload(rivalHost, rivalPet, {
-        notice: `✅ ${player.name} 已加入即時戰鬥，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
+        notice: (typeof getFriendOnlineText(rivalHost).joinedNotice === 'function'
+          ? getFriendOnlineText(rivalHost).joinedNotice(player.name, Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000))
+          : `✅ ${player.name} 已加入即時戰鬥，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`)
       });
       const duelMsg = await editOnlineFriendDuelMessage(rivalHost, payload);
 
@@ -800,15 +825,17 @@ function createFriendOnlineUtils(deps = {}) {
       }
       rows.push(
         new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel('↩️ 返回').setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId('battle_mode_manual_back').setLabel(tx.backButton || '↩️ 返回').setStyle(ButtonStyle.Secondary)
         )
       );
       await interaction.update({
-        content: `✅ 已自動加入 ${String(rivalHost.name || '好友').trim() || '好友'} 的即時戰鬥房。`,
+        content: (typeof tx.roomJoinSuccess === 'function'
+          ? tx.roomJoinSuccess(String(rivalHost.name || '好友').trim() || '好友')
+          : `✅ 已自動加入 ${String(rivalHost.name || '好友').trim() || '好友'} 的即時戰鬥房。`),
         embeds: [],
         components: rows
       }).catch(async () => {
-        await interaction.reply({ content: '✅ 已自動加入好友的即時戰鬥房。', ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: tx.roomJoinFallback || '✅ 已自動加入好友的即時戰鬥房。', ephemeral: true }).catch(() => {});
       });
       return;
     }
@@ -835,32 +862,35 @@ function createFriendOnlineUtils(deps = {}) {
     clearOnlineFriendDuelTimer(online.roomId);
 
     const payload = buildOnlineFriendDuelPayload(player, pet, {
-      notice: '📡 已建立即時友誼戰房間，等待對手加入。'
+      notice: tx.roomCreated || '📡 已建立即時友誼戰房間，等待對手加入。'
     });
     await interaction.update(payload).catch(async () => {
-      await interaction.reply({ content: '❌ 線上模式啟動失敗，請重試。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.startFailed || '❌ 線上模式啟動失敗，請重試。', ephemeral: true }).catch(() => {});
     });
   }
 
   async function handleOnlineFriendDuelChoice(interaction, user, customId = '') {
+    const actorPlayer = loadPlayer(user.id);
+    const actorTx = getFriendOnlineText(actorPlayer);
     const action = parseOnlineFriendDuelAction(customId);
     if (!action?.hostId) {
-      await interaction.reply({ content: '⚠️ 線上對戰按鈕格式錯誤。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: actorTx.invalidAction || '⚠️ 線上對戰按鈕格式錯誤。', ephemeral: true }).catch(() => {});
       return;
     }
     const hostPlayer = getOnlineFriendDuelHostPlayer(action.hostId);
+    const tx = getFriendOnlineText(hostPlayer);
     if (!hostPlayer) {
-      await interaction.reply({ content: '⚠️ 這個線上對戰房間已失效。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.roomExpired || '⚠️ 這個線上對戰房間已失效。', ephemeral: true }).catch(() => {});
       return;
     }
     if (!canOperateOnlineFriendDuel(hostPlayer, user.id, interaction.channelId)) {
-      await interaction.reply({ content: '⚠️ 你不是這場線上友誼戰的參戰者。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.notParticipant || '⚠️ 你不是這場線上友誼戰的參戰者。', ephemeral: true }).catch(() => {});
       return;
     }
 
     const online = getOnlineFriendDuelState(hostPlayer);
     if (!online) {
-      await interaction.reply({ content: '⚠️ 線上友誼戰狀態不存在。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.noState || '⚠️ 線上友誼戰狀態不存在。', ephemeral: true }).catch(() => {});
       return;
     }
 
@@ -875,8 +905,8 @@ function createFriendOnlineUtils(deps = {}) {
       if (hostPetView) {
         await editOnlineFriendDuelMessage(hostPlayer, buildOnlineFriendDuelPayload(hostPlayer, hostPetView, {
           notice: nextMode === 'mobile'
-            ? '📱 已切換為手機版戰鬥排版。'
-            : '🖥️ 已切換為電腦版戰鬥排版。'
+            ? (tx.switchedMobileNotice || '📱 已切換為手機版戰鬥排版。')
+            : (tx.switchedDesktopNotice || '🖥️ 已切換為電腦版戰鬥排版。')
         }));
       }
       return;
@@ -894,7 +924,7 @@ function createFriendOnlineUtils(deps = {}) {
     const actorIsHost = actorId === hostId;
     const actorIsRival = actorId === rivalId;
     if (!actorIsHost && !actorIsRival) {
-      await interaction.reply({ content: '⚠️ 你不是本場線上友誼戰參戰者。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.notParticipant || '⚠️ 你不是本場線上友誼戰參戰者。', ephemeral: true }).catch(() => {});
       return;
     }
 
@@ -936,7 +966,9 @@ function createFriendOnlineUtils(deps = {}) {
           const mirrorPet = mirrorPetResolved?.pet || mirrorFallbackPet;
           if (mirrorPetResolved?.changed && typeof CORE?.savePlayer === 'function') CORE.savePlayer(mirrorHost);
           const payload = buildOnlineFriendDuelPayload(mirrorHost, mirrorPet, {
-            notice: `✅ 已自動合併雙等待房，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
+            notice: typeof getFriendOnlineText(mirrorHost).joinedNotice === 'function'
+              ? getFriendOnlineText(mirrorHost).joinedNotice('雙方', Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000))
+              : `✅ 已自動合併雙等待房，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
           });
           const duelMsg = await editOnlineFriendDuelMessage(mirrorHost, payload);
           const jump = duelMsg?.url ? `\n請前往面板：${duelMsg.url}` : '';
@@ -944,7 +976,7 @@ function createFriendOnlineUtils(deps = {}) {
           return;
         }
 
-        await interaction.reply({ content: '⚠️ 只有對手可以按「加入即時戰鬥」。', ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: tx.onlyRivalCanJoin || '⚠️ 只有對手可以按「加入即時戰鬥」。', ephemeral: true }).catch(() => {});
         return;
       }
       await interaction.deferUpdate().catch(() => {});
@@ -963,14 +995,16 @@ function createFriendOnlineUtils(deps = {}) {
       if (petResolvedJoin?.changed && typeof CORE?.savePlayer === 'function') CORE.savePlayer(hostPlayer);
 
       const payload = buildOnlineFriendDuelPayload(hostPlayer, hostPetJoin, {
-        notice: `✅ 雙方已就緒，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
+        notice: typeof tx.joinedNotice === 'function'
+          ? tx.joinedNotice('雙方', Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000))
+          : `✅ 雙方已就緒，回合開始（每回合 ${Math.floor(FRIEND_DUEL_ONLINE_TURN_MS / 1000)} 秒）。`
       });
       await editOnlineFriendDuelMessage(hostPlayer, payload);
       return;
     }
 
     if (online.awaitingRival) {
-      await interaction.reply({ content: '⏳ 對手尚未加入線上即時戰鬥，暫時不能提交招式。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.waitingJoin || '🕒 正在等待對手加入本場即時戰鬥...', ephemeral: true }).catch(() => {});
       return;
     }
 
@@ -980,7 +1014,7 @@ function createFriendOnlineUtils(deps = {}) {
     const enemy = hostPlayer?.battleState?.enemy;
     const combatant = getActiveCombatant(hostPlayer, hostPet);
     if (!hostPet || !enemy || !combatant) {
-      await interaction.reply({ content: '❌ 戰鬥資料缺失，請重新發起友誼戰。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: tx.battleDataMissing || '❌ 戰鬥資料缺失，請重新發起友誼戰。', ephemeral: true }).catch(() => {});
       return;
     }
     if (petResolved?.changed && typeof CORE?.savePlayer === 'function') CORE.savePlayer(hostPlayer);

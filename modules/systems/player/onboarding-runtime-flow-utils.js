@@ -930,7 +930,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       .addFields(
         { name: `🐾 ${t('name', uiLang)}`, value: pet.name, inline: true },
         { name: `🏷️ ${t('element', uiLang)}`, value: getPetElementDisplayName(pet.type, uiLang), inline: true },
-        { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
+        { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet, uiLang), inline: true },
         { name: t('atk', uiLang), value: String(pet.attack), inline: true },
         { name: t('def', uiLang), value: String(pet.defense), inline: true },
         { name: `⚡ ${t('speed', uiLang)}`, value: String(pet.speed), inline: true }
@@ -977,7 +977,7 @@ function createOnboardingRuntimeFlowUtils(deps = {}) {
       .addFields(
         { name: `🐾 ${t('name', uiLang)}`, value: pet.name, inline: true },
         { name: `🏷️ ${t('element', uiLang)}`, value: getPetElementDisplayName(pet.type, uiLang), inline: true },
-        { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
+        { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet, uiLang), inline: true },
         { name: '⚔️ 攻擊', value: String(pet.attack), inline: true },
         { name: '🛡️ 防禦', value: String(pet.defense), inline: true }
       )

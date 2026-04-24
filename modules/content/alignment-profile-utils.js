@@ -1,3 +1,5 @@
+const { WANTED_LEVEL_CAP } = require('./wanted-utils');
+
 function clampNumber(value, min, max, fallback = min) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
@@ -63,7 +65,7 @@ function computeAlignmentProfileFromDynamicState(dynamicWorld = {}, location = '
   const digital = clampNumber(rep.digital, -120, 120, 0);
   const civic = clampNumber(rep.civic, -120, 120, 0);
 
-  const localWanted = loc ? clampNumber(wantedByLocation[loc], 0, 12, 0) : 0;
+  const localWanted = loc ? clampNumber(wantedByLocation[loc], 0, WANTED_LEVEL_CAP, 0) : 0;
   const localPressure = loc ? clampNumber(pressureByLocation[loc], 0, 24, 0) : 0;
 
   const goodRaw =

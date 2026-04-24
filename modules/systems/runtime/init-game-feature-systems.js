@@ -200,6 +200,7 @@ function initGameFeatureSystems(deps = {}) {
     getAllPetSkillMoves,
     extractSkillChipMoveName,
     getLanguageSection,
+    localizeDisplayText,
     addSkillChipToInventory,
     normalizeFriendId,
     ensurePlayerFriendState,
@@ -559,6 +560,7 @@ function initGameFeatureSystems(deps = {}) {
     getAllPetSkillMoves,
     extractSkillChipMoveName,
     getLanguageSection,
+    localizeDisplayText,
     showMainMenu
   });
   const {
@@ -607,6 +609,7 @@ function initGameFeatureSystems(deps = {}) {
     TextInputBuilder,
     TextInputStyle,
     getPlayerUILang,
+    getLanguageSection,
     getSettingsText: (...args) => deps.getSettingsText(...args),
     getWorldIntroTemplate: (...args) => deps.getWorldIntroTemplate(...args),
     disableMessageComponents,

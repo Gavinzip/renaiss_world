@@ -1,6 +1,7 @@
 const {
   computeAlignmentProfileFromDynamicState
 } = require('./alignment-profile-utils');
+const { WANTED_LEVEL_CAP, capWantedLevel, capWantedFloat } = require('./wanted-utils');
 
 function clampNumber(value, min, max, fallback = min) {
   const num = Number(value);
@@ -86,7 +87,7 @@ function ensureDynamicWorldState(player = null) {
   for (const [loc, val] of Object.entries(wantedByLocation)) {
     const key = normalizeLocationName(loc);
     if (!key) continue;
-    state.wantedByLocation[key] = clampInt(val, 0, 12, 0);
+    state.wantedByLocation[key] = clampInt(val, 0, WANTED_LEVEL_CAP, 0);
   }
 
   const pressureByLocation = raw.pressureByLocation && typeof raw.pressureByLocation === 'object' ? raw.pressureByLocation : {};
@@ -329,7 +330,7 @@ function applyChoiceConsequences(player = null, choice = {}, options = {}) {
 
   const prevWanted = Number(state.wantedByLocation[location] || 0);
   const prevPressure = Number(state.pressureByLocation[location] || 0);
-  const nextWanted = clampInt(prevWanted + wantedDelta, 0, 12, prevWanted);
+  const nextWanted = clampInt(prevWanted + wantedDelta, 0, WANTED_LEVEL_CAP, prevWanted);
   const nextPressure = clampNumber(prevPressure + pressureDelta, 0, 24, prevPressure);
   state.wantedByLocation[location] = nextWanted;
   state.pressureByLocation[location] = nextPressure;
@@ -338,7 +339,7 @@ function applyChoiceConsequences(player = null, choice = {}, options = {}) {
   const topWanted = Object.values(state.wantedByLocation)
     .map((v) => Math.max(0, Number(v || 0)))
     .reduce((acc, cur) => Math.max(acc, cur), 0);
-  player.wanted = Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0));
+  player.wanted = capWantedLevel(Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0)));
 
   return {
     changed: true,
@@ -374,7 +375,7 @@ function advanceDynamicStateTurn(player = null, options = {}) {
   }
 
   if (location) {
-    const wanted = Math.max(0, Number(state.wantedByLocation[location] || 0));
+    const wanted = capWantedFloat(state.wantedByLocation[location] || 0);
     const passivePressureGain = clampNumber(0.22 + wanted * 0.09, 0.16, 1.36, 0.2);
     state.pressureByLocation[location] = clampNumber(
       Number(state.pressureByLocation[location] || 0) + passivePressureGain,
@@ -398,12 +399,12 @@ function advanceDynamicStateTurn(player = null, options = {}) {
     .reduce((acc, cur) => Math.max(acc, cur), 0);
   if (location) {
     const wantedFloor = Math.max(0, Number(alignment.wantedFloor || 0));
-    const localWanted = Math.max(0, Number(state.wantedByLocation[location] || 0));
+    const localWanted = capWantedFloat(state.wantedByLocation[location] || 0);
     if (localWanted < wantedFloor) {
       state.wantedByLocation[location] = wantedFloor;
     }
   }
-  player.wanted = Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0));
+  player.wanted = capWantedLevel(Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0)));
 
   return {
     changed: true,
@@ -420,7 +421,7 @@ function buildDynamicWorldContext(player = null, location = '', options = {}) {
 
   const rep = state.factionRep;
   const axes = state.moralityAxes;
-  const wanted = Math.max(0, Number(state.wantedByLocation[loc] || 0));
+  const wanted = capWantedFloat(state.wantedByLocation[loc] || 0);
   const pressure = Math.max(0, Number(state.pressureByLocation[loc] || 0));
   const alignment = computeAlignmentProfileFromDynamicState(state, loc);
   const recent = state.recentEvents
@@ -472,7 +473,7 @@ function chooseDynamicEventPlan(player = null, location = '', options = {}) {
   const loc = normalizeLocationName(location || player?.location || '未知地點');
   const storyTurn = Math.max(0, Number(options.storyTurn || player?.storyTurns || 0));
   const pressure = Math.max(0, Number(state.pressureByLocation[loc] || 0));
-  const wanted = Math.max(0, Number(state.wantedByLocation[loc] || 0));
+  const wanted = capWantedFloat(state.wantedByLocation[loc] || 0);
   const alignment = computeAlignmentProfileFromDynamicState(state, loc);
   const chain = state.activeChainByLocation[loc];
 
@@ -621,7 +622,7 @@ function resolveDynamicEventAfterChoice(player = null, choice = {}, result = {},
   state.wantedByLocation[location] = clampNumber(
     Number(state.wantedByLocation[location] || 0) + wantedAdjust,
     0,
-    12,
+    WANTED_LEVEL_CAP,
     0
   );
 
@@ -651,7 +652,7 @@ function resolveDynamicEventAfterChoice(player = null, choice = {}, result = {},
   const topWanted = Object.values(state.wantedByLocation)
     .map((v) => Math.max(0, Number(v || 0)))
     .reduce((acc, cur) => Math.max(acc, cur), 0);
-  player.wanted = Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0));
+  player.wanted = capWantedLevel(Math.max(0, Math.floor(topWanted), Number(alignment.wantedFloor || 0)));
 
   return {
     changed: true,

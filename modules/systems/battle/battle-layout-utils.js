@@ -1,3 +1,5 @@
+const { capWantedLevel } = require('../../content/wanted-utils');
+
 function createBattleLayoutUtils(deps = {}) {
   const {
     ActionRowBuilder,
@@ -399,7 +401,7 @@ function createBattleLayoutUtils(deps = {}) {
       const finisher = String(lastRound?.playerMove || '最後一擊').trim();
       if (finalResult.victory === true) {
         const gold = Math.max(0, Number(finalResult?.gold || 0));
-        const wanted = Math.max(0, Number(finalResult?.wantedLevel || 0));
+        const wanted = capWantedLevel(finalResult?.wantedLevel || 0);
         const rewardLine = gold > 0 ? `，獲得 ${gold} Rns！` : '。';
         const wantedLine = wanted > 0 ? `\n⚠️ 你現在是 ${wanted} 級通緝犯！` : '';
         lines.push(`**終局：** 🏆 ${combatant.name}以「${finisher}」擊倒${enemy.name}${rewardLine}${wantedLine}`);

@@ -151,7 +151,7 @@ function createAdventureStatusUtils(deps = {}) {
   function buildMainStatusBar(player, pet, lang = '') {
     const safeLang = lang || player?.language || 'zh-TW';
     const tx = getAdventureText(safeLang);
-    const hpText = formatPetHpWithRecovery(pet);
+    const hpText = formatPetHpWithRecovery(pet, safeLang);
     const locationText = getLocationDisplayName(player?.location || '', safeLang) || String(player?.location || '');
     return `${tx.statusHp} ${hpText} | ${tx.statusEnergy} ${player.stats.能量 || 10}/${player.maxStats.能量 || 10} | ${tx.statusCurrency} ${player.stats.財富} | ${locationText}`;
   }
@@ -166,7 +166,7 @@ function createAdventureStatusUtils(deps = {}) {
         value: `${pet?.name || 'Unknown'} (${getPetElementDisplayName(pet?.type || pet?.element || '', safeLang)})`,
         inline: true
       },
-      { name: tx.fieldHp, value: formatPetHpWithRecovery(pet), inline: true },
+      { name: tx.fieldHp, value: formatPetHpWithRecovery(pet, safeLang), inline: true },
       { name: tx.fieldCurrency, value: String(player?.stats?.財富 || 0), inline: true },
       { name: tx.fieldLocation, value: getLocationDisplayName(player?.location || '', safeLang) || String(player?.location || ''), inline: true },
       { name: tx.fieldLuck, value: String(player?.stats?.運氣 || 0), inline: true },

@@ -40,6 +40,25 @@ function createBattlePostflowUtils(deps = {}) {
   const canPetFight = typeof deps.canPetFight === 'function'
     ? deps.canPetFight
     : (() => false);
+  const getPlayerUILang = typeof deps.getPlayerUILang === 'function'
+    ? deps.getPlayerUILang
+    : ((player) => String(player?.language || 'zh-TW'));
+  const getLanguageSection = typeof deps.getLanguageSection === 'function'
+    ? deps.getLanguageSection
+    : null;
+
+  function getBattleText(lang = 'zh-TW') {
+    let base = {};
+    let localized = {};
+    try {
+      base = getLanguageSection ? (getLanguageSection('battleText', 'zh-TW') || {}) : {};
+      localized = getLanguageSection ? (getLanguageSection('battleText', lang) || {}) : {};
+    } catch {
+      base = {};
+      localized = {};
+    }
+    return { ...base, ...localized };
+  }
 
   function pickRandomIndexes(total = 0, count = 0) {
     const max = Math.max(0, Math.floor(Number(total || 0)));
@@ -191,6 +210,8 @@ function createBattlePostflowUtils(deps = {}) {
 
   async function showTrueGameOver(interaction, user, detailText, mode = 'update') {
     const player = CORE.loadPlayer(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getBattleText(uiLang);
     const enemyName = String(player?.battleState?.enemy?.name || '敵人').trim();
     const pets = resolveOwnedPetsForDefeatCheck(player, user?.id);
     const allPetsDead = pets.length > 0
@@ -213,15 +234,16 @@ function createBattlePostflowUtils(deps = {}) {
 
     if (!allPetsDead) {
       const embed = new EmbedBuilder()
-        .setTitle('⚠️ 本場敗退')
+        .setTitle(tx.titleRoundDefeat || '⚠️ 本場敗退')
         .setColor(0xff9900)
         .setDescription(
           `${detailText}\n\n🏁 本局勝者：${enemyName}\n\n` +
-          `你還有可用寵物，未觸發全滅懲罰。\n` +
-          `${anyPetUsable ? '請回主選單改派寵物再戰。' : '目前沒有可上場寵物，但未達全寵死亡判定。'}`
+          `${anyPetUsable
+            ? (tx.roundDefeatUsablePets || '你還有可用寵物，未觸發全滅懲罰。\n請回主選單改派寵物再戰。')
+            : (tx.roundDefeatNoUsablePets || '目前沒有可上場寵物，但未達全寵死亡判定。')}`
         );
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('main_menu').setLabel('📖 繼續').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('main_menu').setLabel(tx.continueButton || '📖 繼續').setStyle(ButtonStyle.Secondary)
       );
       await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
       return;
@@ -229,22 +251,24 @@ function createBattlePostflowUtils(deps = {}) {
 
     const penalty = consumeBattleDefeatCompensation(player);
     const embed = new EmbedBuilder()
-      .setTitle('💀 全隊覆滅')
+      .setTitle(tx.titleTotalDefeat || '💀 全隊覆滅')
       .setColor(0xff0000)
       .setDescription(
         `${detailText}\n\n🏁 勝者：${enemyName}\n\n` +
         `${Array.isArray(penalty?.lines) && penalty.lines.length > 0 ? penalty.lines.join('\n') : '⚠️ 戰敗懲罰套用失敗'}\n\n` +
-        `你還活著，請重新整隊後繼續冒險。`
+        `${tx.totalDefeatHint || '你還活著，請重新整隊後繼續冒險。'}`
       );
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('main_menu').setLabel('📖 繼續').setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId('main_menu').setLabel(tx.continueButton || '📖 繼續').setStyle(ButtonStyle.Danger)
     );
 
     await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
   }
 
   async function showPetDefeatedTransition(interaction, player, pet, battleDetail = '', mode = 'update') {
+    const uiLang = getPlayerUILang(player);
+    const tx = getBattleText(uiLang);
     PET.markPetDefeated(pet, '戰鬥落敗');
     PET.savePet(pet);
 
@@ -256,7 +280,9 @@ function createBattlePostflowUtils(deps = {}) {
       player,
       enemyName,
       'pet_down',
-      `${pet?.name || '夥伴'}復活倒數 ${formatRecoveryTurnsShort(remainTurns)}`
+      typeof tx.petDownEvent === 'function'
+        ? tx.petDownEvent(pet?.name || '夥伴', remainTurns)
+        : `${pet?.name || '夥伴'}復活倒數 ${formatRecoveryTurnsShort(remainTurns)}`
     );
     player.battleState.fighter = 'player';
     player.battleState.mode = null;
@@ -271,30 +297,35 @@ function createBattlePostflowUtils(deps = {}) {
     CORE.savePlayer(player);
 
     const embed = new EmbedBuilder()
-      .setTitle('🐾 寵物陣亡')
+      .setTitle(tx.titlePetDown || '🐾 寵物陣亡')
       .setColor(0xff9900)
-      .setDescription(
-        `${pet.name} 在戰鬥中倒下了，將於 **${formatRecoveryTurnsShort(remainTurns)}** 後復活。\n\n` +
-        `🏁 本局勝者：${enemyName}\n` +
-        `你若還要硬戰，可以改由 **${player.name}** 親自上場（ATK 固定 10）。` +
-        `${battleDetail ? `\n\n📜 戰況回放：\n${String(battleDetail).slice(0, 1200)}` : ''}`
-      );
+      .setDescription(typeof tx.petDownDesc === 'function'
+        ? tx.petDownDesc({
+          petName: pet.name,
+          remain: remainTurns,
+          enemyName,
+          playerName: player.name,
+          battleDetail: battleDetail ? String(battleDetail).slice(0, 1200) : ''
+        })
+        : `${pet.name} 在戰鬥中倒下了，將於 **${formatRecoveryTurnsShort(remainTurns)}** 後復活。\n\n🏁 本局勝者：${enemyName}\n你若還要硬戰，可以改由 **${player.name}** 親自上場（ATK 固定 10）。${battleDetail ? `\n\n📜 戰況回放：\n${String(battleDetail).slice(0, 1200)}` : ''}`);
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('battle_continue_human').setLabel('🧍 我親自上場').setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId('main_menu').setLabel('📖 繼續（先撤退）').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId('battle_continue_human').setLabel(tx.humanTakeoverButton || '🧍 我親自上場').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('main_menu').setLabel(tx.continueRetreatButton || '📖 繼續（先撤退）').setStyle(ButtonStyle.Secondary)
     );
     await sendBattleMessage(interaction, { embeds: [embed], content: null, components: [row] }, mode);
   }
 
   async function continueBattleWithHuman(interaction, user) {
     const player = CORE.loadPlayer(user.id);
+    const uiLang = getPlayerUILang(player);
+    const tx = getBattleText(uiLang);
     const fallbackPet = PET.loadPet(user.id);
     const petResolved = resolvePlayerMainPet(player, { preferBattle: true, fallbackPet });
     const pet = petResolved?.pet || fallbackPet;
     const enemy = player?.battleState?.enemy;
     if (!player || !pet || !enemy) {
-      await interaction.update({ content: '❌ 找不到可續戰的戰鬥。', components: [] });
+      await interaction.update({ content: tx.noContinuableBattle || '❌ 找不到可續戰的戰鬥。', components: [] });
       return;
     }
     if (petResolved?.changed) CORE.savePlayer(player);
@@ -317,8 +348,9 @@ function createBattlePostflowUtils(deps = {}) {
       interaction,
       player,
       pet,
-      `⚠️ ${pet.name} 尚未復活，由你本人接戰。\n` +
-        `勝率預估：${estimate.rank}（約 ${Number(estimate.winRate || 0).toFixed(1)}%）`
+      typeof tx.humanTakeoverNotice === 'function'
+        ? tx.humanTakeoverNotice(pet.name, estimate.rank, Number(estimate.winRate || 0).toFixed(1))
+        : `⚠️ ${pet.name} 尚未復活，由你本人接戰。\n勝率預估：${estimate.rank}（約 ${Number(estimate.winRate || 0).toFixed(1)}%）`
     );
   }
 

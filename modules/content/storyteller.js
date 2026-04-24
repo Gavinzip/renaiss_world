@@ -22,6 +22,7 @@ const CORE = require('../core/game-core');
 const { createGlobalLanguageResources } = require('../systems/runtime/utils/global-language-resources');
 const {
   getLocationPlaystyleProfile,
+  getLocalizedPlaystyleProfile,
   getLocationPlaystylePromptBlock,
   countChoiceKeywordHits
 } = require('./location-playstyle');
@@ -34,6 +35,7 @@ const {
 } = require('./location-weather');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
 const { computeAlignmentProfileFromPlayer } = require('./alignment-profile-utils');
+const { WANTED_LEVEL_CAP, capWantedLevel } = require('./wanted-utils');
 const {
   getChoiceTag,
   localizeChoiceTag,
@@ -134,7 +136,7 @@ const STORY_GEN_RETRIES = Math.max(2, Math.min(3, Number(process.env.STORY_GEN_R
 const CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.CHOICE_TIMEOUT_MS || 180000));
 const SYSTEM_CHOICE_TIMEOUT_MS = Math.max(8000, Number(process.env.SYSTEM_CHOICE_TIMEOUT_MS || 180000));
 const CHOICE_GEN_RETRIES = Math.max(1, Math.min(2, Number(process.env.CHOICE_GEN_RETRIES || 1)));
-const CHOICE_VALIDATION_PASSES = Math.max(1, Math.min(3, Number(process.env.CHOICE_VALIDATION_PASSES || 1)));
+const CHOICE_VALIDATION_PASSES = Math.max(2, Math.min(3, Number(process.env.CHOICE_VALIDATION_PASSES || 2)));
 const CHOICE_MAX_TOKENS = Math.max(500, Number(process.env.CHOICE_MAX_TOKENS || 1200));
 const CHOICE_OUTPUT_COUNT = 5;
 const AI_GLOBAL_CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.AI_GLOBAL_CONCURRENCY || 20)));
@@ -411,7 +413,7 @@ function getWantedPressure(player = null) {
   if (playerId && CORE && typeof CORE.getPlayerWantedLevel === 'function') {
     coreWanted = Math.max(0, Number(CORE.getPlayerWantedLevel(playerId) || 0));
   }
-  return Math.max(localWanted, coreWanted, wantedFloor + wantedBoost);
+  return capWantedLevel(Math.max(localWanted, coreWanted, wantedFloor + wantedBoost));
 }
 
 function getBattleCadenceInfo(player = null) {
@@ -450,6 +452,24 @@ function getNearbyHostileNpcSummary(location = '', limit = 3) {
     if (names.length >= Math.max(1, Number(limit || 3))) break;
   }
   return { names, count: names.length };
+}
+
+function localizeStoryFacingHostileName(name = '', playerLang = 'zh-TW') {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  return LANGUAGE_RESOURCES.getEnemyName(raw, playerLang)
+    || LANGUAGE_RESOURCES.getNpcName(raw, playerLang)
+    || LANGUAGE_RESOURCES.localizeDisplayText(raw, playerLang)
+    || raw;
+}
+
+function formatHostileNamesForStory(names = [], playerLang = 'zh-TW') {
+  const list = (Array.isArray(names) ? names : [])
+    .map((name) => localizeStoryFacingHostileName(name, playerLang))
+    .filter(Boolean);
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  const joiner = (langCode === 'en' || langCode === 'ko') ? ', ' : '、';
+  return list.join(joiner);
 }
 
 function buildIslandKnowledgeBoundaryPrompt(location = '', stage = 0, stageCount = 8, completed = false) {
@@ -649,11 +669,32 @@ function normalizeOutputByLanguage(text, playerLang = 'zh-TW') {
   const source = typeof text === 'string' ? text : String(text || '');
   if (!source) return '';
   const sanitized = sanitizeNarrativeText(source);
-  const localized = LANGUAGE_RESOURCES.localizeDisplayText(sanitized, playerLang);
+  const localized = LANGUAGE_RESOURCES.localizeDisplayText(sanitized, playerLang)
+    .replace(/(\d+)\s*回合/gu, (_, value) => {
+      const turns = Math.max(0, Number(value) || 0);
+      const langCode = normalizeLangCode(playerLang || 'zh-TW');
+      if (langCode === 'en') return `${turns} turns`;
+      if (langCode === 'ko') return `${turns}턴`;
+      return `${turns}回合`;
+    });
   const langCode = normalizeLangCode(playerLang || 'zh-TW');
   if (langCode === 'zh-TW') return convertCNToTW(localized);
   if (langCode === 'zh-CN') return convertTWToCN(localized);
   return localized;
+}
+
+function normalizePromptReferenceText(text, playerLang = 'zh-TW') {
+  const source = typeof text === 'string' ? text : String(text || '');
+  if (!source) return '';
+  return normalizeOutputByLanguage(source, playerLang)
+    .replace(/(\d+)\s*回合/gu, (_, value) => {
+      const turns = Math.max(0, Number(value) || 0);
+      const langCode = normalizeLangCode(playerLang || 'zh-TW');
+      if (langCode === 'en') return `${turns} turns`;
+      if (langCode === 'ko') return `${turns}턴`;
+      return `${turns}回合`;
+    })
+    .trim();
 }
 
 function countRegexMatches(text = '', regex = null) {
@@ -676,6 +717,14 @@ function getLanguageComplianceIssue(text = '', playerLang = 'zh-TW', mode = 'sto
   const source = String(text || '');
   if (!source) return '';
   const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  if (langCode === 'en') {
+    const cjkCount = countRegexMatches(source, /[\u3400-\u4DBF\u4E00-\u9FFF]/g);
+    const maxCjk = mode === 'story' ? 10 : 3;
+    if (cjkCount > maxCjk) {
+      return `語言違規：目前語言是英文（en），但殘留過多中文/漢字（${cjkCount}/${maxCjk}）`;
+    }
+    return '';
+  }
   if (langCode !== 'ko') return '';
   const { hangulCount, cjkCount, latinCount } = getKoreanScriptStats(source);
   const minHangul = mode === 'story' ? 80 : 8;
@@ -2231,7 +2280,7 @@ function validateChoiceSet(choices = [], {
     if (moveTo && adjacentSet.size > 0 && moveTo !== location && !adjacentSet.has(moveTo)) {
       issues.push(`第 ${i + 1} 個 move_to=${moveTo} 與目前位置 ${location} 不相鄰；若要去更遠城市，必須改成第一跳城市`);
     }
-    if (langCode === 'ko') {
+    if (langCode === 'ko' || langCode === 'en') {
       const coreText = [choice?.name || '', choice?.choice || '', choice?.desc || ''].join(' ');
       const languageIssue = getLanguageComplianceIssue(coreText, playerLang, 'choice');
       if (languageIssue) issues.push(`第 ${i + 1} 個選項語言不合格：${languageIssue}`);
@@ -2255,16 +2304,20 @@ function validateChoiceSet(choices = [], {
   }
 
   if (duplicateCount > 0) issues.push(`有 ${duplicateCount} 個重複選項`);
-  if (aggressiveCount < 1) issues.push('至少需要 1 個偏激進選項（高風險或戰鬥張力）');
+  const advisoryNotes = [];
+  if (aggressiveCount < 1) advisoryNotes.push('缺少偏激進選項（保留鋪陳，但建議下輪提高張力）');
   if (locationPlaystyle && Array.isArray(locationPlaystyle.keywords) && locationPlaystyle.keywords.length > 0) {
     const minKeywordHits = Math.max(1, Number(locationPlaystyle.minKeywordHits || 1));
     const keywordHits = countChoiceKeywordHits(list, locationPlaystyle.keywords);
     if (keywordHits < minKeywordHits) {
-      issues.push(`至少需要 ${minKeywordHits} 個選項符合地區玩法口味（目前 ${keywordHits} 個）`);
+      advisoryNotes.push(`地區玩法口味偏弱（目前 ${keywordHits}/${minKeywordHits}）`);
     }
   }
   if (Number(wantedPressure || 0) >= WANTED_AMBUSH_MIN_LEVEL && wantedCueCount < 1) {
-    issues.push(`通緝熱度偏高（${wantedPressure}）時，至少 1 個選項需明確表現追兵/尾隨/主動接近`);
+    advisoryNotes.push(`高通緝局勢未明確帶出追兵/尾隨 cue（wanted=${wantedPressure}）`);
+  }
+  if (advisoryNotes.length > 0) {
+    console.warn(`[AI][choices] advisory only: ${advisoryNotes.join(' | ')}`);
   }
   if (pendingConflictActive) {
     if (pendingConflictCount < 1) {
@@ -2354,7 +2407,9 @@ function hasWantedImmersionCue(story = '') {
 function buildWantedImmersionLine(playerLang = 'zh-TW', wantedPressure = 0, hostileNames = []) {
   const langCode = normalizeLangCode(playerLang || 'zh-TW');
   const names = Array.isArray(hostileNames)
-    ? hostileNames.map((item) => String(item || '').trim()).filter(Boolean)
+    ? hostileNames
+      .map((item) => localizeStoryFacingHostileName(item, playerLang))
+      .filter(Boolean)
     : [];
   const nameJoiner = (langCode === 'en' || langCode === 'ko') ? ', ' : '、';
   const primaryTarget = names.length > 0 ? names.slice(0, 2).join(nameJoiner) : '';
@@ -2384,20 +2439,7 @@ function buildWantedImmersionLine(playerLang = 'zh-TW', wantedPressure = 0, host
 }
 
 function ensureWantedImmersionNarrative(story = '', options = {}) {
-  const source = String(story || '').trim();
-  if (!source) return source;
-  const wantedPressure = Math.max(0, Number(options?.wantedPressure || 0));
-  const threshold = Math.max(1, Number(options?.minLevel || WANTED_AMBUSH_MIN_LEVEL));
-  if (wantedPressure < threshold) return source;
-  if (hasWantedImmersionCue(source)) return source;
-  const line = buildWantedImmersionLine(
-    String(options?.playerLang || 'zh-TW').trim(),
-    wantedPressure,
-    Array.isArray(options?.hostileNames) ? options.hostileNames : []
-  );
-  if (!line) return source;
-  const joiner = /[。！？.!?]$/u.test(source) ? '\n' : '。\n';
-  return `${source}${joiner}${line}`;
+  return String(story || '').trim();
 }
 
 function buildNpcMentionPattern(name = '') {
@@ -3065,7 +3107,9 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const wantedPressure = getWantedPressure(player);
   const dynamicWorldContext = DYNAMIC_WORLD.buildDynamicWorldContext(player, location, { playerLang: player?.language || 'zh-TW' });
   const nearbyHostile = getNearbyHostileNpcSummary(location, 3);
-  const nearbyHostileHint = nearbyHostile.count > 0 ? nearbyHostile.names.join('、') : '（附近暫無明確敵對 NPC）';
+  const nearbyHostileHint = nearbyHostile.count > 0
+    ? formatHostileNamesForStory(nearbyHostile.names, player.language || 'zh-TW')
+    : '（附近暫無明確敵對 NPC）';
   const npcs = RENAISS_NPCS[location] || [];
   
   // 檢查 NPC 狀態
@@ -3080,24 +3124,27 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   }
   npcStatusText = npcStatusText.slice(0, -1); // 移除最後的頓號
   
-  const previousAction =
+  const playerLang = player.language || 'zh-TW';
+  const rawPreviousAction =
     previousChoice?.choice ||
     previousChoice?.name ||
     player?.generationState?.sourceChoice ||
     '開始探索';
+  const previousAction = normalizePromptReferenceText(rawPreviousAction, playerLang);
   const previousActionCode = String(previousChoice?.action || '').trim();
-  const previousOutcome = canonicalizeKingCodenamesText(
+  const rawPreviousOutcome = canonicalizeKingCodenamesText(
     summarizeContext(
       previousChoice?.outcome || previousChoice?.desc || '',
       360,
       4
     )
   );
+  const previousOutcome = normalizePromptReferenceText(rawPreviousOutcome, playerLang);
   const pendingLoot = previousChoice?.pendingLoot && typeof previousChoice.pendingLoot === 'object'
     ? previousChoice.pendingLoot
     : null;
-  const playerLang = player.language || 'zh-TW';
-  const turnMoveSummary = String(previousChoice?.turnMoveSummary || '').trim();
+  const rawTurnMoveSummary = String(previousChoice?.turnMoveSummary || '').trim();
+  const turnMoveSummary = normalizePromptReferenceText(rawTurnMoveSummary, playerLang);
   const pendingLootName = getLocalizedItemName(pendingLoot, playerLang) || String(pendingLoot?.name || '').trim();
   const pendingLootRarity = String(pendingLoot?.rarity || '').trim() || '普通';
   const pendingLootValue = Math.max(1, Math.floor(Number(pendingLoot?.value || 0)));
@@ -3131,11 +3178,20 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
   const locationWeatherProfile = getLocationWeatherProfile(location);
   const locationWeatherPrompt = getLocationWeatherPrompt(location, playerLang);
+  const promptLocationName = LANGUAGE_RESOURCES.getLocationName(location, playerLang) || normalizePromptReferenceText(location, playerLang);
+  const promptLocationDesc = normalizePromptReferenceText(locDesc, playerLang);
+  const promptLocationContext = normalizePromptReferenceText(locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`, playerLang);
+  const promptNearbyHint = normalizePromptReferenceText(nearbyHint, playerLang);
+  const promptPortalHint = normalizePromptReferenceText(portalHint, playerLang);
+  const promptDigitalPresenceText = normalizePromptReferenceText(digitalPresenceText, playerLang);
+  const promptNearbyHostileHint = normalizePromptReferenceText(nearbyHostileHint, playerLang);
+  const promptNpcStatusText = normalizePromptReferenceText(npcStatusText, playerLang);
   
   // 上一段故事摘要（提升連貫性）
-  const previousStorySummary = canonicalizeKingCodenamesText(
+  const rawPreviousStorySummary = canonicalizeKingCodenamesText(
     summarizeContext(player.currentStory || '', 520, 8)
   );
+  const previousStorySummary = normalizePromptReferenceText(rawPreviousStorySummary, playerLang);
   const previousStorySection = previousStorySummary
     ? `\n【前一段故事（重點）】\n${previousStorySummary}`
     : '';
@@ -3151,23 +3207,24 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
     : '非開局且非傳送抵達時，禁止用「天氣/雨絲/晴空/風雪」當開場主句；必須先從人物動作、對話或現場事件切入，再把天候融入行動細節。';
 
   // 記憶上下文
-  const focusedMemory = canonicalizeKingCodenamesText(
+  const rawFocusedMemory = canonicalizeKingCodenamesText(
     summarizeContext(memoryContext, 980, 12)
   );
+  const focusedMemory = normalizePromptReferenceText(rawFocusedMemory, playerLang);
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
   const inventorySection =
     `\n【玩家背包與可用物件（唯一合法來源）】\n` +
     `${buildInventoryContextText(player, playerLang)}`;
   const npcDialogueEvidence = getRecentNpcDialogueEvidence(player, 12, {
     location,
-    queryText: [previousAction, previousStorySummary, focusedMemory].filter(Boolean).join('\n')
+    queryText: [rawPreviousAction, rawPreviousStorySummary, rawFocusedMemory].filter(Boolean).join('\n')
   });
   const npcDialogueSection =
     `\n【可驗證 NPC 對話原句（僅以下內容可被回憶為「曾說過」）】\n` +
     `${buildNpcDialogueEvidenceText(npcDialogueEvidence, playerLang)}`;
   const mainlinePins = getActiveMainlineForeshadowPins(player, 6, {
     location,
-    queryText: [previousAction, previousStorySummary, focusedMemory].filter(Boolean).join('\n')
+    queryText: [rawPreviousAction, rawPreviousStorySummary, rawFocusedMemory].filter(Boolean).join('\n')
   });
   const mainlinePinsSection =
     `\n【主線鋪陳保留（必要延續，但非每句都提）】\n` +
@@ -3193,8 +3250,8 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
 禁止武俠腔、禁止借用任何既有作品專有名詞或角色名。
 
 【當前場景】
-位置：${location} - ${locDesc}
-區域資訊：${locContext || `${locProfile?.region || '未知'} / 難度D${locProfile?.difficulty || 3}`}
+位置：${promptLocationName} - ${promptLocationDesc}
+區域資訊：${promptLocationContext}
 收藏文明口味：
 ${collectibleCulturePrompt}
 城市天候主調：
@@ -3205,11 +3262,11 @@ ${locationWeatherPrompt}
 戰鬥節奏：第 ${battleCadence.step}/${battleCadence.span} 格｜${battleCadenceHint}
 通緝熱度：${wantedPressure}（>=${WANTED_AMBUSH_MIN_LEVEL} 時，敵對勢力更可能主動接近）
 動態世界狀態：${dynamicWorldContext?.summary || '（無）'}
-附近敵對 NPC：${nearbyHostileHint}
-附近可互動地點：${nearbyHint}
-附近傳送門可通往：${portalHint}
+附近敵對 NPC：${promptNearbyHostileHint}
+附近可互動地點：${promptNearbyHint}
+附近傳送門可通往：${promptPortalHint}
 導航目標：${navigationTarget || '（未設定）'}
-附近可疑勢力：${digitalPresenceText}
+附近可疑勢力：${promptDigitalPresenceText}
 玩家：${safePlayerName}
 寵物：${petName}(${petType})
 陣營：${alignment}
@@ -3220,7 +3277,7 @@ ${loreSnippet}
 封存艙尺寸規格：便攜小型艙體（約小背包大小，可單人攜行）
 勢力揭露規則：${rivalDisclosureRule}
 語言設定：${playerLang}
-${npcStatusText}
+${promptNpcStatusText}
 ${previousStorySection}
 ${memorySection}
 ${inventorySection}
@@ -3255,6 +3312,7 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
 5. 嚴格使用對應語言，${langInstruction.replace('請用', '全部')}
 6. 若語言設定為 zh-TW，嚴禁使用簡體字
 6a. 若語言設定為 ko，整段故事必須是自然韓文敘事，禁止以中文或英文句子作為主體內容
+6b. 若前情、記憶、對話證據或上一段故事殘留其他語言，視為來源筆記；你必須先翻成當前語言再寫入正文，不可直接複製中文詞彙或混寫原句
 7. 若【玩家之前的足跡】提到同地點人物/衝突/情緒，優先做出連貫呼應（例如老闆記得你、壞人記得你、你記得天空與環境）
 8. 若角色說出抽象口號（例如「真實的代價」），必須在接下來 1-2 句交代具體含義（要付出什麼代價）
 9. 禁止出現武俠相關詞：江湖、俠客、門派、武功、內力、打坐、修煉等
@@ -3415,6 +3473,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const arcMeta = getLocationArcMeta(player);
   const location = player.location || '河港鎮';
   const locationPlaystyle = getLocationPlaystyleProfile(location);
+  const promptLocationPlaystyle = getLocalizedPlaystyleProfile(location, player?.language || 'zh-TW');
   const locationPlaystylePrompt = getLocationPlaystylePromptBlock(location, player?.language || 'zh-TW');
   const islandState = ISLAND_STORY.getIslandStoryState(player, location) || null;
   const islandGuidePrompt = ISLAND_STORY.buildIslandGuidancePrompt(player, location);
@@ -3446,7 +3505,9 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const wantedPressure = getWantedPressure(player);
   const dynamicWorldContext = DYNAMIC_WORLD.buildDynamicWorldContext(player, location, { playerLang: player?.language || 'zh-TW' });
   const nearbyHostile = getNearbyHostileNpcSummary(location, 3);
-  const nearbyHostileHint = nearbyHostile.count > 0 ? nearbyHostile.names.join('、') : '（附近暫無明確敵對 NPC）';
+  const nearbyHostileHint = nearbyHostile.count > 0
+    ? formatHostileNamesForStory(nearbyHostile.names, player.language || 'zh-TW')
+    : '（附近暫無明確敵對 NPC）';
   const cadenceRequirement = battleCadence.dueConflict
     ? `本回合為戰鬥節奏點（第 ${battleCadence.step}/${battleCadence.span} 格），5 個選項中至少 1 個要是衝突相關，且可直接進入戰鬥。`
     : (battleCadence.nearConflict
@@ -3471,9 +3532,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   const playerLang = player?.language || 'zh-TW';
   const langCode = normalizeLangCode(playerLang || 'zh-TW');
   const langInstruction = getAiLanguageDirective(playerLang, 'output');
-  const choiceValidationPasses = langCode === 'ko'
-    ? Math.max(2, CHOICE_VALIDATION_PASSES)
-    : CHOICE_VALIDATION_PASSES;
+  const choiceValidationPasses = Math.max(2, CHOICE_VALIDATION_PASSES);
   const immediateBattleMarker = langCode === 'ko'
     ? '（전투 진입）'
     : (langCode === 'en' ? '(Immediate battle)' : (langCode === 'zh-CN' ? '（会进入战斗）' : '（會進入戰鬥）'));
@@ -3535,16 +3594,19 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     return `玩家已在地圖設定導航目標「${target}」，至少 1 個選項必須是朝該地點推進的具體行動。`;
   })();
   
-  const focusedMemory = canonicalizeKingCodenamesText(summarizeContext(memoryContext, 560, 8));
+  const rawFocusedMemory = canonicalizeKingCodenamesText(summarizeContext(memoryContext, 560, 8));
+  const focusedMemory = normalizePromptReferenceText(rawFocusedMemory, playerLang);
   const memorySection = focusedMemory ? `\n【玩家之前的足跡（重點）】\n${focusedMemory}` : '';
-  const fullStoryText = canonicalizeKingCodenamesText(String(previousStory || '').trim());
-  const storyFocus = buildStoryFocusForChoices(fullStoryText || '');
-  const kingCodenameMentioned = DIGITAL_KING_CODENAME_REGEX.test(fullStoryText);
+  const rawFullStoryText = canonicalizeKingCodenamesText(String(previousStory || '').trim());
+  const fullStoryText = normalizePromptReferenceText(rawFullStoryText, playerLang);
+  const storyFocus = buildStoryFocusForChoices(rawFullStoryText || '');
+  const kingCodenameMentioned = DIGITAL_KING_CODENAME_REGEX.test(rawFullStoryText);
   const kingSpreadRule = kingCodenameMentioned
     ? `若本段已提到高層代號（${DIGITAL_KING_CODENAMES.join('/')}），最多 1 個選項可直接追該代號；至少 3 個選項要維持當前地點可立即執行的行動。`
     : '';
-  const sourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
-  const directedDestination = extractDirectedDestinationFromStoryTail(fullStoryText, sourceChoiceText);
+  const rawSourceChoiceText = String(player?.generationState?.sourceChoice || '').trim();
+  const sourceChoiceText = normalizePromptReferenceText(rawSourceChoiceText, playerLang);
+  const directedDestination = extractDirectedDestinationFromStoryTail(rawFullStoryText, rawSourceChoiceText);
   const directedDestinationFirstHop = directedDestination && directedDestination !== location
     ? (typeof findLocationPath === 'function'
       ? String((findLocationPath(location, directedDestination) || [])[1] || directedDestination).trim()
@@ -3583,7 +3645,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     : '';
   const dynamicPlan = DYNAMIC_WORLD.chooseDynamicEventPlan(player, location, {
     storyTurn: Math.max(0, Number(player?.storyTurns || 0)),
-    storyText: fullStoryText
+    storyText: rawFullStoryText
   });
   const dynamicArchetypeHint = String(dynamicPlan?.archetype || '').trim();
   const dynamicActionHint = dynamicArchetypeHint ? mapDynamicArchetypeToAction(dynamicArchetypeHint) : '';
@@ -3603,11 +3665,11 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
       .filter(Boolean)
       .join('\n')
     : '';
-  const storyAnchors = extractStoryAnchors(fullStoryText, npcs, location, sourceChoiceText);
+  const storyAnchors = extractStoryAnchors(rawFullStoryText, npcs, location, rawSourceChoiceText);
   const anchorText = storyAnchors.length > 0 ? storyAnchors.join('、') : '（無）';
   const storageCarrierByOthers = (
-    /(?:對方|他|她|商人|攤販|中間人|守衛|黑影商人|匿名滲透者|someone|enemy|merchant)[^。；\n]{0,24}(?:抱著|抱着|背著|背着|提著|提着|攜帶|携带|拿著|拿着|手(?:上|中|裡|里))[^。；\n]{0,16}封存[艙舱倉藏函]/u.test(fullStoryText) ||
-    /封存[艙舱倉藏函][^。；\n]{0,16}(?:被|由)?(?:對方|他|她|商人|攤販|中間人|守衛|黑影商人|匿名滲透者|someone|enemy|merchant)[^。；\n]{0,16}(?:抱著|抱着|背著|背着|提著|提着|攜帶|携带|拿著|拿着|手(?:上|中|裡|里))/u.test(fullStoryText)
+    /(?:對方|他|她|商人|攤販|中間人|守衛|黑影商人|匿名滲透者|someone|enemy|merchant)[^。；\n]{0,24}(?:抱著|抱着|背著|背着|提著|提着|攜帶|携带|拿著|拿着|手(?:上|中|裡|里))[^。；\n]{0,16}封存[艙舱倉藏函]/u.test(rawFullStoryText) ||
+    /封存[艙舱倉藏函][^。；\n]{0,16}(?:被|由)?(?:對方|他|她|商人|攤販|中間人|守衛|黑影商人|匿名滲透者|someone|enemy|merchant)[^。；\n]{0,16}(?:抱著|抱着|背著|背着|提著|提着|攜帶|携带|拿著|拿着|手(?:上|中|裡|里))/u.test(rawFullStoryText)
   );
   const needsStorageHeistRule = Boolean(storageCarrierByOthers);
   const storageHeistPromptRule = needsStorageHeistRule
@@ -3697,10 +3759,21 @@ ${anchorText}
 3b. move_to 規則：只有「真的會移動到另一座城市」才填城市名；非移動選項必須填空字串 ""
 3c. move_to 只能填地圖中的城市名，且必須是「本城相鄰可直達城市」之一；若真正目標更遠，本回合必須填第一跳城市
 3d. move_to 自檢：若 choice 文案出現「前往/趕往/啟程去 + 城市名」，必須填同一城市；若文案是在描述「先往第一跳、再朝更遠目標推進」，move_to 只能填第一跳城市；若只是城內行動（調查、詢問、監視、交易），move_to 必須是 ""
-3e. 禁止「文案寫跨城但 move_to 空白」與「move_to 有城市但文案沒提該城市」兩種錯誤
-3f. styleTag 必填，且僅能為：穩健、交涉、灰線、強奪、追獵、佈局
-3g. hiddenMeta 必填，且只作系統判讀，不要在文案中出現善惡分數字眼
-3h. 若語言設定為 ko，5 個選項的 name/choice/desc 必須全部使用自然韓文，不可混用中文或英文當主句
+3e. move_to 有值時，name/choice/desc 至少一處必須逐字提到同一座城市名；禁止用「那裡／下一站／前方據點」代替城市名
+3f. 禁止「文案寫跨城但 move_to 空白」與「move_to 有城市但文案沒提該城市」兩種錯誤
+3g. move_to 是硬性欄位規則：只要 choice 文案明確包含跨城移動意圖，卻沒有正確填 move_to，整份 JSON 會被直接退稿；寧可把選項改寫成「為前往某城做準備」的城內行動，也不要輸出半套移動選項
+3h. move_to 例子：
+   - 正確：choice="前往襄陽城打聽灰帳線索" -> move_to="襄陽城"
+   - 正確：choice="先往襄陽城，再朝洛陽城追查" -> move_to="襄陽城"
+   - 正確：choice="繞去南疆苗疆設伏，再追蹤更深層來源" -> move_to="南疆苗疆"
+   - 正確：choice="在港務塔調閱轉運紀錄" -> move_to=""
+   - 錯誤：choice="前往洛陽城追查" -> move_to=""
+   - 錯誤：choice="在港區探聽消息" -> move_to="洛陽城"
+   - 錯誤：choice="先甩開追兵再往更深處查" -> move_to="南疆苗疆"
+3i. styleTag 必填，且僅能為：穩健、交涉、灰線、強奪、追獵、佈局
+3j. hiddenMeta 必填，且只作系統判讀，不要在文案中出現善惡分數字眼
+3k. 若語言設定為 ko，5 個選項的 name/choice/desc 必須全部使用自然韓文，不可混用中文或英文當主句
+3l. 若【完整故事全文】或【玩家之前的足跡】裡殘留其他語言，視為來源筆記；你在輸出選項時必須改寫成當前語言，不可直接複製中文詞彙
 4. 至少 2 個選項要直接回應「結尾重點/最後一句」裡的當前人物、場景或衝突
 4a. ${destinationContinuityRule}
 5. 至少 1 個選項必須包含「已出現元素清單」中的詞（NPC名、道具名、地點名、關鍵物件）
@@ -3716,9 +3789,9 @@ ${anchorText}
 11a. 禁止模板句型：不可出現「沿著/沿XX繼續追查來源與流向」「先處理本區關鍵」「回到核心線索」這類制式措辭
 11b. 每個選項都要有具體對象（人/物/地點/行動），不能只寫抽象目標
 11c. 禁止把規則文字直接寫進選項（例如「關鍵任務」「唯一來源」「地區進度 x/8」「鎖定某某拿到某證據」）
-12. 至少 1 個選項要偏激進（高風險或戰鬥張力標籤），但不必每輪都立刻開打
+12. 優先保留 1 個偏激進（高風險或戰鬥張力標籤）選項，但若本回合仍在鋪陳，可改成備戰、試探、攔截前觀察，而不必立刻開打
 13. 若島嶼劇情進行中，至少 1 個選項要明確推進島內主題（來自島內引導段），且不得超過 1 個主線強引導選項
-13a. 地區玩法口味必須落地：至少 ${Math.max(1, Number(locationPlaystyle?.minKeywordHits || 1))} 個選項要明顯反映「${locationPlaystyle?.name || '在地探索'}」（${Array.isArray(locationPlaystyle?.keywords) && locationPlaystyle.keywords.length > 0 ? locationPlaystyle.keywords.slice(0, 6).join('、') : '請使用在地語境關鍵詞'}）
+13a. 地區玩法口味必須落地：盡量讓多個選項明顯反映「${promptLocationPlaystyle?.name || '在地探索'}」（${Array.isArray(promptLocationPlaystyle?.keywords) && promptLocationPlaystyle.keywords.length > 0 ? promptLocationPlaystyle.keywords.slice(0, 6).join('、') : '請使用在地語境關鍵詞'}），但若劇情正在鋪陳，不必為了湊數硬塞重複句型
 13b. 至少 1 個選項要反映當前天候「${locationWeatherProfile?.name || '晴空'}」帶來的行動差異（例如改走掩體、調整接觸策略、改變查驗方式），但不可模板化
 14. 若島嶼劇情已完成，避免硬塞主線引導，保持開放探索選項比例
 15. 玩家名稱「${playerName}」只能指主角本人；禁止再創建同名 NPC
@@ -3750,9 +3823,10 @@ ${getChoiceTagPromptLines(playerLang)}
 
 輸出前請先在內部完成自檢（不要把自檢內容輸出）：
 - 檢查 5 筆是否齊全，且每筆都有 name/choice/desc/tag/move_to
-- 檢查至少 1 筆高風險或戰鬥張力標籤
-- 檢查至少 ${Math.max(1, Number(locationPlaystyle?.minKeywordHits || 1))} 筆符合地區玩法口味
+- 優先確認至少有 1 筆偏激進或高張力路線，但若本回合仍在鋪陳，可改成備戰/尾隨/警戒，不必硬開打
+- 優先確認有多筆選項反映地區玩法口味，但不要為了湊數而寫成重複模板句
 - 逐筆檢查 move_to 與文案一致：跨城就填本回合真正移動到的那一站，且該站必須與目前城市相鄰；非跨城就填 ""
+- 若任何 1 筆跨城文案缺少 move_to，視為整份答案失敗；此時必須重寫該筆，而不是保留原句
 
 ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
 
@@ -3781,13 +3855,13 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       const candidateChoices = pickTopChoicesFromPool(choicePool, {
         anchors: storyAnchors,
         location,
-        previousStory: fullStoryText,
+        previousStory: rawFullStoryText,
         locationPlaystyle
       }, CHOICE_OUTPUT_COUNT);
       const issues = validateChoiceSet(candidateChoices, {
         anchors: storyAnchors,
         location,
-        previousStory: fullStoryText,
+        previousStory: rawFullStoryText,
         locationPlaystyle,
         playerLang,
         wantedPressure,
@@ -3807,13 +3881,13 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
       const mergedChoices = pickTopChoicesFromPool(choicePool, {
         anchors: storyAnchors,
         location,
-        previousStory: fullStoryText,
+        previousStory: rawFullStoryText,
         locationPlaystyle
       }, CHOICE_OUTPUT_COUNT);
       const mergedIssues = validateChoiceSet(mergedChoices, {
         anchors: storyAnchors,
         location,
-        previousStory: fullStoryText,
+        previousStory: rawFullStoryText,
         locationPlaystyle,
         playerLang,
         wantedPressure,

@@ -51,7 +51,7 @@ function createPetCommandUtils(deps = {}) {
       .setColor(getPetElementColor(pet.type))
       .setDescription(`${pet.appearance}\n\n傷害公式：基礎 + 攻擊加成（攻擊加成 = ⌊ATK×0.2⌋）\n本寵 ATK ${format1(pet.attack)} → +${format1(Math.floor(Math.max(0, Number(pet.attack || 0)) * 0.2))}\n持續傷害顯示：第2跳預估值`)
       .addFields(
-        { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet), inline: true },
+        { name: t('hp', uiLang), value: formatPetHpWithRecovery(pet, uiLang), inline: true },
         { name: t('atk', uiLang), value: String(pet.attack), inline: true },
         { name: t('def', uiLang), value: String(pet.defense), inline: true },
         { name: '📊 等級', value: String(pet.level), inline: true },

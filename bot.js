@@ -512,12 +512,14 @@ const {
   renderRegionMapImageBuffer
 } = MAP_RENDER_UTILS;
 const STORY_TURN_UTILS = createStoryTurnUtils({
-  QUICK_SHOP_COOLDOWN_TURNS: Math.max(1, Math.min(20, Number(process.env.QUICK_SHOP_COOLDOWN_TURNS || 5))),
+  QUICK_SHOP_COOLDOWN_TURNS,
   getPlayerUILang: (...args) => getPlayerUILang(...args),
   getUtilityButtonLabels: (...args) => getUtilityButtonLabels(...args),
   ButtonBuilder,
   ButtonStyle,
-  getMarketTypeLabel
+  getMarketTypeLabel,
+  getLocationDisplayName: (...args) => getLanguageLocationName(...args),
+  localizeDisplayText: (...args) => localizeDisplayText(...args)
 });
 const {
   getPlayerStoryTurns,
@@ -708,6 +710,7 @@ const BATTLE_RUNTIME_DOMAIN = initBattleRuntimeDomain({
   PET_PASSIVE_HEAL_PER_STORY_TURN,
   isImmediateBattleChoice: (...args) => isImmediateBattleChoice(...args),
   getPlayerUILang: (...args) => getPlayerUILang(...args),
+  getLanguageSection: (...args) => getLanguageSection(...args),
   HUMAN_COMBAT_MOVE
 });
 const {

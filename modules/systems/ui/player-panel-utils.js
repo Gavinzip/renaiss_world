@@ -88,6 +88,7 @@ function createPlayerPanelUtils(deps = {}) {
     getAllPetSkillMoves = () => [],
     extractSkillChipMoveName = () => '',
     getLanguageSection = null,
+    localizeDisplayText = (v = '') => String(v || ''),
     showMainMenu
   } = deps;
 
@@ -136,6 +137,7 @@ function createPlayerPanelUtils(deps = {}) {
 
 const SKILL_CHIP_PREFIX = String(getPlayerPanelText('zh-TW').skillChipPrefix || '技能晶片：');
 const PROTECTED_MOVE_IDS = new Set(['flee']);
+const SHOP_BUY_PAGE_SIZE = 3;
 const FUSION_BLOCKED_ITEMS = new Set(
   Array.isArray(getPlayerPanelText('zh-TW').fusionBlockedItems)
     ? getPlayerPanelText('zh-TW').fusionBlockedItems
@@ -173,6 +175,37 @@ function getMemoryAuditText(uiLang = 'zh-TW') {
   const base = getPlayerPanelText('zh-TW')?.memoryAudit || {};
   const localized = getPlayerPanelText(uiLang)?.memoryAudit || {};
   return { ...base, ...localized };
+}
+
+function getShopText(uiLang = 'zh-TW') {
+  let base = {};
+  let localized = {};
+  try {
+    base = typeof getLanguageSection === 'function'
+      ? (getLanguageSection('shopText', 'zh-TW') || {})
+      : {};
+    localized = typeof getLanguageSection === 'function'
+      ? (getLanguageSection('shopText', uiLang) || {})
+      : {};
+  } catch {
+    base = {};
+    localized = {};
+  }
+  return { ...base, ...localized };
+}
+
+function getLocalizedShopMarketLabel(marketType = 'renaiss', uiLang = 'zh-TW') {
+  return localizeDisplayText(getMarketTypeLabel(marketType), uiLang) || getMarketTypeLabel(marketType);
+}
+
+function getLocalizedShopBossName(marketType = 'renaiss', uiLang = 'zh-TW') {
+  const raw = marketType === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員';
+  return localizeDisplayText(raw, uiLang) || raw;
+}
+
+function formatShopTokenValue(amount = 0, uiLang = 'zh-TW') {
+  const stx = getShopText(uiLang);
+  return `${Number(amount || 0)} ${stx.tokenUnit || 'Rns 代幣'}`;
 }
 
 function localizeChipReason(reason = '', uiLang = 'zh-TW') {
@@ -1042,7 +1075,8 @@ async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', n
   const uiLang = getPlayerUILang(player);
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const marketLabel = getMarketTypeLabel(safeMarket);
+  const marketLabel = getLocalizedShopMarketLabel(safeMarket, uiLang);
+  const tokenUnit = getShopText(uiLang).tokenUnit || 'Rns 代幣';
   const openSell = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', limit: 40 }).length;
   const myOpen = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 80 }).length;
   const desc = [
@@ -1058,7 +1092,7 @@ async function showPlayerMarketMenu(interaction, user, marketType = 'renaiss', n
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(desc)
     .addFields(
-      { name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true },
+      { name: getShopText(uiLang).fieldYourRns || '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} ${tokenUnit}`, inline: true },
       { name: `📍 ${t('location', uiLang)}`, value: `${player.location}`, inline: true }
     );
 
@@ -1081,6 +1115,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
     return;
   }
   const uiLang = getPlayerUILang(player);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const stockInfo = getTeleportDeviceStockInfo(player);
@@ -1098,7 +1133,7 @@ async function showPlayerMarketListings(interaction, user, marketType = 'renaiss
     : '（目前沒有可成交掛單）';
 
   const embed = new EmbedBuilder()
-    .setTitle(`${title}｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(`${title}｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(`${listText}\n\n頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}`);
 
@@ -1149,6 +1184,7 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss', p
     return;
   }
   const uiLang = getPlayerUILang(player);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   const allMine = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 500 });
@@ -1160,7 +1196,7 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss', p
     : '（你目前沒有掛單）';
 
   const embed = new EmbedBuilder()
-    .setTitle(`📌 我的掛單｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(`📌 我的掛單｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(`${text}\n\n頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}`);
 
@@ -1194,15 +1230,17 @@ async function showMyMarketListings(interaction, user, marketType = 'renaiss', p
 
 async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'renaiss', selectedSpecs = null) {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const stx = getShopText(uiLang);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: stx.notFoundPlayer || '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const uiLang = getPlayerUILang(player);
   if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
-    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: stx.needShopHaggle || '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
     return;
   }
   const picked = Array.isArray(selectedSpecs)
@@ -1211,7 +1249,7 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
       ? player.shopSession.haggleBulkSelectedSpecs
       : [];
   if (picked.length <= 0) {
-    await showWorldShopHaggleBulkPicker(interaction, user, safeMarket, '請先從清單勾選要批次賣出的商品。');
+    await showWorldShopHaggleBulkPicker(interaction, user, safeMarket, stx.bulkNeedSelect || '請先從清單勾選要批次賣出的商品。');
     return;
   }
   if (!interaction.deferred && !interaction.replied) {
@@ -1266,39 +1304,43 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
     .map((spec) => `${getLocalizedItemName({ itemName: spec?.itemName, itemNames: spec?.itemNames || null }, uiLang) || spec.itemName} x${Math.max(1, Number(spec.quantityMax || 1))}`)
     .slice(0, 6)
     .join('、');
-  detailLines.push(`範圍：已選 ${built.specs.length} 項商品`);
-  detailLines.push(`項目：${itemSummary}${built.specs.length > 6 ? '…' : ''}`);
-  detailLines.push(`件數：${pending.soldCount} 件`);
-  detailLines.push(`原始估價：${rawTotal} Rns 代幣`);
-  detailLines.push(`批次賣出（七折）：**${quotedTotal} Rns 代幣**`);
-  detailLines.push(`折讓差額：-${discountLoss} Rns 代幣`);
-  detailLines.push(`鑑價員：${pending.npcName}`);
+  detailLines.push(typeof stx.bulkScope === 'function' ? stx.bulkScope(built.specs.length) : `範圍：已選 ${built.specs.length} 項商品`);
+  detailLines.push(typeof stx.itemLabel === 'function' ? stx.itemLabel(`${itemSummary}${built.specs.length > 6 ? '…' : ''}`) : `項目：${itemSummary}${built.specs.length > 6 ? '…' : ''}`);
+  detailLines.push(typeof stx.soldCount === 'function' ? stx.soldCount(pending.soldCount) : `件數：${pending.soldCount} 件`);
+  detailLines.push(typeof stx.rawEstimate === 'function' ? stx.rawEstimate(rawTotal) : `原始估價：${rawTotal} Rns 代幣`);
+  detailLines.push(typeof stx.bulkQuote === 'function' ? stx.bulkQuote(quotedTotal) : `批次賣出（七折）：**${quotedTotal} Rns 代幣**`);
+  detailLines.push(typeof stx.bulkLoss === 'function' ? stx.bulkLoss(discountLoss) : `折讓差額：-${discountLoss} Rns 代幣`);
+  const appraiserName = localizeDisplayText(pending.npcName, uiLang) || pending.npcName;
+  detailLines.push(typeof stx.appraiser === 'function' ? stx.appraiser(appraiserName) : `鑑價員：${appraiserName}`);
   if (pitch) detailLines.push(`\n💬 ${pitch}`);
-  detailLines.push('\n請選擇是否同意本次批次賣出（七折）提案。');
+  detailLines.push(`\n${stx.bulkChoosePrompt || '請選擇是否同意本次批次賣出（七折）提案。'}`);
 
   const embed = new EmbedBuilder()
-    .setTitle(`🤝 批次議價提案｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(typeof stx.bulkTitle === 'function' ? stx.bulkTitle(marketLabel) : `🤝 批次議價提案｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(detailLines.join('\n'))
-    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+    .addFields({ name: stx.fieldYourRns || '💰 你的 Rns', value: formatShopTokenValue(player?.stats?.財富 || 0, uiLang), inline: true });
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel('✅ 同意成交').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel('↩️ 退出議價').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel(stx.acceptDeal || '✅ 同意成交').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel(stx.exitHaggle || '↩️ 退出議價').setStyle(ButtonStyle.Secondary)
   );
   await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
 async function showWorldShopHaggleBulkPicker(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const stx = getShopText(uiLang);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: stx.notFoundPlayer || '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
-    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: stx.needShopHaggle || '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
     return;
   }
 
@@ -1310,15 +1352,15 @@ async function showWorldShopHaggleBulkPicker(interaction, user, marketType = 're
 
   const lines = [];
   if (notice) lines.push(`✅ ${notice}`);
-  lines.push('請從下拉選單勾選要「批次賣出（七折）」的商品。');
-  lines.push('勾選完成後會即時顯示本次批次報價，再由你決定是否成交。');
+  lines.push(stx.bulkPickerLine1 || '請從下拉選單勾選要「批次賣出（七折）」的商品。');
+  lines.push(stx.bulkPickerLine2 || '勾選完成後會即時顯示本次批次報價，再由你決定是否成交。');
   lines.push(`可議價項目：${draft.options.length} 個`);
 
   const embed = new EmbedBuilder()
-    .setTitle(`📦 批次賣出（七折）｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(typeof stx.bulkPickerTitle === 'function' ? stx.bulkPickerTitle(marketLabel) : `📦 批次賣出（七折）｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(lines.join('\n'))
-    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+    .addFields({ name: stx.fieldYourRns || '💰 你的 Rns', value: formatShopTokenValue(player?.stats?.財富 || 0, uiLang), inline: true });
 
   if (draft.options.length <= 0) {
     const row = new ActionRowBuilder().addComponents(
@@ -1330,12 +1372,12 @@ async function showWorldShopHaggleBulkPicker(interaction, user, marketType = 're
 
   const selectOptions = draft.options.slice(0, SHOP_HAGGLE_BULK_SELECT_LIMIT).map((option, idx) => ({
     label: String(option.label || option.itemName || `選項${idx + 1}`).slice(0, 100),
-    description: String(option.description || '').slice(0, 100) || '選擇此商品加入批次賣出',
+    description: String(option.description || '').slice(0, 100) || stx.selectBulkDesc || '選擇此商品加入批次賣出',
     value: `bulkidx_${idx}`
   }));
   const select = new StringSelectMenuBuilder()
     .setCustomId(`shop_haggle_bulk_select_${safeMarket}`)
-    .setPlaceholder('可複選：勾選要批次賣出的商品')
+    .setPlaceholder(stx.selectBulkPlaceholder || '可複選：勾選要批次賣出的商品')
     .setMinValues(1)
     .setMaxValues(Math.min(selectOptions.length, 10))
     .addOptions(selectOptions);
@@ -1349,14 +1391,17 @@ async function showWorldShopHaggleBulkPicker(interaction, user, marketType = 're
 
 async function showWorldShopHagglePicker(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const stx = getShopText(uiLang);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: stx.notFoundPlayer || '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
-    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: stx.needShopHaggle || '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
     return;
   }
 
@@ -1368,15 +1413,15 @@ async function showWorldShopHagglePicker(interaction, user, marketType = 'renais
 
   const lines = [];
   if (notice) lines.push(`✅ ${notice}`);
-  lines.push('請先選擇 1 件要交給老闆估價的商品。');
-  lines.push('下一步會顯示 AI 鑑價員報價，你可選「同意成交」或「退出議價」。');
+  lines.push(stx.hagglePickerLine1 || '請先選擇 1 件要交給老闆估價的商品。');
+  lines.push(stx.hagglePickerLine2 || '下一步會顯示 AI 鑑價員報價，你可選「同意成交」或「退出議價」。');
   lines.push(`可議價項目：${draft.options.length} 個（單次僅處理 1 件）`);
 
   const embed = new EmbedBuilder()
-    .setTitle(`🤝 老闆議價｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(typeof stx.hagglePickerTitle === 'function' ? stx.hagglePickerTitle(marketLabel) : `🤝 老闆議價｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(lines.join('\n'))
-    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+    .addFields({ name: stx.fieldYourRns || '💰 你的 Rns', value: formatShopTokenValue(player?.stats?.財富 || 0, uiLang), inline: true });
 
   if (draft.options.length <= 0) {
     const row = new ActionRowBuilder().addComponents(
@@ -1388,19 +1433,19 @@ async function showWorldShopHagglePicker(interaction, user, marketType = 'renais
 
   const selectOptions = draft.options.slice(0, SHOP_HAGGLE_SELECT_LIMIT).map((option, idx) => ({
     label: String(option.label || option.itemName || `選項${idx + 1}`).slice(0, 100),
-    description: String(option.description || '').slice(0, 100) || '選擇此商品進行估價',
+    description: String(option.description || '').slice(0, 100) || stx.selectHaggleDesc || '選擇此商品進行估價',
     value: `haggleidx_${idx}`
   }));
   const select = new StringSelectMenuBuilder()
     .setCustomId(`shop_haggle_select_${safeMarket}`)
-    .setPlaceholder('選擇要交給老闆估價的商品')
+    .setPlaceholder(stx.selectHagglePlaceholder || '選擇要交給老闆估價的商品')
     .setMinValues(1)
     .setMaxValues(1)
     .addOptions(selectOptions);
 
   const row1 = new ActionRowBuilder().addComponents(select);
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_haggle_all_${safeMarket}`).setLabel('📦 批次賣出(七折)').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`shop_haggle_all_${safeMarket}`).setLabel(stx.bulkButton || '📦 批次賣出(七折)').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
   );
   await updateInteractionMessage(interaction, { embeds: [embed], components: [row1, row2] });
@@ -1408,15 +1453,17 @@ async function showWorldShopHagglePicker(interaction, user, marketType = 'renais
 
 async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss', spec = null) {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const stx = getShopText(uiLang);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   if (!player) {
-    await updateInteractionMessage(interaction, { content: '❌ 找不到角色！', components: [] });
+    await updateInteractionMessage(interaction, { content: stx.notFoundPlayer || '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const uiLang = getPlayerUILang(player);
   if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
-    await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: stx.needShopHaggle || '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
     return;
   }
   if (!spec || typeof spec !== 'object') {
@@ -1470,35 +1517,39 @@ async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss
 
   const pitch = extractPitchFromHaggleMessage(offerResult.message);
   const detailLines = [];
-  detailLines.push(`商品：${getLocalizedItemName({ itemName: pending.itemName, itemNames: pending.itemNames || null }, uiLang) || pending.itemName}`);
-  detailLines.push(`報價：**${pending.quotedTotal} Rns 代幣**`);
-  detailLines.push(`鑑價員：${pending.npcName}`);
+  detailLines.push(typeof stx.haggleItem === 'function' ? stx.haggleItem(getLocalizedItemName({ itemName: pending.itemName, itemNames: pending.itemNames || null }, uiLang) || pending.itemName) : `商品：${getLocalizedItemName({ itemName: pending.itemName, itemNames: pending.itemNames || null }, uiLang) || pending.itemName}`);
+  detailLines.push(typeof stx.haggleQuote === 'function' ? stx.haggleQuote(pending.quotedTotal) : `報價：**${pending.quotedTotal} Rns 代幣**`);
+  const appraiserName = localizeDisplayText(pending.npcName, uiLang) || pending.npcName;
+  detailLines.push(typeof stx.appraiser === 'function' ? stx.appraiser(appraiserName) : `鑑價員：${appraiserName}`);
   if (pitch) detailLines.push(`\n💬 ${pitch}`);
-  detailLines.push('\n請選擇是否同意本次 AI 議價。');
+  detailLines.push(`\n${stx.hagglePrompt || '請選擇是否同意本次 AI 議價。'}`);
 
   const embed = new EmbedBuilder()
-    .setTitle(`🤝 議價提案｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(typeof stx.haggleTitle === 'function' ? stx.haggleTitle(marketLabel) : `🤝 議價提案｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(detailLines.join('\n'))
-    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+    .addFields({ name: stx.fieldYourRns || '💰 你的 Rns', value: formatShopTokenValue(player?.stats?.財富 || 0, uiLang), inline: true });
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel('✅ 同意成交').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel('↩️ 退出議價').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`shop_haggle_confirm_${safeMarket}`).setLabel(stx.acceptDeal || '✅ 同意成交').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_haggle_cancel_${safeMarket}`).setLabel(stx.exitHaggle || '↩️ 退出議價').setStyle(ButtonStyle.Secondary)
   );
   await updateInteractionMessage(interaction, { embeds: [embed], components: [row] });
 }
 
 async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const stx = getShopText(uiLang);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   if (!player) {
-    await interaction.update({ content: '❌ 找不到角色！', components: [] });
+    await interaction.update({ content: stx.notFoundPlayer || '❌ 找不到角色！', components: [] });
     return;
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
   if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
-    await interaction.reply({ content: '⚠️ 只能在商店場景掛賣。請先由劇情進入商店。', ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: stx.needShopSell || '⚠️ 只能在商店場景掛賣。請先由劇情進入商店。', ephemeral: true }).catch(() => {});
     return;
   }
 
@@ -1517,14 +1568,14 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
   }
 
   const embed = new EmbedBuilder()
-    .setTitle(`📤 掛賣選單｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(`📤 掛賣選單｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(lines.join('\n'))
-    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+    .addFields({ name: stx.fieldYourRns || '💰 你的 Rns', value: formatShopTokenValue(player?.stats?.財富 || 0, uiLang), inline: true });
 
   if (draft.options.length <= 0) {
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel(stx.returnShop || '🏪 返回商店').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('show_moves').setLabel(`🐾 ${t('petManagement', uiLang)}`).setStyle(ButtonStyle.Primary)
     );
     await interaction.update({ embeds: [embed], components: [row] });
@@ -1545,7 +1596,7 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
 
   const row1 = new ActionRowBuilder().addComponents(select);
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel(stx.returnShop || '🏪 返回商店').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('show_moves').setLabel(`🐾 ${t('petManagement', uiLang)}`).setStyle(ButtonStyle.Primary)
   );
   await interaction.update({ embeds: [embed], components: [row1, row2] });
@@ -1738,44 +1789,158 @@ async function handleMarketPostModal(interaction, user, listingType = 'sell', ma
   }
 }
 
-function buildShopBuySelectOptions(listings = [], lang = 'zh-TW') {
-  const source = Array.isArray(listings) ? listings : [];
-  const options = [];
-  const seenValues = new Set();
-  let droppedInvalid = 0;
-
-  for (let idx = 0; idx < source.length; idx += 1) {
-    const listing = source[idx];
-    const listingId = String(listing?.id || '').trim();
-    const itemName = getLocalizedItemName(listing, lang) || String(listing?.itemName || '商品').trim() || '商品';
-    const qty = Math.max(1, Number(listing?.quantity || 1));
-    const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
-    const value = `shopbuy_${listingId}`;
-    const label = `${idx + 1}. ${itemName}`.slice(0, 100).trim();
-    const description = localizeScriptOnly(`x${qty}｜單價 ${unitPrice} Rns｜下拉選購`, lang).slice(0, 100).trim();
-
-    if (!listingId || !label || !description || value.length > 100 || seenValues.has(value)) {
-      droppedInvalid += 1;
-      continue;
-    }
-
-    seenValues.add(value);
-    options.push({ label, description, value });
+function resolveShopListingMove(listing = {}) {
+  const reservedItems = Array.isArray(listing?.reservedItems) ? listing.reservedItems : [];
+  const reservedMove = reservedItems.find((row) => String(row?.source || '').trim() === 'pet_move' && row?.item && typeof row.item === 'object') || null;
+  const snapshot = reservedMove?.item?.moveSnapshot;
+  if (snapshot && typeof snapshot === 'object') {
+    return JSON.parse(JSON.stringify(snapshot));
   }
 
-  return {
-    options,
-    droppedInvalid
-  };
+  const moveId = String(reservedMove?.item?.moveId || '').trim();
+  const moveName = String(
+    reservedMove?.item?.moveName
+      || extractSkillChipMoveName(listing?.itemName || '')
+      || extractSkillChipMoveName(getLocalizedItemName(listing, 'zh-TW') || '')
+      || ''
+  ).trim();
+  const movePool = typeof getAllPetSkillMoves === 'function' ? getAllPetSkillMoves() : [];
+  if (!Array.isArray(movePool) || movePool.length <= 0) {
+    return moveId || moveName ? { id: moveId, name: moveName } : null;
+  }
+
+  let move = null;
+  if (moveId) {
+    move = movePool.find((entry) => String(entry?.id || '').trim() === moveId) || null;
+  }
+  if (!move && moveName) {
+    move = movePool.find((entry) => String(entry?.name || '').trim() === moveName) || null;
+  }
+  return move ? JSON.parse(JSON.stringify(move)) : (moveId || moveName ? { id: moveId, name: moveName } : null);
+}
+
+function getShopBuyListingCategory(listing = {}, uiLang = 'zh-TW') {
+  const itemName = getLocalizedItemName(listing, uiLang) || String(listing?.itemName || '').trim();
+  const reservedItems = Array.isArray(listing?.reservedItems) ? listing.reservedItems : [];
+  if (String(listing?.itemKind || '').trim() === 'pet_move' || isSkillChipItemName(itemName) || isSkillChipItemName(listing?.itemName || '')) {
+    return 'chip';
+  }
+  if (reservedItems.some((row) => String(row?.source || '').trim() === 'tradeGoods')) {
+    return 'collectible';
+  }
+  if (reservedItems.some((row) => String(row?.source || '').trim() === 'equipmentBag' || (row?.item && typeof row.item === 'object' && row.item.slot))) {
+    return 'equipment';
+  }
+  return 'item';
+}
+
+function getShopBuyListingTypeLabel(category = 'item', stx = {}) {
+  if (category === 'chip') return stx.listingTypeChip || '類型：技能晶片';
+  if (category === 'equipment') return stx.listingTypeEquipment || '類型：裝備';
+  if (category === 'collectible') return stx.listingTypeCollectible || '類型：收藏品';
+  return stx.listingTypeItem || '類型：一般商品';
+}
+
+function getShopBuyListingEmbedColor(category = 'item', marketType = 'renaiss') {
+  if (category === 'chip') return 0x3b82f6;
+  if (category === 'equipment') return 0xf59e0b;
+  if (category === 'collectible') return 0x10b981;
+  return marketType === 'digital' ? 0x9333ea : 0x0ea5e9;
+}
+
+function getShopBuyListingIcon(category = 'item') {
+  if (category === 'chip') return '🧬';
+  if (category === 'equipment') return '🛡️';
+  if (category === 'collectible') return '🗃️';
+  return '📦';
+}
+
+function buildShopBuyListingEmbed(listing = null, pageInfo = {}, uiLang = 'zh-TW', marketType = 'renaiss') {
+  const stx = getShopText(uiLang);
+  const moveTx = getPanelMoveText(uiLang);
+  if (!listing) return null;
+
+  const currentIndex = Math.max(1, Number(pageInfo?.currentIndex || 1));
+  const itemName = getLocalizedItemName(listing, uiLang) || String(listing?.itemName || '商品').trim() || '商品';
+  const qty = Math.max(1, Number(listing?.quantity || 1));
+  const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
+  const totalPrice = Math.max(1, Number(listing?.totalPrice || qty * unitPrice));
+  const sellerName = String(listing?.ownerName || '匿名玩家').trim() || '匿名玩家';
+  const note = String(listing?.note || '').trim();
+  const itemDesc = getLocalizedItemDesc(listing, uiLang) || '';
+  const category = getShopBuyListingCategory(listing, uiLang);
+  const typeLabel = getShopBuyListingTypeLabel(category, stx);
+  const priceBlock = [
+    typeof stx.listingQuantity === 'function' ? stx.listingQuantity(qty) : `數量：x${qty}`,
+    typeof stx.listingUnitPrice === 'function' ? stx.listingUnitPrice(unitPrice) : `單價：${unitPrice} Rns`,
+    typeof stx.listingTotalPrice === 'function' ? stx.listingTotalPrice(totalPrice) : `總價：${totalPrice} Rns`
+  ].join('\n');
+  const metaBlock = [
+    typeLabel,
+    typeof stx.listingSeller === 'function' ? stx.listingSeller(sellerName) : `賣家：${sellerName}`,
+    note ? (typeof stx.listingNote === 'function' ? stx.listingNote(note) : `備註：${note}`) : null
+  ].filter(Boolean).join('\n');
+
+  const embed = new EmbedBuilder()
+    .setColor(getShopBuyListingEmbedColor(category, marketType))
+    .setTitle(`${getShopBuyListingIcon(category)} #${currentIndex} ${itemName}`.slice(0, 256))
+    .addFields(
+      { name: stx.listingPriceBlockTitle || '價格資訊', value: priceBlock.slice(0, 1024), inline: true },
+      { name: stx.listingMetaBlockTitle || '商品資訊', value: metaBlock.slice(0, 1024), inline: true }
+    );
+
+  if (itemDesc) {
+    embed.addFields({
+      name: stx.itemDescriptionTitle || '說明',
+      value: (typeof stx.itemDescription === 'function' ? stx.itemDescription(itemDesc) : `說明：${itemDesc}`).slice(0, 1024),
+      inline: false
+    });
+  }
+
+  if (category === 'chip') {
+    const move = resolveShopListingMove(listing);
+    const moveName = getLocalizedMoveName(move, uiLang) || itemName;
+    const tierName = move?.tier === 3 ? moveTx.tierEpic : move?.tier === 2 ? moveTx.tierRare : moveTx.tierCommon;
+    const elementName = getPetElementDisplayName(move?.element || '', uiLang) || String(move?.element || '-').trim() || '-';
+    const damage = buildMoveDamageBreakdown(move || {}, {});
+    const energyCost = move?.effect?.flee ? '-' : BATTLE.getMoveEnergyCost(move || {});
+    const moveSpeed = getMoveSpeedValue(move || {});
+    const rawEffectText = String(describeMoveEffects(move || {}) || moveTx.effectNone).trim() || moveTx.effectNone;
+    const localizedEffectText = getLocalizedItemDesc({ desc: rawEffectText }, uiLang) || rawEffectText;
+    const functionText = typeof stx.chipFunctionLearn === 'function'
+      ? stx.chipFunctionLearn(moveName)
+      : `購買後會優先嘗試讓主力寵物學會「${moveName}」，若當下無法學習則改為技能晶片入包。`;
+
+    const chipLines = [
+      typeof stx.chipAffinityLine === 'function' ? stx.chipAffinityLine(elementName, tierName) : `屬性：${elementName}｜稀有度：${tierName}`,
+      typeof stx.chipDamageLine === 'function'
+        ? stx.chipDamageLine(format1(damage.rawBase), format1(damage.instant), format1(damage.total))
+        : `傷害：基礎 ${format1(damage.rawBase)}｜命中 ${format1(damage.instant)}｜總計 ${format1(damage.total)}`,
+      typeof stx.chipCostSpeedLine === 'function'
+        ? stx.chipCostSpeedLine(energyCost, format1(moveSpeed))
+        : `消耗：⚡${energyCost}｜速度：🚀${format1(moveSpeed)}`,
+      typeof stx.chipEffectLine === 'function' ? stx.chipEffectLine(localizedEffectText) : `特性：${localizedEffectText}`,
+      typeof stx.chipFunctionLine === 'function' ? stx.chipFunctionLine(functionText) : `功能：${functionText}`
+    ];
+    embed.addFields({
+      name: stx.chipStatsTitle || '🧬 技能晶片詳情',
+      value: chipLines.filter(Boolean).join('\n').slice(0, 1024),
+      inline: false
+    });
+  }
+
+  return embed;
 }
 
 async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', notice = '', page = 0) {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const stx = getShopText(uiLang);
+  const marketLabel = getLocalizedShopMarketLabel(marketType, uiLang);
   if (!player) {
-    await safeUpdatePanelInteraction(interaction, { content: '❌ 找不到角色！', components: [] }, 'showWorldShopBuyPanel:not_found');
+    await safeUpdatePanelInteraction(interaction, { content: stx.notFoundPlayer || '❌ 找不到角色！', components: [] }, 'showWorldShopBuyPanel:not_found');
     return;
   }
-  const uiLang = getPlayerUILang(player);
   await deferPanelInteractionIfNeeded(interaction, 'showWorldShopBuyPanel');
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
@@ -1785,7 +1950,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
     excludeOwnerId: user.id,
     limit: 500
   });
-  const pager = paginateList(allListings, page, MARKET_LIST_PAGE_SIZE);
+  const pager = paginateList(allListings, page, SHOP_BUY_PAGE_SIZE);
   const listingsRaw = Array.isArray(pager.items) ? pager.items : [];
   const listings = [];
   const seenListingIds = new Set();
@@ -1801,49 +1966,56 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
   }
   const stockInfo = getTeleportDeviceStockInfo(player);
   const marketRuleLine = safeMarket === 'digital'
-    ? '⚠️ 神秘鑑價站規則：賣出牌價可能顯示九折，但實際入帳可能僅六折；成交品也可能只收到延後配送承諾。'
-    : '✅ 公道鑑價站規則：賣出固定八折，牌價與入帳一致，成交品即時交付。';
-  const listText = listings.length > 0
-    ? listings.map((l, i) => buildMarketListingLine(l, pager.start + i, uiLang)).join('\n')
-    : '（目前沒有可購買商品）';
-  const { options: selectOptions, droppedInvalid: droppedInvalidOptions } = buildShopBuySelectOptions(listings, uiLang);
-  const totalDroppedCorrupted = droppedCorrupted + droppedInvalidOptions;
+    ? (stx.marketRuleDigital || '⚠️ 神秘鑑價站規則：賣出牌價可能顯示九折，但實際入帳可能僅六折；成交品也可能只收到延後配送承諾。')
+    : (stx.marketRuleRenaiss || '✅ 公道鑑價站規則：賣出固定八折，牌價與入帳一致，成交品即時交付。');
+  const totalDroppedCorrupted = droppedCorrupted;
+  const listingEmbeds = listings.map((listing, idx) => buildShopBuyListingEmbed(listing, {
+    currentIndex: pager.start + idx + 1,
+    total: pager.total
+  }, uiLang, safeMarket)).filter(Boolean);
+  const descriptionLines = [];
+  if (notice) descriptionLines.push(`✅ ${notice}`);
+  if (listings.length <= 0) {
+    descriptionLines.push(stx.noBuyListings || '（目前沒有可購買商品）');
+  } else {
+    descriptionLines.push(stx.marketListingsOnly || '以下僅顯示玩家掛賣商品；常駐補給請直接使用下方按鈕。');
+  }
+  if (totalDroppedCorrupted > 0) {
+    descriptionLines.push(typeof stx.droppedInvalidListings === 'function' ? stx.droppedInvalidListings(totalDroppedCorrupted) : `⚠️ 已略過 ${totalDroppedCorrupted} 筆異常賣單資料（請賣家重新掛單）。`);
+  }
+  descriptionLines.push(typeof stx.pageSummary === 'function' ? stx.pageSummary(pager.page + 1, pager.totalPages, pager.total) : `頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}`);
+  descriptionLines.push(marketRuleLine);
 
-  const embed = new EmbedBuilder()
-    .setTitle(`🛒 商店可購買商品｜${getMarketTypeLabel(safeMarket)}`)
+  const overviewEmbed = new EmbedBuilder()
+    .setTitle(typeof stx.buyTitle === 'function' ? stx.buyTitle(marketLabel) : `🛒 商店可購買商品｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
-    .setDescription(
-      `${notice ? `✅ ${notice}\n\n` : ''}` +
-      `${listText}\n\n` +
-      `${totalDroppedCorrupted > 0 ? `⚠️ 已略過 ${totalDroppedCorrupted} 筆異常賣單資料（請賣家重新掛單）。\n` : ''}` +
-      `頁數：${pager.page + 1}/${pager.totalPages}｜總筆數：${pager.total}\n` +
-      `回血水晶：${SHOP_HEAL_CRYSTAL_COST} Rns（恢復氣血）\n` +
-      `回能水晶：${SHOP_ENERGY_CRYSTAL_COST} Rns（恢復能量）\n` +
-      `加成點數：花費 200 Rns 可獲得 +1 點。\n` +
-      `傳送裝置：${TELEPORT_DEVICE_COST} Rns（同島瞬移，單顆效期 ${TELEPORT_DEVICE_DURATION_HOURS}h，每次消耗 1 顆）\n` +
-      `目前可用：${stockInfo.count} 顆${stockInfo.count > 0 ? `（最早到期：${formatTeleportDeviceRemaining(stockInfo.soonestRemainingMs)}）` : ''}\n` +
-      `${marketRuleLine}`
-    );
+    .setDescription(descriptionLines.filter(Boolean).join('\n'));
+  const embeds = [overviewEmbed, ...listingEmbeds];
 
   const rows = [];
-  if (selectOptions.length > 0) {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(`shop_buy_select_${safeMarket}`)
-      .setPlaceholder('下拉選擇要購買的商品')
-      .setMinValues(1)
-      .setMaxValues(1)
-      .addOptions(selectOptions);
-    rows.push(new ActionRowBuilder().addComponents(select));
-  } else if (listings.length > 0 && droppedInvalidOptions > 0) {
-    console.error(`[Shop] buy panel dropped ${droppedInvalidOptions} invalid select options in ${safeMarket} market`);
+  if (listings.length > 0) {
+    const selectOptions = listings.map((listing, idx) => {
+      const itemName = getLocalizedItemName(listing, uiLang) || String(listing?.itemName || '商品').trim() || '商品';
+      const category = getShopBuyListingCategory(listing, uiLang);
+      const qty = Math.max(1, Number(listing?.quantity || 1));
+      const unitPrice = Math.max(1, Number(listing?.unitPrice || 0));
+      const typeLabel = getShopBuyListingTypeLabel(category, stx).replace(/^.*?:\s*/u, '');
+      return {
+        label: `#${pager.start + idx + 1} ${itemName}`.slice(0, 100),
+        description: `${typeLabel}｜x${qty}｜${unitPrice} Rns`.slice(0, 100),
+        value: String(listing.id || '').trim()
+      };
+    }).filter((option) => option.value);
+    if (selectOptions.length > 0) {
+      const select = new StringSelectMenuBuilder()
+        .setCustomId(`shop_buy_select_${safeMarket}_${pager.page}`)
+        .setPlaceholder(stx.buySelectPlaceholder || '下拉選擇要購買的商品')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(selectOptions);
+      rows.push(new ActionRowBuilder().addComponents(select));
+    }
   }
-  rows.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`shop_buy_heal_crystal_${safeMarket}`).setLabel(`🩸 回血水晶(${SHOP_HEAL_CRYSTAL_COST})`).setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`shop_buy_energy_crystal_${safeMarket}`).setLabel(`⚡ 回能水晶(${SHOP_ENERGY_CRYSTAL_COST})`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel('🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`shop_buy_device_${safeMarket}`).setLabel(`🧭 傳送裝置(${TELEPORT_DEVICE_COST})`).setStyle(ButtonStyle.Success)
-  ));
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(
@@ -1851,7 +2023,7 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
           ? `shop_buy_prev_disabled_${safeMarket}_${pager.page}`
           : `shop_buy_${safeMarket}_${Math.max(0, pager.page - 1)}`
       )
-      .setLabel('⬅️ 上一頁')
+      .setLabel(stx.prevPage || '⬅️ 上一頁')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(pager.page <= 0),
     new ButtonBuilder()
@@ -1860,26 +2032,33 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
           ? `shop_buy_next_disabled_${safeMarket}_${pager.page}`
           : `shop_buy_${safeMarket}_${Math.min(pager.totalPages - 1, pager.page + 1)}`
       )
-      .setLabel('➡️ 下一頁')
+      .setLabel(stx.nextPage || '➡️ 下一頁')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(pager.page >= pager.totalPages - 1),
-    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel('🏪 返回商店').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`shop_open_${safeMarket}`).setLabel(stx.returnShop || '🏪 返回商店').setStyle(ButtonStyle.Secondary)
+  ));
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel(stx.scratchButton || '🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`shop_buy_heal_crystal_${safeMarket}`).setLabel(typeof stx.healCrystalButton === 'function' ? stx.healCrystalButton(SHOP_HEAL_CRYSTAL_COST) : `🩸 回血水晶(${SHOP_HEAL_CRYSTAL_COST})`).setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_buy_energy_crystal_${safeMarket}`).setLabel(typeof stx.energyCrystalButton === 'function' ? stx.energyCrystalButton(SHOP_ENERGY_CRYSTAL_COST) : `⚡ 回能水晶(${SHOP_ENERGY_CRYSTAL_COST})`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`shop_buy_point_${safeMarket}`).setLabel(stx.bonusPointButton || '🧩 買加成點數(200)').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`shop_buy_device_${safeMarket}`).setLabel(typeof stx.teleportButton === 'function' ? stx.teleportButton(TELEPORT_DEVICE_COST) : `🧭 傳送裝置(${TELEPORT_DEVICE_COST})`).setStyle(ButtonStyle.Success)
   ));
   const sentMain = await safeUpdatePanelInteraction(
     interaction,
-    { embeds: [embed], components: rows },
+    { embeds, components: rows },
     'showWorldShopBuyPanel:main'
   );
   if (!sentMain) {
     console.error('[Shop] show buy panel update failed: fallback mode');
-    const fallbackRows = rows.filter((row, idx) => idx !== 0); // 下拉選單失敗時保留功能按鈕
+    const fallbackRows = rows;
     const fallbackEmbed = new EmbedBuilder()
-      .setTitle(`🛒 商店可購買商品｜${getMarketTypeLabel(safeMarket)}`)
+      .setTitle(typeof stx.buyTitle === 'function' ? stx.buyTitle(marketLabel) : `🛒 商店可購買商品｜${marketLabel}`)
       .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
       .setDescription(
-        `⚠️ 賣單清單載入失敗，請稍後再試。\n\n` +
+        `${stx.buyLoadFailed || '⚠️ 賣單清單載入失敗，請稍後再試。'}\n\n` +
         `${notice ? `提示：${notice}\n` : ''}` +
-        `你仍可使用下方按鈕購買水晶、點數與傳送裝置。`
+        `${stx.buyLoadFailedHint || '你仍可使用下方按鈕購買常駐補給。'}`
       );
     await safeUpdatePanelInteraction(interaction, { embeds: [fallbackEmbed], components: fallbackRows }, 'showWorldShopBuyPanel:fallback');
   }
@@ -1887,45 +2066,47 @@ async function showWorldShopBuyPanel(interaction, user, marketType = 'renaiss', 
 
 async function showWorldShopScene(interaction, user, marketType = 'renaiss', notice = '') {
   const player = CORE.loadPlayer(user.id);
+  const uiLang = getPlayerUILang(player);
+  const stx = getShopText(uiLang);
   if (!player) {
-    await safeUpdatePanelInteraction(interaction, { content: '❌ 找不到角色！', components: [] }, 'showWorldShopScene:not_found');
+    await safeUpdatePanelInteraction(interaction, { content: stx.notFoundPlayer || '❌ 找不到角色！', components: [] }, 'showWorldShopScene:not_found');
     return;
   }
   await deferPanelInteractionIfNeeded(interaction, 'showWorldShopScene');
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const bossName = safeMarket === 'digital' ? '摩爾・Digital鑑價員' : '艾洛・Renaiss鑑價員';
+  const marketLabel = getLocalizedShopMarketLabel(safeMarket, uiLang);
+  const bossName = getLocalizedShopBossName(safeMarket, uiLang);
   const bossTone = safeMarket === 'digital'
-    ? '老闆眼神很熱情，但每句話都像在試探你的底線。'
-    : '老闆把估值表攤在你面前，強調透明與長期信任。';
+    ? (stx.digitalBossTone || '老闆眼神很熱情，但每句話都像在試探你的底線。')
+    : (stx.renaissBossTone || '老闆把估值表攤在你面前，強調透明與長期信任。');
   const pricingRule = safeMarket === 'digital'
-    ? '⚠️ 神秘站對外牌價常寫九折，但實際結算可能僅六折；配送承諾也未必兌現。'
-    : '✅ 公道站賣出固定八折，顯示與實收一致。';
+    ? (stx.marketRuleDigital || '⚠️ 神秘站對外牌價常寫九折，但實際結算可能僅六折；配送承諾也未必兌現。')
+    : (stx.marketRuleRenaiss || '✅ 公道站賣出固定八折，顯示與實收一致。');
   const listingCount = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', limit: 99 }).length;
   const myCount = ECON.getMarketListingsView({ marketType: safeMarket, type: 'sell', ownerId: user.id, limit: 99 }).length;
 
   const embed = new EmbedBuilder()
-    .setTitle(`🏪 進入商店｜${getMarketTypeLabel(safeMarket)}`)
+    .setTitle(typeof stx.shopTitle === 'function' ? stx.shopTitle(marketLabel) : `🏪 進入商店｜${marketLabel}`)
     .setColor(safeMarket === 'digital' ? 0x9333ea : 0x0ea5e9)
     .setDescription(
       `${notice ? `${/^[🧭📖]/u.test(String(notice).trim()) ? notice : `✅ ${notice}`}\n\n` : ''}` +
-      `你走進了${getMarketTypeLabel(safeMarket)}，櫃台後方的 **${bossName}** 正看著你。\n` +
+      `${typeof stx.shopIntro === 'function' ? stx.shopIntro(marketLabel, bossName) : `你走進了${marketLabel}，櫃台後方的 **${bossName}** 正看著你。`}\n` +
       `${bossTone}\n\n` +
-      `市面賣單：${listingCount} 筆｜你掛單：${myCount} 筆\n` +
+      `${typeof stx.shopListingLine === 'function' ? stx.shopListingLine(listingCount, myCount) : `市面賣單：${listingCount} 筆｜你掛單：${myCount} 筆`}\n` +
       `${pricingRule}\n` +
-      `請選擇：要掛賣、直接跟老闆議價、買商品、刮刮樂，或離開商店。\n` +
-      `掛賣會先出現下拉選單；技能需先從上陣招式卸下才可掛賣。`
+      `${stx.shopChoosePrompt || '請選擇：要掛賣、直接跟老闆議價、買商品、刮刮樂，或離開商店。\n掛賣會先出現下拉選單；技能需先從上陣招式卸下才可掛賣。'}`
     )
-    .addFields({ name: '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} Rns 代幣`, inline: true });
+    .addFields({ name: stx.fieldYourRns || '💰 你的 Rns', value: `${Number(player?.stats?.財富 || 0)} ${stx.tokenUnit || 'Rns 代幣'}`, inline: true });
 
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_post_sell_${safeMarket}`).setLabel('📤 掛賣商品').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`shop_npc_haggle_${safeMarket}`).setLabel('🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`shop_post_sell_${safeMarket}`).setLabel(stx.sellButton || '📤 掛賣商品').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`shop_npc_haggle_${safeMarket}`).setLabel(stx.npcHaggleButton || '🤝 跟老闆議價').setStyle(ButtonStyle.Primary)
   );
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel('🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`shop_buy_${safeMarket}`).setLabel('🛒 買商品').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('shop_leave').setLabel('🚪 離開商店').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`shop_scratch_${safeMarket}`).setLabel(stx.scratchButton || '🎟️ 刮刮樂(100)').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`shop_buy_${safeMarket}`).setLabel(stx.buyButton || '🛒 買商品').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('shop_leave').setLabel(stx.leaveButton || '🚪 離開商店').setStyle(ButtonStyle.Secondary)
   );
   await safeUpdatePanelInteraction(interaction, { embeds: [embed], components: [row1, row2] }, 'showWorldShopScene:main');
 }

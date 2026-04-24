@@ -20,6 +20,22 @@ function createBattleStoryUtils(deps = {}) {
   const appendStoryContinuation = typeof deps.appendStoryContinuation === 'function'
     ? deps.appendStoryContinuation
     : ((prev, extra = '') => [String(prev || '').trim(), String(extra || '').trim()].filter(Boolean).join('\n\n'));
+  const getLanguageSection = typeof deps.getLanguageSection === 'function'
+    ? deps.getLanguageSection
+    : null;
+
+  function getBattleText(lang = 'zh-TW') {
+    let base = {};
+    let localized = {};
+    try {
+      base = getLanguageSection ? (getLanguageSection('battleText', 'zh-TW') || {}) : {};
+      localized = getLanguageSection ? (getLanguageSection('battleText', lang) || {}) : {};
+    } catch {
+      base = {};
+      localized = {};
+    }
+    return { ...base, ...localized };
+  }
 
   function summarizeBattleDetailForStory(detail = '', maxLen = 260) {
     const text = String(detail || '').replace(/\s+/g, ' ').trim();
@@ -216,12 +232,16 @@ function createBattleStoryUtils(deps = {}) {
     return { mentorName };
   }
 
-  function formatPetHpWithRecovery(pet) {
+  function formatPetHpWithRecovery(pet, lang = 'zh-TW') {
     const hp = `${Math.round(Number(pet?.hp || 0))}/${Math.round(Number(pet?.maxHp || 0))}`;
     const remain = typeof PET.getPetRecoveryRemainingTurns === 'function'
       ? Number(PET.getPetRecoveryRemainingTurns(pet) || 0)
       : 0;
-    if (remain > 0) return `${hp}（復活倒數 ${formatRecoveryTurnsShort(remain)}）`;
+    if (remain > 0) {
+      const tx = getBattleText(lang);
+      if (typeof tx.hpRecoverySuffix === 'function') return `${hp}${tx.hpRecoverySuffix(remain)}`;
+      return `${hp} (${formatRecoveryTurnsShort(remain)})`;
+    }
     return hp;
   }
 

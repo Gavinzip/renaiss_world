@@ -1,6 +1,8 @@
 const { getSkillChipPrefix } = require('./utils/global-language-resources');
 
 function getRuntimeConstants(env = process.env) {
+  const APP_ENV = String(env.APP_ENV || 'local').trim().toLowerCase() || 'local';
+  const LOCAL_SHOP_TEST_MODE = APP_ENV === 'local' && String(env.LOCAL_SHOP_TEST_MODE || '0').trim().toLowerCase() === '1';
   const RESETDATA_PASSWORD = String(env.RESETDATA_PASSWORD || '0121').trim();
   const ADMIN_OWNER_USER_ID = String(env.ADMIN_OWNER_USER_ID || '1051129116419702784').trim();
   const TELEPORT_DEVICE_COST = Math.max(0, Number(env.TELEPORT_DEVICE_COST || 200));
@@ -65,7 +67,9 @@ function getRuntimeConstants(env = process.env) {
   const PORTAL_RESHOW_COOLDOWN_TURNS = Math.max(1, Math.min(10, Number(env.PORTAL_RESHOW_COOLDOWN_TURNS || 2)));
   const WISH_POOL_GUIDE_MIN_TURNS = Math.max(1, Math.min(6, Number(env.WISH_POOL_GUIDE_MIN_TURNS || 2)));
   const PET_PASSIVE_HEAL_PER_STORY_TURN = Math.max(0, Math.min(30, Number(env.PET_PASSIVE_HEAL_PER_STORY_TURN || 20)));
-  const QUICK_SHOP_COOLDOWN_TURNS = Math.max(1, Math.min(20, Number(env.QUICK_SHOP_COOLDOWN_TURNS || 5)));
+  const QUICK_SHOP_COOLDOWN_TURNS = LOCAL_SHOP_TEST_MODE
+    ? 0
+    : Math.max(1, Math.min(20, Number(env.QUICK_SHOP_COOLDOWN_TURNS || 5)));
   const ROAM_MOVE_BASE_CHANCE = Math.max(0, Math.min(0.95, Number(env.ROAM_MOVE_BASE_CHANCE || 0.42)));
   const ROAM_MOVE_EXPLORE_BONUS = Math.max(0, Math.min(0.5, Number(env.ROAM_MOVE_EXPLORE_BONUS || 0.16)));
   const ROAM_MOVE_WANDER_BONUS = Math.max(0, Math.min(0.5, Number(env.ROAM_MOVE_WANDER_BONUS || 0.2)));
@@ -141,6 +145,7 @@ function getRuntimeConstants(env = process.env) {
     PORTAL_RESHOW_COOLDOWN_TURNS,
     WISH_POOL_GUIDE_MIN_TURNS,
     PET_PASSIVE_HEAL_PER_STORY_TURN,
+    LOCAL_SHOP_TEST_MODE,
     QUICK_SHOP_COOLDOWN_TURNS,
     ROAM_MOVE_BASE_CHANCE,
     ROAM_MOVE_EXPLORE_BONUS,

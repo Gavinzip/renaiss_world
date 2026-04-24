@@ -1057,6 +1057,8 @@ function updateScratchState(updater) {
 
 function playScratchLottery(player, options = {}) {
   ensurePlayerEconomy(player);
+  const lang = String(options?.lang || player?.language || 'zh-TW');
+  const tx = getEconomyText(lang);
   const currentGold = Number(player?.stats?.財富 || 0);
   const marketType = String(options?.marketType || '').trim().toLowerCase() === 'digital' ? 'digital' : 'renaiss';
   const forceLose = marketType === 'digital' || options?.forceLose === true;
@@ -1070,7 +1072,9 @@ function playScratchLottery(player, options = {}) {
       reward: 0,
       win: false,
       jackpotPool: state.jackpotPool,
-      message: `🎟️ 小賣部老闆搖頭：刮刮樂要 ${SCRATCH_COST} Rns 代幣，你目前只有 ${currentGold} Rns 代幣。`
+      message: typeof tx.scratchInsufficient === 'function'
+        ? tx.scratchInsufficient({ cost: SCRATCH_COST, currentGold })
+        : `🎟️ 小賣部老闆搖頭：刮刮樂要 ${SCRATCH_COST} Rns 代幣，你目前只有 ${currentGold} Rns 代幣。`
     };
   }
 
@@ -1104,10 +1108,16 @@ function playScratchLottery(player, options = {}) {
     win,
     jackpotPool: saved.jackpotPool,
     message: win
-      ? `🎟️ 你刮中了！本次投入 ${SCRATCH_COST} Rns 代幣，回收 ${reward} Rns 代幣（淨 +${net}）。`
+      ? (typeof tx.scratchWin === 'function'
+        ? tx.scratchWin({ cost: SCRATCH_COST, reward, net })
+        : `🎟️ 你刮中了！本次投入 ${SCRATCH_COST} Rns 代幣，回收 ${reward} Rns 代幣（淨 +${net}）。`)
       : (marketType === 'digital'
-        ? `🎟️ 你在神秘鑑價站買的刮刮樂沒有中獎，本次投入 ${SCRATCH_COST} Rns 代幣已投入獎池。`
-        : `🎟️ 未中獎。本次投入 ${SCRATCH_COST} Rns 代幣已投入獎池。`)
+        ? (typeof tx.scratchLoseDigital === 'function'
+          ? tx.scratchLoseDigital({ cost: SCRATCH_COST })
+          : `🎟️ 你在神秘鑑價站買的刮刮樂沒有中獎，本次投入 ${SCRATCH_COST} Rns 代幣已投入獎池。`)
+        : (typeof tx.scratchLoseRenaiss === 'function'
+          ? tx.scratchLoseRenaiss({ cost: SCRATCH_COST })
+          : `🎟️ 未中獎。本次投入 ${SCRATCH_COST} Rns 代幣已投入獎池。`))
   };
 }
 

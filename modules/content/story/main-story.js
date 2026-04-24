@@ -6,6 +6,7 @@
 const { sanitizeWorldObject } = require('../../core/style-sanitizer');
 const BATTLE = require('../../systems/battle/battle-system');
 const ISLAND_STORY = require('./island-story');
+const { WANTED_LEVEL_CAP } = require('../wanted-utils');
 const {
   getLocationPortalHub,
   getLocationStoryMetadata,
@@ -995,7 +996,7 @@ function maybeTriggerPassiveStory(player, context = {}) {
 
   if (state.node === 'act4_war' && count < 10) {
     const sinceLastPressure = count - Number(state.lastAssassinPressureEventCount || -999);
-    const pressureLevel = clamp(Math.max(wantedPressure, Number(state.pressure || 0)), 0, 10);
+    const pressureLevel = clamp(Math.max(wantedPressure, Number(state.pressure || 0)), 0, WANTED_LEVEL_CAP);
     const dynamicGap = Math.max(1, ASSASSIN_PRESSURE_GAP_EVENTS - Math.floor(pressureLevel / 2));
     const dynamicAmbushChance = clamp(0.38 + pressureLevel * 0.06, 0.38, 0.95);
     if (count >= 9 && sinceLastPressure >= dynamicGap) {

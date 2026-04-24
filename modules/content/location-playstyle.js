@@ -193,6 +193,61 @@ const DEFAULT_LOCATION_PLAYSTYLE = Object.freeze({
   byCluster: { investigate: 1.0, social: 1.0, combat: 1.0, trade: 1.0, explore: 1.0 }
 });
 
+const PLAYSTYLE_LOCALIZATION = Object.freeze({
+  default: {
+    en: { name: 'Local Exploration', focus: 'exploration, interaction, and basic investigation', keywords: ['explore', 'interact', 'investigate'] },
+    ko: { name: '현지 탐색', focus: '탐색, 상호작용, 기본 조사', keywords: ['탐색', '상호작용', '조사'] }
+  },
+  xiangyang_trace: {
+    en: { name: 'Pressure Trace Field', focus: 'source tracing, clue comparison, and counter-surveillance', keywords: ['trace', 'clue', 'comparison', 'testimony', 'sealed pod', 'inspection', 'tailing'] },
+    ko: { name: '추적 압박장', focus: '출처 추적, 단서 대조, 미행 대응', keywords: ['추적', '단서', '대조', '진술', '봉인 포드', '검사', '미행'] }
+  },
+  luoyang_intel: {
+    en: { name: 'Intel Negotiation Net', focus: 'intel exchange, gray-ledger cross-checking, and verification', keywords: ['gray ledger', 'negotiate', 'exchange', 'cross-check', 'record', 'logistics', 'verify'] },
+    ko: { name: '정보 교섭망', focus: '정보 교환, 회색 장부 대조, 교차 검증', keywords: ['회색 장부', '교섭', '교환', '대조', '기록', '물류', '검증'] }
+  },
+  route_checkpoint: {
+    en: { name: 'Checkpoint Route Run', focus: 'route choice, passage verification, and risk detours', keywords: ['checkpoint', 'patrol', 'route', 'detour', 'inspection', 'passage', 'blockade'] },
+    ko: { name: '관문 경로전', focus: '경로 선택, 통행 검증, 위험 우회', keywords: ['관문', '순찰', '경로', '우회', '검문', '통행', '봉쇄'] }
+  },
+  authority_pressure: {
+    en: { name: 'Authority Pressure Field', focus: 'high-risk confrontation, pressure testing, and heavy rewards', keywords: ['blockade', 'pressure', 'intercept', 'force through', 'hub', 'review', 'countermeasure'] },
+    ko: { name: '고압 권력장', focus: '고위험 대치, 압박 시험, 고보상', keywords: ['봉쇄', '압박', '차단', '강행', '중추', '심사', '반제'] }
+  },
+  kashgar_logistics: {
+    en: { name: 'Logistics Tracking Field', focus: 'transfer time chains, cargo breakpoints, and supply-route tracing', keywords: ['transfer', 'dispatch', 'time chain', 'cargo flow', 'dock', 'batch', 'route'] },
+    ko: { name: '물류 추적장', focus: '환적 시간 사슬, 화물 단절점, 공급 경로 추적', keywords: ['환적', '조정', '시간 사슬', '화물 흐름', '부두', '배치', '경로'] }
+  },
+  jinghu_samples: {
+    en: { name: 'Sample Verification Field', focus: 'sample comparison, workshop source checks, and material-evidence analysis', keywords: ['sample', 'process', 'workshop', 'engraving', 'compare', 'residue', 'specimen'] },
+    ko: { name: '시료 검증장', focus: '시료 대조, 공방 출처 검증, 물증 해체', keywords: ['시료', '공정', '공방', '각인', '대조', '잔류물', '검재'] }
+  },
+  guangzhou_market: {
+    en: { name: 'Market Bluff Field', focus: 'fast trading, high reward, and risky persuasion', keywords: ['quote', 'haggle', 'close', 'source', 'port office', 'manifest', 'resale'] },
+    ko: { name: '시장 심리전', focus: '빠른 거래, 고보상, 높은 화술 리스크', keywords: ['호가', '흥정', '체결', '출처', '항무', '검표', '전매'] }
+  },
+  jungle_ritual: {
+    en: { name: 'Rainforest Ritual Field', focus: 'ritual risk, tribal rules, and rare-material contention', keywords: ['altar', 'tribe', 'toxic material', 'ritual', 'sigil', 'taboo', 'gathering'] },
+    ko: { name: '우림 의식장', focus: '의식 위험, 부족 규칙, 희귀 재료 경쟁', keywords: ['제단', '부족', '독성 재료', '의식', '문양', '금기', '채집'] }
+  },
+  snow_infiltration: {
+    en: { name: 'Counter-Infiltration Field', focus: 'probing dialogue, informant verification, and infiltration tracking', keywords: ['infiltration', 'trace back', 'informant', 'disguise', 'probe', 'hidden watch', 'screening'] },
+    ko: { name: '침투 역추적장', focus: '탐색 대화, 진위 정보원, 역침투 추적', keywords: ['침투', '역추적', '정보원', '위장', '시험', '암초소', '가려내기'] }
+  },
+  highland_survival: {
+    en: { name: 'High-Pressure Survival Field', focus: 'extreme-environment survival, supply control, and high-risk drops', keywords: ['supplies', 'cold wave', 'rift', 'survival', 'pressure', 'evacuation', 'blockade'] },
+    ko: { name: '고압 생존장', focus: '극한 환경 생존, 보급 관리, 고위험 드롭', keywords: ['보급', '한파', '열곡', '생존', '압력', '철수', '봉쇄'] }
+  },
+  island_mechanism: {
+    en: { name: 'Archipelago Mechanism Field', focus: 'island-hop routes, mechanism trials, and signal analysis', keywords: ['island hop', 'tide', 'mechanism', 'sea chart', 'observation', 'trial', 'echo'] },
+    ko: { name: '군도 기구국', focus: '도서 경로, 장치 시련, 신호 해석', keywords: ['도서 이동', '조수', '기구', '항로도', '관측', '시련', '반향'] }
+  },
+  deep_conflict: {
+    en: { name: 'Deep Conflict Belt', focus: 'high-risk infiltration, shadow-line confrontation, and endgame pressure control', keywords: ['deep zone', 'shadow line', 'infiltration', 'power', 'forbidden zone', 'high risk', 'countermeasure'] },
+    ko: { name: '심역 대치대', focus: '고위험 잠입, 암선 대치, 종반 압박 관리', keywords: ['심역', '암선', '침투', '권력', '금지구역', '고위험', '반제'] }
+  }
+});
+
 function normalizeLocationName(location = '') {
   return String(location || '').trim();
 }
@@ -202,20 +257,45 @@ function getLocationPlaystyleProfile(location = '') {
   return LOCATION_PLAYSTYLE_PROFILES[normalized] || DEFAULT_LOCATION_PLAYSTYLE;
 }
 
-function getLocationPlaystylePromptBlock(location = '', playerLang = 'zh-TW') {
+function getLocalizedPlaystyleProfile(location = '', playerLang = 'zh-TW') {
   const profile = getLocationPlaystyleProfile(location);
+  const lang = String(playerLang || 'zh-TW').trim().toLowerCase();
+  const isEn = lang === 'en' || lang.startsWith('en-');
+  const isKo = lang === 'ko' || lang.startsWith('ko-');
+  if (!isEn && !isKo) return profile;
+  const bucket = PLAYSTYLE_LOCALIZATION[String(profile.id || 'default')] || PLAYSTYLE_LOCALIZATION.default || {};
+  const row = isKo ? bucket.ko : bucket.en;
+  if (!row) return profile;
+  return {
+    ...profile,
+    name: row.name || profile.name,
+    focus: row.focus || profile.focus,
+    keywords: Array.isArray(row.keywords) && row.keywords.length > 0 ? row.keywords.slice() : profile.keywords
+  };
+}
+
+function getLocationPlaystylePromptBlock(location = '', playerLang = 'zh-TW') {
+  const profile = getLocalizedPlaystyleProfile(location, playerLang);
+  const lang = String(playerLang || 'zh-TW').trim().toLowerCase();
+  const isEn = lang === 'en' || lang.startsWith('en-');
+  const isKo = lang === 'ko' || lang.startsWith('ko-');
+  const isZhCn = lang === 'zh-cn' || lang === 'zh_cn' || lang.startsWith('zh-cn');
   if (profile.id === 'default') {
-    if (playerLang === 'en') return 'Local playstyle: balanced exploration and interaction.';
-    if (playerLang === 'zh-CN') return '地区玩法：均衡探索与互动。';
+    if (isEn) return 'Local playstyle: balanced exploration and interaction.';
+    if (isKo) return '지역 플레이스타일: 균형 잡힌 탐색과 상호작용.';
+    if (isZhCn) return '地区玩法：均衡探索与互动。';
     return '地區玩法：均衡探索與互動。';
   }
   const keywordText = Array.isArray(profile.keywords) && profile.keywords.length > 0
     ? profile.keywords.slice(0, 6).join('、')
     : '（無）';
-  if (playerLang === 'en') {
+  if (isEn) {
     return `Regional playstyle [${profile.name}]: ${profile.focus}. At least ${Math.max(1, Number(profile.minKeywordHits || 0))} options should reflect these cues: ${keywordText}.`;
   }
-  if (playerLang === 'zh-CN') {
+  if (isKo) {
+    return `지역 플레이스타일 [${profile.name}]: ${profile.focus}. 이번 턴에는 최소 ${Math.max(1, Number(profile.minKeywordHits || 0))}개의 선택지가 다음 단서를 반영하는 편이 좋습니다: ${keywordText}.`;
+  }
+  if (isZhCn) {
     return `地区玩法【${profile.name}】：${profile.focus}。本轮至少 ${Math.max(1, Number(profile.minKeywordHits || 0))} 个选项体现以下线索词：${keywordText}。`;
   }
   return `地區玩法【${profile.name}】：${profile.focus}。本輪至少 ${Math.max(1, Number(profile.minKeywordHits || 0))} 個選項體現以下線索詞：${keywordText}。`;
@@ -273,6 +353,7 @@ module.exports = {
   LOCATION_PLAYSTYLE_ASSIGNMENT,
   LOCATION_PLAYSTYLE_PROFILES,
   getLocationPlaystyleProfile,
+  getLocalizedPlaystyleProfile,
   getLocationPlaystylePromptBlock,
   getLocationLootFlavorModifier,
   applyLocationFlavorToTradeGood,

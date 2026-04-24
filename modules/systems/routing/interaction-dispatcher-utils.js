@@ -68,6 +68,7 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     getRegionLocationsByLocation,
     normalizeMapViewMode,
     getPlayerUILang,
+    getLanguageSection,
     getMapText,
     showPortalSelection,
     showTeleportDeviceSelection,
@@ -160,6 +161,23 @@ function registerInteractionDispatcher(CLIENT, deps = {}) {
     normalizeEventChoices,
     applyChoicePolicy
   } = deps;
+
+  function getShopText(lang = 'zh-TW') {
+    let base = {};
+    let localized = {};
+    try {
+      base = typeof getLanguageSection === 'function'
+        ? (getLanguageSection('shopText', 'zh-TW') || {})
+        : {};
+      localized = typeof getLanguageSection === 'function'
+        ? (getLanguageSection('shopText', lang) || {})
+        : {};
+    } catch {
+      base = {};
+      localized = {};
+    }
+    return { ...base, ...localized };
+  }
 
 CLIENT.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton() && !interaction.isModalSubmit() && !interaction.isStringSelectMenu()) return;
@@ -1474,6 +1492,53 @@ CLIENT.on('interactionCreate', async (interaction) => {
     return;
   }
 
+  if (customId.startsWith('shop_buy_select_')) {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate().catch(() => {});
+    }
+    const replyOrFollowUp = async (content) => {
+      const payload = { content, ephemeral: true };
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp(payload).catch(() => {});
+      } else {
+        await interaction.reply(payload).catch(() => {});
+      }
+    };
+    const parsed = parseMarketAndPageFromCustomId(customId, 'shop_buy_select_', 'renaiss');
+    const listingId = String(interaction?.values?.[0] || '').trim();
+    if (!listingId) {
+      await replyOrFollowUp('⚠️ 請先選擇要購買的商品。');
+      return;
+    }
+    const buyer = CORE.loadPlayer(user.id);
+    if (!buyer) {
+      await replyOrFollowUp('❌ 找不到角色！');
+      return;
+    }
+    ECON.ensurePlayerEconomy(buyer);
+    const outcome = ECON.buyFromSellListing(buyer, listingId, {
+      loadPlayerById: (id) => CORE.loadPlayer(id),
+      savePlayerById: (p) => CORE.savePlayer(p)
+    });
+    if (!outcome?.success) {
+      await replyOrFollowUp(`❌ 購買失敗：${outcome?.reason || '未知錯誤'}`);
+      return;
+    }
+    CORE.savePlayer(buyer);
+    const deliveryText = Array.isArray(outcome.deliveryNotes) && outcome.deliveryNotes.length > 0
+      ? `｜${outcome.deliveryNotes.join('；')}`
+      : '';
+    const deferredHint = outcome.deliveryDeferred ? '｜櫃檯表示將於下一回合配送' : '';
+    await showWorldShopBuyPanel(
+      interaction,
+      user,
+      outcome.marketType || parsed.marketType || 'renaiss',
+      `成交成功：${outcome.itemName} x${outcome.quantity}（-${outcome.totalPrice} Rns）${deliveryText}${deferredHint}`,
+      parsed.page
+    );
+    return;
+  }
+
   if (customId.startsWith('shop_scratch_')) {
     const marketType = parseMarketTypeFromCustomId(customId, 'renaiss');
     const player = CORE.loadPlayer(user.id);
@@ -1482,14 +1547,13 @@ CLIENT.on('interactionCreate', async (interaction) => {
       return;
     }
     ECON.ensurePlayerEconomy(player);
-    const scratch = ECON.playScratchLottery(player, { marketType });
-    const scratchPlace = marketType === 'digital' ? '神秘鑑價站' : '鑑價站';
+    const uiLang = getPlayerUILang(player);
+    const stx = getShopText(uiLang);
+    const scratch = ECON.playScratchLottery(player, { marketType, lang: uiLang });
     rememberPlayer(player, {
       type: '經濟',
-      content: `${scratchPlace}刮刮樂（投入 ${scratch.cost || 100} Rns 代幣）`,
-      outcome: scratch.win
-        ? `中獎 ${scratch.reward || 0} Rns 代幣｜淨 ${scratch.net >= 0 ? '+' : ''}${scratch.net}`
-        : `未中獎｜獎池 ${scratch.jackpotPool || 0} Rns 代幣`,
+      content: scratch.message,
+      outcome: scratch.message,
       importance: scratch.win ? 2 : 1,
       tags: ['scratch_lottery', scratch.win ? 'win' : 'lose']
     });
@@ -1514,7 +1578,7 @@ CLIENT.on('interactionCreate', async (interaction) => {
       interaction,
       user,
       marketType,
-      `${scratch.message}\n💰 目前獎池：${Number(scratch.jackpotPool || 0)} Rns 代幣`
+      `${scratch.message}\n${typeof stx.jackpotLine === 'function' ? stx.jackpotLine(Number(scratch.jackpotPool || 0)) : `💰 目前獎池：${Number(scratch.jackpotPool || 0)} Rns 代幣`}`
     );
     return;
   }

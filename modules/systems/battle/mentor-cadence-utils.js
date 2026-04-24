@@ -1,4 +1,5 @@
 const { computeAlignmentProfileFromPlayer } = require('../../content/alignment-profile-utils');
+const { capWantedLevel } = require('../../content/wanted-utils');
 
 function createMentorCadenceUtils(deps = {}) {
   const {
@@ -57,12 +58,11 @@ function createMentorCadenceUtils(deps = {}) {
     if (playerId && CORE && typeof CORE.getPlayerWantedLevel === 'function') {
       worldWanted = Math.max(0, Number(CORE.getPlayerWantedLevel(playerId) || 0));
     }
-    return Math.max(localWanted, worldWanted, wantedFloor + wantedBoost);
+    return capWantedLevel(Math.max(localWanted, worldWanted, wantedFloor + wantedBoost));
   }
 
   function getWantedEscalationProfile(wantedLevel = 0) {
-    const level = Math.max(0, Number(wantedLevel || 0));
-    const clamped = Math.min(10, Math.floor(level));
+    const clamped = capWantedLevel(wantedLevel);
     const active = clamped >= WANTED_AMBUSH_MIN_LEVEL;
     if (!active) {
       return {

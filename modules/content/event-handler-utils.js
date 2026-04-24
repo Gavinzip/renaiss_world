@@ -1,5 +1,6 @@
 const { MAP_LOCATIONS, findLocationPath } = require('./world-map');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
+const { capWantedLevel } = require('./wanted-utils');
 const { appendLootAudit } = require('../systems/data/loot-audit-log');
 const {
   getGenerationStatusText,
@@ -193,7 +194,7 @@ function createEventHandlerUtils(deps = {}) {
         value: `${pet?.name || 'Unknown'} (${getPetElementDisplayName(pet?.type || pet?.element || '', lang || player?.language || 'zh-TW')})`,
         inline: true
       },
-      { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet), inline: true },
+      { name: '⚔️ 氣血', value: formatPetHpWithRecovery(pet, lang || player?.language || 'zh-TW'), inline: true },
       { name: '💰 Rns 代幣', value: String(player?.stats?.財富 || 0), inline: true },
       { name: '📍 位置', value: String(player?.location || ''), inline: true },
       { name: '🌟 幸運', value: String(player?.stats?.運氣 || 0), inline: true },
@@ -1693,11 +1694,11 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
   const generationText = getGenerationStatusText(player.language || 'zh-TW');
   const statusBar = buildMainStatusBar(player, pet, player.language || 'zh-TW');
   const eventMainlineLine = buildMainlineProgressLine(player, player.language || 'zh-TW');
-  const panelWantedLevel = Math.max(
+  const panelWantedLevel = capWantedLevel(Math.max(
     0,
     Number(typeof CORE.getPlayerWantedLevel === 'function' ? CORE.getPlayerWantedLevel(player.id) : 0),
     Number(player?.wanted || 0)
-  );
+  ));
   
   // 發送一個「AI 正在思考」的訊息（帶上舊 story，讓 continuity 明顯）
   // choices 變數在 eventChoices 清除前就 capture 了，所以仍有效

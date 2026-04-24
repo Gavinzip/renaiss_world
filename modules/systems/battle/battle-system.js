@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const CORE = require('../../core/game-core');
 const PET = require('../pet/pet-system');
+const { capWantedLevel } = require('../../content/wanted-utils');
 
 // ============== 逃跑系統 ==============
 const FLEE_CONFIG = {
@@ -1185,7 +1186,7 @@ function resolveBattleOutcome(player, fighter, enemy, options = {}) {
     let wantedLevel = 0;
     if (!dryRun && !nonLethal) {
       CORE.killNPC(enemyId, player.id, isMonster);
-      wantedLevel = CORE.getPlayerWantedLevel(player.id);
+      wantedLevel = capWantedLevel(CORE.getPlayerWantedLevel(player.id));
     }
     const outcomeText = nonLethal
       ? `🤝 你在切磋中壓制了${enemy.name}。`
