@@ -5,6 +5,7 @@ function createMapUiUtils(deps = {}) {
     ButtonStyle,
     StringSelectMenuBuilder,
     getMapText = () => ({}),
+    getLocationDisplayName = (value = '') => String(value || ''),
     canFreeRoamCurrentRegion = () => false,
     normalizeMapViewMode = (mode = 'text') => (mode === 'ascii' ? 'ascii' : 'text'),
     MAP_LOCATIONS = [],
@@ -21,7 +22,7 @@ function createMapUiUtils(deps = {}) {
       .filter((row) => String(row?.location || '').trim() && String(row.location) !== current)
       .slice(0, 25)
       .map((row) => ({
-        label: String(row.location).slice(0, 100),
+        label: String(getLocationDisplayName(row.location, lang) || row.location).slice(0, 100),
         description: row.isPortalHub ? tx.regionMovePortalHub : tx.regionMoveInRegion,
         value: String(row.location)
       }));
@@ -63,7 +64,7 @@ function createMapUiUtils(deps = {}) {
         const absoluteIdx = start + i + idx;
         return new ButtonBuilder()
           .setCustomId(`map_loc_${absoluteIdx}`)
-          .setLabel(loc.substring(0, 10))
+          .setLabel(String(getLocationDisplayName(loc, lang) || loc).substring(0, 10))
           .setStyle(loc === currentLocation ? ButtonStyle.Primary : ButtonStyle.Secondary)
           .setDisabled(true);
       });

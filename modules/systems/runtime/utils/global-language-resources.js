@@ -412,7 +412,15 @@ function createGlobalLanguageResources(deps = {}) {
         sectionWorldEvents: '📢 世界事件',
         lastChoice: '📍 上個選擇',
         sectionPrevStory: '📜 前情提要',
-        sectionUpcomingChoices: '🆕 即將更新選項'
+        sectionUpcomingChoices: '🆕 即將更新選項',
+        turnMoved: (from, to) => `🧭 本回合移動：${from} → ${to}`,
+        rewardGoldDelta: (gold) => `💰 +${gold} Rns 代幣`,
+        rewardWantedLevel: (level) => `⚠️ 通緝等級: ${level}`,
+        rewardSoldCount: (count) => `🏪 已售出 ${count} 件`,
+        rewardItemGain: (item) => `📦 取得 ${item}`,
+        rewardPetRevived: (name) => `🐾 ${name} 復活完成（2回合制）`,
+        rewardPassiveHealSingle: (name, heal) => `🩹 ${name} 行進恢復 +${heal} HP`,
+        rewardPassiveHealSummary: (preview, total) => `🩹 行進恢復：${preview}｜合計 +${total} HP`
       },
       'zh-CN': {
         statusLabel: '状态',
@@ -435,7 +443,15 @@ function createGlobalLanguageResources(deps = {}) {
         sectionWorldEvents: '📢 世界事件',
         lastChoice: '📍 上个选择',
         sectionPrevStory: '📜 前情提要',
-        sectionUpcomingChoices: '🆕 即将更新选项'
+        sectionUpcomingChoices: '🆕 即将更新选项',
+        turnMoved: (from, to) => `🧭 本回合移动：${from} → ${to}`,
+        rewardGoldDelta: (gold) => `💰 +${gold} Rns 代币`,
+        rewardWantedLevel: (level) => `⚠️ 通缉等级: ${level}`,
+        rewardSoldCount: (count) => `🏪 已售出 ${count} 件`,
+        rewardItemGain: (item) => `📦 取得 ${item}`,
+        rewardPetRevived: (name) => `🐾 ${name} 复活完成（2回合制）`,
+        rewardPassiveHealSingle: (name, heal) => `🩹 ${name} 行进恢复 +${heal} HP`,
+        rewardPassiveHealSummary: (preview, total) => `🩹 行进恢复：${preview}｜合计 +${total} HP`
       },
       en: {
         statusLabel: 'Status',
@@ -458,7 +474,15 @@ function createGlobalLanguageResources(deps = {}) {
         sectionWorldEvents: '📢 World Events',
         lastChoice: '📍 Previous Choice',
         sectionPrevStory: '📜 Previous Context',
-        sectionUpcomingChoices: '🆕 Incoming Choices'
+        sectionUpcomingChoices: '🆕 Incoming Choices',
+        turnMoved: (from, to) => `🧭 Moved this turn: ${from} → ${to}`,
+        rewardGoldDelta: (gold) => `💰 +${gold} Rns`,
+        rewardWantedLevel: (level) => `⚠️ Wanted Lv: ${level}`,
+        rewardSoldCount: (count) => `🏪 Sold ${count} item(s)`,
+        rewardItemGain: (item) => `📦 Obtained ${item}`,
+        rewardPetRevived: (name) => `🐾 ${name} has fully revived (2-turn system)`,
+        rewardPassiveHealSingle: (name, heal) => `🩹 ${name} recovered +${heal} HP while moving`,
+        rewardPassiveHealSummary: (preview, total) => `🩹 Travel recovery: ${preview} | Total +${total} HP`
       },
       ko: {
         statusLabel: '상태',
@@ -481,7 +505,15 @@ function createGlobalLanguageResources(deps = {}) {
         sectionWorldEvents: '📢 세계 이벤트',
         lastChoice: '📍 이전 선택',
         sectionPrevStory: '📜 이전 스토리',
-        sectionUpcomingChoices: '🆕 곧 갱신될 선택지'
+        sectionUpcomingChoices: '🆕 곧 갱신될 선택지',
+        turnMoved: (from, to) => `🧭 이번 턴 이동: ${from} → ${to}`,
+        rewardGoldDelta: (gold) => `💰 +${gold} Rns 토큰`,
+        rewardWantedLevel: (level) => `⚠️ 수배 레벨: ${level}`,
+        rewardSoldCount: (count) => `🏪 ${count}개 판매 완료`,
+        rewardItemGain: (item) => `📦 ${item} 획득`,
+        rewardPetRevived: (name) => `🐾 ${name} 부활 완료 (2턴 시스템)`,
+        rewardPassiveHealSingle: (name, heal) => `🩹 ${name} 이동 중 +${heal} HP 회복`,
+        rewardPassiveHealSummary: (preview, total) => `🩹 이동 회복: ${preview}｜총 +${total} HP`
       }
     },
 
@@ -601,17 +633,127 @@ function createGlobalLanguageResources(deps = {}) {
     mapRenderLegendLabels: {
       'zh-TW': { you: '目前位置', portal: '主傳送門', city: '城市', forest: '森林' },
       'zh-CN': { you: '目前位置', portal: '主传送门', city: '城市', forest: '森林' },
-      en: { you: 'You', portal: 'Portal Hub', city: 'City', forest: 'Forest' }
+      en: { you: 'You', portal: 'Portal Hub', city: 'City', forest: 'Forest' },
+      ko: { you: '현재 위치', portal: '주 포털', city: '도시', forest: '숲' }
     },
 
     // Used by: modules/systems/map/map-render-utils.js
     mapRegionNames: {
-      '北境高原': { 'zh-TW': '北境高原', 'zh-CN': '北境高原', en: 'Northern Highlands' },
-      '中原核心': { 'zh-TW': '中原核心', 'zh-CN': '中原核心', en: 'Central Core' },
-      '西域沙海': { 'zh-TW': '西域沙海', 'zh-CN': '西域沙海', en: 'Western Sandsea' },
-      '南疆水網': { 'zh-TW': '南疆水網', 'zh-CN': '南疆水网', en: 'Southern Waterways' },
-      '群島航線': { 'zh-TW': '群島航線', 'zh-CN': '群岛航线', en: 'Archipelago Routes' },
-      '隱秘深域': { 'zh-TW': '隱秘深域', 'zh-CN': '隐秘深域', en: 'Hidden Deep Zone' }
+      '北境高原': { 'zh-TW': '北境高原', 'zh-CN': '北境高原', en: 'Northern Highlands', ko: '북부 고원' },
+      '中原核心': { 'zh-TW': '中原核心', 'zh-CN': '中原核心', en: 'Central Core', ko: '중앙 핵심권' },
+      '西域沙海': { 'zh-TW': '西域沙海', 'zh-CN': '西域沙海', en: 'Western Sandsea', ko: '서부 사해' },
+      '南疆水網': { 'zh-TW': '南疆水網', 'zh-CN': '南疆水网', en: 'Southern Waterways', ko: '남부 수로지대' },
+      '群島航線': { 'zh-TW': '群島航線', 'zh-CN': '群岛航线', en: 'Archipelago Routes', ko: '군도 항로' },
+      '隱秘深域': { 'zh-TW': '隱秘深域', 'zh-CN': '隐秘深域', en: 'Hidden Deep Zone', ko: '은밀 심역' }
+    },
+
+    locationDisplayNames: {
+      '河港鎮': { 'zh-TW': '河港鎮', 'zh-CN': '河港镇', en: 'Riverport Town', ko: '하항진' },
+      '襄陽城': { 'zh-TW': '襄陽城', 'zh-CN': '襄阳城', en: 'Xiangyang City', ko: '양양성' },
+      '龍脊山道': { 'zh-TW': '龍脊山道', 'zh-CN': '龙脊山道', en: 'Dragonspine Pass', ko: '용척산도' },
+      '洛陽城': { 'zh-TW': '洛陽城', 'zh-CN': '洛阳城', en: 'Luoyang City', ko: '낙양성' },
+      '墨林古道': { 'zh-TW': '墨林古道', 'zh-CN': '墨林古道', en: 'Inkwood Ancient Trail', ko: '묵림고도' },
+      '大都': { 'zh-TW': '大都', 'zh-CN': '大都', en: 'Grand Capital', ko: '대도' },
+      '皇城內廷': { 'zh-TW': '皇城內廷', 'zh-CN': '皇城内廷', en: 'Inner Imperial Court', ko: '황성 내정' },
+      '青石關': { 'zh-TW': '青石關', 'zh-CN': '青石关', en: 'Bluestone Pass', ko: '청석관' },
+      '敦煌': { 'zh-TW': '敦煌', 'zh-CN': '敦煌', en: 'Dunhuang', ko: '돈황' },
+      '喀什爾': { 'zh-TW': '喀什爾', 'zh-CN': '喀什尔', en: 'Kashir', ko: '카시르' },
+      '赤沙前哨': { 'zh-TW': '赤沙前哨', 'zh-CN': '赤沙前哨', en: 'Redsand Outpost', ko: '적사 전초기지' },
+      '砂輪遺站': { 'zh-TW': '砂輪遺站', 'zh-CN': '砂轮遗站', en: 'Sandwheel Ruin Station', ko: '사륜 유적역' },
+      '鳴沙廢城': { 'zh-TW': '鳴沙廢城', 'zh-CN': '鸣沙废城', en: 'Singing Sands Ruincity', ko: '명사 폐성' },
+      '廣州': { 'zh-TW': '廣州', 'zh-CN': '广州', en: 'Guangzhou', ko: '광저우' },
+      '海潮碼頭': { 'zh-TW': '海潮碼頭', 'zh-CN': '海潮码头', en: 'Tidewharf Pier', ko: '해조 부두' },
+      '鏡湖渡口': { 'zh-TW': '鏡湖渡口', 'zh-CN': '镜湖渡口', en: 'Mirrorlake Ferry', ko: '경호 나루터' },
+      '大理': { 'zh-TW': '大理', 'zh-CN': '大理', en: 'Dali', ko: '대리' },
+      '雲棧茶嶺': { 'zh-TW': '雲棧茶嶺', 'zh-CN': '云栈茶岭', en: 'Cloudridge Tea Range', ko: '운잔 차령' },
+      '南疆苗疆': { 'zh-TW': '南疆苗疆', 'zh-CN': '南疆苗疆', en: 'Southern Miao Frontier', ko: '남강 묘강' },
+      '霧雨古祭壇': { 'zh-TW': '霧雨古祭壇', 'zh-CN': '雾雨古祭坛', en: 'Mistrain Ancient Altar', ko: '무우 고제단' },
+      '草原部落': { 'zh-TW': '草原部落', 'zh-CN': '草原部落', en: 'Grassland Tribe', ko: '초원 부족' },
+      '霜狼哨站': { 'zh-TW': '霜狼哨站', 'zh-CN': '霜狼哨站', en: 'Frostwolf Outpost', ko: '상랑 초소' },
+      '雪白山莊': { 'zh-TW': '雪白山莊', 'zh-CN': '雪白山庄', en: 'Snowwhite Manor', ko: '설백 산장' },
+      '玄冰裂谷': { 'zh-TW': '玄冰裂谷', 'zh-CN': '玄冰裂谷', en: 'Blackice Rift', ko: '현빙 열곡' },
+      '星潮港': { 'zh-TW': '星潮港', 'zh-CN': '星潮港', en: 'Starsea Port', ko: '성조항' },
+      '珊瑚環礁': { 'zh-TW': '珊瑚環礁', 'zh-CN': '珊瑚环礁', en: 'Coral Atoll', ko: '산호 환초' },
+      '桃花島': { 'zh-TW': '桃花島', 'zh-CN': '桃花岛', en: 'Peach Blossom Isle', ko: '도화도' },
+      '潮汐試煉島': { 'zh-TW': '潮汐試煉島', 'zh-CN': '潮汐试炼岛', en: 'Tidal Trial Isle', ko: '조석 시련도' },
+      '蓬萊觀測島': { 'zh-TW': '蓬萊觀測島', 'zh-CN': '蓬莱观测岛', en: 'Penglai Observation Isle', ko: '봉래 관측도' },
+      '光明頂': { 'zh-TW': '光明頂', 'zh-CN': '光明顶', en: 'Brightpeak Summit', ko: '광명정' },
+      '無光礦坑': { 'zh-TW': '無光礦坑', 'zh-CN': '无光矿坑', en: 'Lightless Mine', ko: '무광 광산' },
+      '黑木崖': { 'zh-TW': '黑木崖', 'zh-CN': '黑木崖', en: 'Blackwood Cliff', ko: '흑목애' },
+      '天機遺都': { 'zh-TW': '天機遺都', 'zh-CN': '天机遗都', en: 'Celestial Mechanism Ruins', ko: '천기 유도' },
+      '死亡之海': { 'zh-TW': '死亡之海', 'zh-CN': '死亡之海', en: 'Sea of Death', ko: '사망의 해' }
+    },
+
+    npcDisplayNames: {
+      '灰帳記錄員': { 'zh-TW': '灰帳記錄員', 'zh-CN': '灰账记录员', en: 'Gray Ledger Recorder', ko: '회장 기록원' },
+      '轉運站調度員': { 'zh-TW': '轉運站調度員', 'zh-CN': '转运站调度员', en: 'Transit Dispatcher', ko: '환적장 조정원' },
+      '工坊試樣師': { 'zh-TW': '工坊試樣師', 'zh-CN': '工坊试样师', en: 'Workshop Assayer', ko: '공방 시료 감정사' },
+      '滲透聯絡員': { 'zh-TW': '滲透聯絡員', 'zh-CN': '渗透联络员', en: 'Infiltration Liaison', ko: '잠입 연락원' },
+      '四巨頭': { 'zh-TW': '四巨頭', 'zh-CN': '四巨头', en: 'Four Commanders', ko: '사대 거두' },
+      '季衡': { 'zh-TW': '季衡', 'zh-CN': '季衡', en: 'Ji Heng', ko: '계형' },
+      '牡丹': { 'zh-TW': '牡丹', 'zh-CN': '牡丹', en: 'Peony', ko: '모란' },
+      '小周': { 'zh-TW': '小周', 'zh-CN': '小周', en: 'Zhou', ko: '샤오저우' },
+      '老船伕': { 'zh-TW': '老船伕', 'zh-CN': '老船夫', en: 'Old Boatman', ko: '늙은 뱃사공' },
+      '聯絡員': { 'zh-TW': '聯絡員', 'zh-CN': '联络员', en: 'Liaison', ko: '연락원' }
+    },
+
+    enemyDisplayNames: {
+      '可達鴨': { 'zh-TW': '可達鴨', 'zh-CN': '可达鸭', en: 'Psyduck', ko: '고라파덕' },
+      '可达鸭': { 'zh-TW': '可達鴨', 'zh-CN': '可达鸭', en: 'Psyduck', ko: '고라파덕' },
+      '哥布林': { 'zh-TW': '哥布林', 'zh-CN': '哥布林', en: 'Goblin', ko: '고블린' },
+      '神秘男子': { 'zh-TW': '神秘男子', 'zh-CN': '神秘男子', en: 'Mysterious Man', ko: '수수께끼의 남자' },
+      '輕聲道': { 'zh-TW': '輕聲道', 'zh-CN': '轻声道', en: 'Whisperpath', ko: '작게 속삭인 자' }
+    },
+
+    worldEventTemplates: {
+      'zh-TW': {
+        battle_start: ({ actor, location, target, impact }) => `⚔️ ${actor} 在${location}與 ${target} 爆發交鋒。${impact ? ` ${impact}` : ''}`,
+        battle_win: ({ actor, location, target, impact }) => `🏆 ${actor} 在${location}擊敗了 ${target}。${impact ? ` ${impact}` : ''}`,
+        battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor} 在${location}成功脫離 ${target} 的追擊。${impact ? ` ${impact}` : ''}`,
+        battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor} 在${location}嘗試逃離 ${target} 失敗，局勢惡化。${impact ? ` ${impact}` : ''}`,
+        pet_down: ({ actor, location, target, impact }) => `💥 ${actor} 的夥伴在${location}被 ${target} 重創倒下。${impact ? ` ${impact}` : ''}`,
+        player_down: ({ actor, location, target, impact }) => `☠️ ${actor} 在${location}與 ${target} 一戰中敗亡。${impact ? ` ${impact}` : ''}`,
+        npc_respawn: ({ target }) => `✨ ${target} 康復歸來！`,
+        npc_death: ({ target, actor, impact }) => `💀 NPC ${target} 已被 ${actor} 擊殺！${impact ? ` ${impact}` : ''}`,
+        monster_death: ({ target, actor, impact }) => `💀 怪物 ${target} 已被 ${actor} 擊殺！${impact ? ` ${impact}` : ''}`,
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} 被 ${actor} 擊退，已撤離現場。${impact ? ` ${impact}` : ''}`
+      },
+      'zh-CN': {
+        battle_start: ({ actor, location, target, impact }) => `⚔️ ${actor} 在${location}与 ${target} 爆发交锋。${impact ? ` ${impact}` : ''}`,
+        battle_win: ({ actor, location, target, impact }) => `🏆 ${actor} 在${location}击败了 ${target}。${impact ? ` ${impact}` : ''}`,
+        battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor} 在${location}成功脱离 ${target} 的追击。${impact ? ` ${impact}` : ''}`,
+        battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor} 在${location}尝试逃离 ${target} 失败，局势恶化。${impact ? ` ${impact}` : ''}`,
+        pet_down: ({ actor, location, target, impact }) => `💥 ${actor} 的伙伴在${location}被 ${target} 重创倒下。${impact ? ` ${impact}` : ''}`,
+        player_down: ({ actor, location, target, impact }) => `☠️ ${actor} 在${location}与 ${target} 一战中败亡。${impact ? ` ${impact}` : ''}`,
+        npc_respawn: ({ target }) => `✨ ${target} 康复归来！`,
+        npc_death: ({ target, actor, impact }) => `💀 NPC ${target} 已被 ${actor} 击杀！${impact ? ` ${impact}` : ''}`,
+        monster_death: ({ target, actor, impact }) => `💀 怪物 ${target} 已被 ${actor} 击杀！${impact ? ` ${impact}` : ''}`,
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} 被 ${actor} 击退，已撤离现场。${impact ? ` ${impact}` : ''}`
+      },
+      en: {
+        battle_start: ({ actor, location, target, impact }) => `⚔️ ${actor} clashed with ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
+        battle_win: ({ actor, location, target, impact }) => `🏆 ${actor} defeated ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
+        battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor} escaped ${target}'s pursuit at ${location}.${impact ? ` ${impact}` : ''}`,
+        battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor} failed to escape ${target} at ${location}, and the situation worsened.${impact ? ` ${impact}` : ''}`,
+        pet_down: ({ actor, location, target, impact }) => `💥 ${actor}'s partner was knocked down by ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
+        player_down: ({ actor, location, target, impact }) => `☠️ ${actor} was defeated by ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
+        npc_respawn: ({ target }) => `✨ ${target} has recovered and returned!`,
+        npc_death: ({ target, actor, impact }) => `💀 NPC ${target} was killed by ${actor}.${impact ? ` ${impact}` : ''}`,
+        monster_death: ({ target, actor, impact }) => `💀 Monster ${target} was killed by ${actor}.${impact ? ` ${impact}` : ''}`,
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} was driven off by ${actor}.${impact ? ` ${impact}` : ''}`
+      },
+      ko: {
+        battle_start: ({ actor, location, target, impact }) => `⚔️ ${actor}이(가) ${location}에서 ${target}와 충돌했다.${impact ? ` ${impact}` : ''}`,
+        battle_win: ({ actor, location, target, impact }) => `🏆 ${actor}이(가) ${location}에서 ${target}을(를) 쓰러뜨렸다.${impact ? ` ${impact}` : ''}`,
+        battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor}이(가) ${location}에서 ${target}의 추격을 따돌렸다.${impact ? ` ${impact}` : ''}`,
+        battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor}이(가) ${location}에서 ${target}에게서 벗어나지 못했고 국면이 악화됐다.${impact ? ` ${impact}` : ''}`,
+        pet_down: ({ actor, location, target, impact }) => `💥 ${actor}의 동료가 ${location}에서 ${target}에게 크게 당해 쓰러졌다.${impact ? ` ${impact}` : ''}`,
+        player_down: ({ actor, location, target, impact }) => `☠️ ${actor}이(가) ${location}에서 ${target}에게 패배했다.${impact ? ` ${impact}` : ''}`,
+        npc_respawn: ({ target }) => `✨ ${target}이(가) 회복되어 돌아왔다!`,
+        npc_death: ({ target, actor, impact }) => `💀 NPC ${target}이(가) ${actor}에게 쓰러졌다.${impact ? ` ${impact}` : ''}`,
+        monster_death: ({ target, actor, impact }) => `💀 몬스터 ${target}이(가) ${actor}에게 쓰러졌다.${impact ? ` ${impact}` : ''}`,
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target}이(가) ${actor}에게 밀려 현장에서 이탈했다.${impact ? ` ${impact}` : ''}`
+      }
     },
 
     // Used by: modules/systems/ui/player-panel-utils.js
@@ -1245,7 +1387,6 @@ function createGlobalLanguageResources(deps = {}) {
     const code = normalizeLang(lang);
     if (String(section || '') === 'mapText') {
       const rows = resolveMapText(code, context || {});
-      if (code === 'ko') return localizeValueToKorean(rows);
       return rows;
     }
     const rows = RESOURCES[String(section || '')] || null;
@@ -1271,12 +1412,112 @@ function createGlobalLanguageResources(deps = {}) {
     return row[code] || row['zh-TW'] || source;
   }
 
+  function getLocalizedNamedValue(section = '', source = '', lang = 'zh-TW') {
+    const key = String(source || '').trim();
+    if (!key) return '';
+    const rows = RESOURCES[String(section || '')];
+    const row = rows && typeof rows === 'object' ? rows[key] : null;
+    const code = normalizeLang(lang);
+    if (!row || typeof row !== 'object') {
+      if (code === 'ko') return translateTextToKo(key) || key;
+      if (code === 'zh-CN') return CONTENT_LOCALIZATION.localizeScriptOnly(key, 'zh-CN');
+      if (code === 'zh-TW') return CONTENT_LOCALIZATION.localizeScriptOnly(key, 'zh-TW');
+      return key;
+    }
+    if (code === 'ko') return row.ko || translateTextToKo(row.en || row['zh-TW'] || key) || key;
+    if (code === 'zh-CN') return row['zh-CN'] || CONTENT_LOCALIZATION.localizeScriptOnly(row['zh-TW'] || key, 'zh-CN');
+    if (code === 'zh-TW') return row['zh-TW'] || CONTENT_LOCALIZATION.localizeScriptOnly(row['zh-CN'] || key, 'zh-TW');
+    return row[code] || row['zh-TW'] || key;
+  }
+
+  function getLocationName(location = '', lang = 'zh-TW') {
+    return getLocalizedNamedValue('locationDisplayNames', location, lang);
+  }
+
+  function getNpcName(name = '', lang = 'zh-TW') {
+    return getLocalizedNamedValue('npcDisplayNames', name, lang);
+  }
+
+  function getEnemyName(name = '', lang = 'zh-TW') {
+    return getLocalizedNamedValue('enemyDisplayNames', name, lang);
+  }
+
+  function buildKnownTextReplacementRows(lang = 'zh-TW') {
+    const rows = [];
+    const sections = ['locationDisplayNames', 'npcDisplayNames', 'enemyDisplayNames', 'mapRegionNames'];
+    for (const section of sections) {
+      const table = RESOURCES[section];
+      if (!table || typeof table !== 'object') continue;
+      for (const [canonical, row] of Object.entries(table)) {
+        const localized = section === 'mapRegionNames'
+          ? getRegionName(canonical, lang)
+          : getLocalizedNamedValue(section, canonical, lang);
+        if (!localized || localized === canonical) continue;
+        rows.push([canonical, localized]);
+        if (row && typeof row === 'object') {
+          const zhCn = String(row['zh-CN'] || '').trim();
+          const en = String(row.en || '').trim();
+          if (zhCn && zhCn !== canonical && zhCn !== localized) rows.push([zhCn, localized]);
+          if (en && en !== canonical && en !== localized) rows.push([en, localized]);
+        }
+      }
+    }
+    return rows.sort((a, b) => String(b[0] || '').length - String(a[0] || '').length);
+  }
+
+  function replaceKnownDisplayTokens(text = '', lang = 'zh-TW') {
+    let output = String(text || '');
+    if (!output) return '';
+    const rows = buildKnownTextReplacementRows(lang);
+    for (const [source, localized] of rows) {
+      if (!source || !localized || source === localized) continue;
+      output = output.split(source).join(localized);
+    }
+    return output;
+  }
+
+  function localizeDisplayText(text = '', lang = 'zh-TW') {
+    const source = String(text || '');
+    if (!source) return '';
+    const code = normalizeLang(lang);
+    let output = source;
+    if (code === 'ko') {
+      output = /[가-힣]/u.test(source) ? source : (translateTextToKo(source) || source);
+    } else if (code === 'zh-CN' || code === 'zh-TW') {
+      output = CONTENT_LOCALIZATION.localizeScriptOnly(source, code);
+    }
+    return replaceKnownDisplayTokens(output, code);
+  }
+
+  function formatWorldEvent(entry = null, lang = 'zh-TW') {
+    if (!entry) return '';
+    const code = normalizeLang(lang);
+    const type = String(entry?.type || '').trim();
+    const templates = RESOURCES.worldEventTemplates?.[code] || RESOURCES.worldEventTemplates?.['zh-TW'] || {};
+    const actor = localizeDisplayText(String(entry?.actor || '').trim(), code) || localizeDisplayText('冒險者', code);
+    const location = getLocationName(String(entry?.location || '').trim(), code) || localizeDisplayText(String(entry?.location || '').trim(), code);
+    const rawTarget = String(entry?.target || '').trim();
+    const target = getEnemyName(rawTarget, code) || getNpcName(rawTarget, code) || getLocationName(rawTarget, code) || localizeDisplayText(rawTarget, code);
+    const impact = localizeDisplayText(String(entry?.impact || '').trim(), code).slice(0, 80);
+    if (type && typeof templates[type] === 'function' && (actor || target || location)) {
+      return String(templates[type]({ actor, location, target, impact }) || '').trim();
+    }
+    const rawMessage = String(entry?.message || entry?.rawMessage || '').trim();
+    return localizeDisplayText(rawMessage, code);
+  }
+
   return {
     RESOURCES,
     normalizeLang,
     getSection,
     getSectionAll,
-    getRegionName
+    getRegionName,
+    getLocationName,
+    getNpcName,
+    getEnemyName,
+    replaceKnownDisplayTokens,
+    localizeDisplayText,
+    formatWorldEvent
   };
 }
 

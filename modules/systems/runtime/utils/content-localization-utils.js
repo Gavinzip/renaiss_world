@@ -22,8 +22,8 @@ const SKILL_CHIP_PREFIX = Object.freeze({
 const ITEM_LOCALIZATION_LANGS = Object.freeze(['zh-TW', 'zh-CN', 'ko', 'en']);
 
 const COMMON_ITEM_TRANSLATIONS = Object.freeze({
-  '乾糧一包': { 'zh-TW': '乾糧一包', 'zh-CN': '干粮一包', en: 'Ration Pack' },
-  '水囊': { 'zh-TW': '水囊', 'zh-CN': '水囊', en: 'Water Flask' }
+  '乾糧一包': { 'zh-TW': '乾糧一包', 'zh-CN': '干粮一包', ko: '건량 한 꾸러미', en: 'Ration Pack' },
+  '水囊': { 'zh-TW': '水囊', 'zh-CN': '水囊', ko: '물주머니', en: 'Water Flask' }
 });
 
 const ITEM_NAME_EN_TRANSLATIONS = Object.freeze({
@@ -1484,11 +1484,18 @@ function buildItemNamePack(raw = null) {
 
   const common = COMMON_ITEM_TRANSLATIONS[baseName];
   if (common) {
-    return {
+    return normalizeLocalizedTextMap({
       'zh-TW': String(common['zh-TW'] || baseName),
       'zh-CN': String(common['zh-CN'] || localizeScriptOnly(baseName, 'zh-CN')),
+      ko: String(common.ko || ''),
       en: String(common.en || baseName)
-    };
+    }, {}, {
+      fallbackText: String(common['zh-TW'] || baseName),
+      translateKo: translateItemNameToKo,
+      koFallback: '미번역 아이템',
+      translateEn: translateItemNameToEn,
+      enFallback: 'Untranslated Item'
+    });
   }
 
   const chipMoveName = stripSkillChipPrefix(baseName);

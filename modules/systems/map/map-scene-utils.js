@@ -19,6 +19,9 @@ function createMapSceneUtils(deps = {}) {
     getLocationProfile = () => null,
     getLocationStoryContext = () => '',
     joinByLang = () => '',
+    getLocationDisplayName = (value) => String(value || ''),
+    getRegionDisplayName = (value) => String(value || ''),
+    localizeDisplayText = (value) => String(value || ''),
     renderRegionMapImageBuffer = async () => ({ buffer: null, error: '' }),
     formatPortalDestinationDisplay = (v) => String(v || ''),
     getLocationPortalHub = () => '',
@@ -130,23 +133,24 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     : '';
   const pageSummary = pageLocations.map((loc) => {
     const profile = typeof getLocationProfile === 'function' ? getLocationProfile(loc) : null;
-    const region = profile?.region || tx.mapNoRegion;
+    const region = getRegionDisplayName(profile?.region || '', uiLang) || profile?.region || tx.mapNoRegion;
+    const locationLabel = getLocationDisplayName(loc, uiLang) || loc;
     const difficulty = Number(profile?.difficulty || 3);
     const marker = loc === player.location ? '◉' : '•';
     if (!useWideAnsiMap) {
-      return `${marker} ${loc}（${region}｜D${difficulty}）`;
+      return `${marker} ${locationLabel}（${region}｜D${difficulty}）`;
     }
     const nearby = Array.isArray(profile?.nearby) && profile.nearby.length > 0
-      ? joinByLang(profile.nearby.slice(0, 2), uiLang)
+      ? joinByLang(profile.nearby.slice(0, 2).map((item) => localizeDisplayText(item, uiLang)), uiLang)
       : tx.mapNoNearby;
-    return `${marker} ${loc}（${region}｜D${difficulty}）${tx.mapInfoNearbyPrefix}：${nearby}`;
+    return `${marker} ${locationLabel}（${region}｜D${difficulty}）${tx.mapInfoNearbyPrefix}：${nearby}`;
   }).join('\n');
   const compactMap = useWideAnsiMap
     ? ''
     : `**${tx.mapSectionPageMap}**\n${pageSummary || tx.mapNoCities}`;
   const locationSummary = Array.isArray(regionSnapshot?.locations)
     ? regionSnapshot.locations
-      .map((row) => `${row.isCurrent ? '◉' : (row.isPortalHub ? '◎' : '●')} ${row.location}`)
+      .map((row) => `${row.isCurrent ? '◉' : (row.isPortalHub ? '◎' : '●')} ${getLocationDisplayName(row.location, uiLang) || row.location}`)
       .join(uiLang === 'en' || uiLang === 'ko' ? ', ' : '、')
     : '';
   const mapBlock = useWideAnsiMap
@@ -167,13 +171,13 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
     ? tx.mapDisplayImage
     : (useWideAnsiMap ? (tx.mapDisplayAscii || tx.mapDisplayAsciiFallback) : tx.mapDisplayTextFallback);
   const nearbyPlaces = Array.isArray(currentProfile?.nearby) && currentProfile.nearby.length > 0
-    ? joinByLang(currentProfile.nearby.slice(0, 4), uiLang)
+    ? joinByLang(currentProfile.nearby.slice(0, 4).map((item) => localizeDisplayText(item, uiLang)), uiLang)
     : tx.mapNoNearby;
   const nearbyLandmarks = Array.isArray(currentProfile?.landmarks) && currentProfile.landmarks.length > 0
-    ? joinByLang(currentProfile.landmarks.slice(0, 3), uiLang)
+    ? joinByLang(currentProfile.landmarks.slice(0, 3).map((item) => localizeDisplayText(item, uiLang)), uiLang)
     : tx.mapNoNearby;
   const nearbyResources = Array.isArray(currentProfile?.resources) && currentProfile.resources.length > 0
-    ? joinByLang(currentProfile.resources.slice(0, 4), uiLang)
+    ? joinByLang(currentProfile.resources.slice(0, 4).map((item) => localizeDisplayText(item, uiLang)), uiLang)
     : tx.mapNoNearby;
   const nearbyPortalsText = portalAccess.crossRegionUnlocked
     ? (
@@ -182,15 +186,15 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
         : tx.mapNoPortal
     )
     : tx.portalDesc3Locked;
-  const navTargetText = String(player.navigationTarget || '').trim() || tx.mapNoNavTarget;
-  const currentLocationText = player.location || tx.mapNoProfile;
-  const regionNameText = regionSnapshot?.regionName || currentProfile?.region || tx.mapNoRegion;
+  const navTargetText = getLocationDisplayName(String(player.navigationTarget || '').trim(), uiLang) || String(player.navigationTarget || '').trim() || tx.mapNoNavTarget;
+  const currentLocationText = getLocationDisplayName(player.location || '', uiLang) || player.location || tx.mapNoProfile;
+  const regionNameText = getRegionDisplayName(regionSnapshot?.regionName || currentProfile?.region || '', uiLang) || regionSnapshot?.regionName || currentProfile?.region || tx.mapNoRegion;
   const difficultyText = currentProfile ? `D${currentProfile.difficulty}` : tx.mapNoProfile;
   const portalHubText = typeof getLocationPortalHub === 'function'
-    ? (getLocationPortalHub(player.location || '') || tx.mapNoPortalHub)
+    ? (getLocationDisplayName(getLocationPortalHub(player.location || '') || '', uiLang) || getLocationPortalHub(player.location || '') || tx.mapNoPortalHub)
     : tx.mapNoPortalHub;
   const mainPortalHubList = typeof getRegionPortalHubs === 'function' ? getRegionPortalHubs() : [];
-  const mainPortalHubText = joinByLang(mainPortalHubList, uiLang) || tx.mapNoPortalHub;
+  const mainPortalHubText = joinByLang(mainPortalHubList.map((loc) => getLocationDisplayName(loc, uiLang) || loc), uiLang) || tx.mapNoPortalHub;
   const freeExploreText = islandCompleted ? tx.mapFreeExploreOpen : tx.mapFreeExploreLocked;
   const mapDesc = hasRenderedMapImage
     ? (
@@ -225,7 +229,7 @@ async function showIslandMap(interaction, user, page = 0, notice = '') {
       `\n- ${tx.mapFieldLandmarks}：${nearbyLandmarks}` +
       `\n- ${tx.mapFieldResources}：${nearbyResources}` +
       `\n- ${tx.mapFieldPortalTo}：${nearbyPortalsText}` +
-      (locationContext ? `\n**${tx.mapSectionAreaIntel}：** ${locationContext}` : '') +
+      (locationContext ? `\n**${tx.mapSectionAreaIntel}：** ${localizeDisplayText(locationContext, uiLang)}` : '') +
       `\n**${tx.mapFieldMapPages}：** ${safePage + 1}/${maxPage + 1}` +
       (locationSummary ? `\n\n**${tx.mapSectionRegionCities}**\n${locationSummary}` : '') +
       (!hasRenderedMapImage && useWideAnsiMap && pageSummary ? `\n\n**${tx.mapSectionRegionInfo}**\n${pageSummary}` : '') +
@@ -328,7 +332,7 @@ async function showPortalSelection(interaction, user) {
     .setTitle(tx.portalTitle)
     .setColor(0x7b68ee)
     .setDescription(
-      `${tx.portalDesc1} ${player.location} ${tx.portalDesc2}\n` +
+      `${tx.portalDesc1} ${getLocationDisplayName(player.location || '', uiLang) || player.location} ${tx.portalDesc2}\n` +
       `${tx.portalDesc3Open}\n` +
       `${tx.portalDescRule || ''}\n` +
       `${tx.portalDesc4}\n\n` +
@@ -388,7 +392,7 @@ async function showTeleportDeviceSelection(interaction, user) {
       const isCurrent = String(loc || '').trim() === String(player.location || '').trim();
       return new ButtonBuilder()
         .setCustomId(`device_jump_${absoluteIdx}`)
-        .setLabel(String(loc || '').substring(0, 12))
+        .setLabel(String(getLocationDisplayName(loc || '', uiLang) || loc || '').substring(0, 12))
         .setStyle(isCurrent ? ButtonStyle.Success : ButtonStyle.Primary);
     });
     rows.push(new ActionRowBuilder().addComponents(buttons));
@@ -405,7 +409,7 @@ async function showTeleportDeviceSelection(interaction, user) {
     .setColor(0x22c55e)
     .setDescription(
       `${tx.deviceDesc(stockInfo.count, formatTeleportDeviceRemaining(stockInfo.soonestRemainingMs))}\n\n` +
-      destinations.map((loc, idx) => `${idx + 1}. ${loc}`).join('\n')
+      destinations.map((loc, idx) => `${idx + 1}. ${getLocationDisplayName(loc, uiLang) || loc}`).join('\n')
     );
 
   await deferComponentIfNeeded(interaction, 'showTeleportDeviceSelection');

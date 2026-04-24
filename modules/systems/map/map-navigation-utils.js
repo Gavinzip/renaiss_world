@@ -3,6 +3,8 @@ function createMapNavigationUtils(deps = {}) {
     getMapText = () => ({}),
     normalizeLangCode = (lang = 'zh-TW') => String(lang || 'zh-TW'),
     getPlayerUILang = () => 'zh-TW',
+    getLocationDisplayName = (location = '') => String(location || ''),
+    getRegionDisplayName = (region = '') => String(region || ''),
     getLocationProfile = () => null,
     getLocationPortalHub = (location = '') => String(location || '').trim(),
     getPortalDestinations = () => [],
@@ -52,7 +54,7 @@ function createMapNavigationUtils(deps = {}) {
       return tx.mapPortalGuideLocked || tx.mapPortalGuide(tx.mapNoPortal);
     }
     const preview = access.destinations.length > 0
-      ? joinByLang(access.destinations.slice(0, 3), uiLang)
+      ? joinByLang(access.destinations.slice(0, 3).map((loc) => getLocationDisplayName(loc, uiLang) || String(loc || '').trim()), uiLang)
       : tx.mapNoPortal;
     return tx.mapPortalGuide(preview);
   }
@@ -61,10 +63,12 @@ function createMapNavigationUtils(deps = {}) {
     const uiLang = normalizeLangCode(lang || 'zh-TW');
     const name = String(location || '').trim();
     if (!name) return '';
+    const localizedName = getLocationDisplayName(name, uiLang) || name;
     const profile = typeof getLocationProfile === 'function' ? getLocationProfile(name) : null;
     const region = String(profile?.region || '').trim();
-    if (!region) return name;
-    return uiLang === 'en' || uiLang === 'ko' ? `${name} (${region})` : `${name}（${region}）`;
+    if (!region) return localizedName;
+    const localizedRegion = getRegionDisplayName(region, uiLang) || region;
+    return uiLang === 'en' || uiLang === 'ko' ? `${localizedName} (${localizedRegion})` : `${localizedName}（${localizedRegion}）`;
   }
 
   function getRegionNameByLocation(location = '') {

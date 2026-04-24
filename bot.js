@@ -438,6 +438,10 @@ const GLOBAL_LANGUAGE_RESOURCES = createGlobalLanguageResources({
 const getLanguageSection = (section, lang = 'zh-TW', context = null) =>
   GLOBAL_LANGUAGE_RESOURCES.getSection(section, lang, context);
 const getLanguageRegionName = (regionName, lang = 'zh-TW') => GLOBAL_LANGUAGE_RESOURCES.getRegionName(regionName, lang);
+const getLanguageLocationName = (location, lang = 'zh-TW') => GLOBAL_LANGUAGE_RESOURCES.getLocationName(location, lang);
+const getLanguageNpcName = (name, lang = 'zh-TW') => GLOBAL_LANGUAGE_RESOURCES.getNpcName(name, lang);
+const localizeDisplayText = (text, lang = 'zh-TW') => GLOBAL_LANGUAGE_RESOURCES.localizeDisplayText(text, lang);
+const formatWorldEventText = (entry, lang = 'zh-TW') => GLOBAL_LANGUAGE_RESOURCES.formatWorldEvent(entry, lang);
 const UI_LANGUAGE_UTILS = createUiLanguageUtils({
   configLanguage: CONFIG.LANGUAGE,
   ButtonBuilder,
@@ -550,6 +554,10 @@ const MAP_ONBOARDING_RUNTIME_UTILS = initMapOnboardingRuntimeUtils({
   getLocationProfile,
   getLocationStoryContext,
   getMapText: (...args) => getMapText(...args),
+  getRegionDisplayName: (...args) => getLanguageRegionName(...args),
+  getLocationDisplayName: (...args) => getLanguageLocationName(...args),
+  getNpcDisplayName: (...args) => getLanguageNpcName(...args),
+  localizeDisplayText: (...args) => localizeDisplayText(...args),
   canFreeRoamCurrentRegion: (...args) => canFreeRoamCurrentRegion(...args),
   normalizeMapViewMode: (...args) => normalizeMapViewMode(...args),
   getPlayerUILang: (...args) => getPlayerUILang(...args),
@@ -573,6 +581,9 @@ const MAP_ONBOARDING_RUNTIME_UTILS = initMapOnboardingRuntimeUtils({
   normalizePetName: (...args) => normalizePetName(...args),
   rollStarterMoveForElement: (...args) => rollStarterMoveForElement(...args),
   getLanguageSection: (...args) => getLanguageSection(...args),
+  getLocationDisplayName: (...args) => getLanguageLocationName(...args),
+  getNpcDisplayName: (...args) => getLanguageNpcName(...args),
+  localizeDisplayText: (...args) => localizeDisplayText(...args),
   LOCATION_ARC_COMPLETE_TURNS,
   PORTAL_GUIDE_MIN_TURNS,
   PORTAL_RESHOW_COOLDOWN_TURNS,
@@ -1039,6 +1050,10 @@ const STORY_RUNTIME_UTILS = initStoryRuntimeUtils({
   getLocationPortalHub: (...args) => getLocationPortalHub(...args),
   normalizeLangCode: (...args) => normalizeLangCode(...args),
   getLanguageSection: (...args) => getLanguageSection(...args),
+  getLocationDisplayName: (...args) => getLanguageLocationName(...args),
+  getNpcDisplayName: (...args) => getLanguageNpcName(...args),
+  localizeDisplayText: (...args) => localizeDisplayText(...args),
+  formatWorldEventText: (...args) => formatWorldEventText(...args),
   formatPetHpWithRecovery: (...args) => formatPetHpWithRecovery(...args),
   getPetElementDisplayName: (...args) => getPetElementDisplayName(...args),
   normalizeComparableStoryText: (...args) => normalizeComparableStoryText(...args),
@@ -1416,6 +1431,9 @@ const RUNTIME_BASE_DEPS = {
   getSettingsText,
   getWorldIntroTemplate,
   getLanguageSection: (...args) => getLanguageSection(...args),
+  getLocationDisplayName: (...args) => getLanguageLocationName(...args),
+  getNpcDisplayName: (...args) => getLanguageNpcName(...args),
+  localizeDisplayText: (...args) => localizeDisplayText(...args),
   getPetCapacityForUser,
   ensureMentorSparRecord,
   buildSlotReels,

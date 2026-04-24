@@ -6,6 +6,7 @@ function createMapSelectUtils(deps = {}) {
     canFreeRoamCurrentRegion = () => false,
     ensurePlayerIslandState = () => {},
     getPlayerUILang = () => 'zh-TW',
+    getLocationDisplayName = (value = '') => String(value || ''),
     getMapText = () => ({
       mapNotFoundPlayer: '❌ 找不到角色。',
       mapExploreLockedNotice: '⚠️ 尚未解鎖。',
@@ -53,12 +54,12 @@ function createMapSelectUtils(deps = {}) {
       return true;
     }
     if (target === String(player.location || '')) {
-      await showIslandMap(interaction, user, 0, tx.mapAlreadyHereNotice(target));
+      await showIslandMap(interaction, user, 0, tx.mapAlreadyHereNotice(getLocationDisplayName(target, uiLang) || target));
       return true;
     }
     player.navigationTarget = target;
     CORE.savePlayer(player);
-    await showIslandMap(interaction, user, 0, tx.mapDestinationSetNotice(target));
+    await showIslandMap(interaction, user, 0, tx.mapDestinationSetNotice(getLocationDisplayName(target, uiLang) || target));
     return true;
   }
 
@@ -70,4 +71,3 @@ function createMapSelectUtils(deps = {}) {
 module.exports = {
   createMapSelectUtils
 };
-

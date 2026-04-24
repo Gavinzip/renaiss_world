@@ -1,3 +1,5 @@
+const { getLocalizedItemName } = require('../runtime/utils/global-language-resources');
+
 function createBattleManualFlowUtils(deps = {}) {
   const {
     CORE,
@@ -47,6 +49,10 @@ function createBattleManualFlowUtils(deps = {}) {
     showPetDefeatedTransition,
     clearOnlineFriendDuelTimer
   } = deps;
+
+  function getBattleLootDisplayName(battleLoot = null, lang = 'zh-TW') {
+    return getLocalizedItemName(battleLoot, lang) || String(battleLoot?.name || '戰利品');
+  }
 
 async function renderManualBattle(interaction, player, pet, roundMessage = '', options = {}) {
   const enemy = player?.battleState?.enemy;
@@ -431,12 +437,13 @@ async function startAutoBattle(interaction, user) {
       marketType: 'renaiss'
     });
     const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
+    const battleLootName = getBattleLootDisplayName(battleLoot, uiLang);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
       type: '戰鬥',
       content: `AI 自動戰鬥擊敗 ${enemy.name}`,
-      outcome: `獲得 ${finalResult.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      outcome: `獲得 ${finalResult.gold} Rns 代幣，掉落 ${battleLootName}`,
       importance: 3,
       tags: ['battle', 'victory', 'ai']
     });
@@ -448,7 +455,7 @@ async function startAutoBattle(interaction, user) {
     );
     player.currentStory = composePostBattleStory(
       player,
-      `🏆 你的 AI 戰鬥成功擊敗 **${enemy.name}**，獲得 ${finalResult.gold} Rns 代幣與「${battleLoot.name}」。`,
+      `🏆 你的 AI 戰鬥成功擊敗 **${enemy.name}**，獲得 ${finalResult.gold} Rns 代幣與「${battleLootName}」。`,
       buildAIBattleStory(rounds, combatant, enemy, finalResult),
       `你迅速整隊，準備把這場勝利帶來的連鎖影響推進到下一段冒險。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
       sourceChoice,
@@ -459,7 +466,7 @@ async function startAutoBattle(interaction, user) {
       choice: sourceChoice || `與${enemy.name}交戰`,
       desc: `你在 ${enemy.name} 一戰中獲勝`,
       action: 'battle_result',
-      outcome: `戰鬥勝利｜獲得 ${finalResult.gold} Rns｜戰利品 ${battleLoot.name}`
+      outcome: `戰鬥勝利｜獲得 ${finalResult.gold} Rns｜戰利品 ${battleLootName}`
     });
     player.battleState = null;
     player.eventChoices = [];
@@ -478,7 +485,7 @@ async function startAutoBattle(interaction, user) {
       .addFields(
         { name: '💰 獎勵', value: `${finalResult.gold} Rns 代幣`, inline: true },
         { name: '🩸 剩餘 HP', value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
-        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
+        { name: '🧰 戰利品', value: `${battleLootName}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
 
     const row = new ActionRowBuilder().addComponents(
@@ -686,12 +693,13 @@ async function handleUseMove(interaction, user, moveIndex) {
       marketType: 'renaiss'
     });
     const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
+    const battleLootName = getBattleLootDisplayName(battleLoot, uiLang);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
       type: '戰鬥',
       content: `擊敗 ${enemy.name}`,
-      outcome: `獲得 ${playerPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      outcome: `獲得 ${playerPhase.gold} Rns 代幣，掉落 ${battleLootName}`,
       importance: 3,
       tags: ['battle', 'victory']
     });
@@ -703,7 +711,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     );
     player.currentStory = composePostBattleStory(
       player,
-      `🏆 你擊敗了 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      `🏆 你擊敗了 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLootName}」。`,
       playerPhase.message,
       `戰場餘波未散，你準備依據這次勝負帶來的新線索繼續推進。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
       sourceChoice,
@@ -714,7 +722,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       choice: sourceChoice || `與${enemy.name}交戰`,
       desc: `你在 ${enemy.name} 一戰中獲勝`,
       action: 'battle_result',
-      outcome: `戰鬥勝利｜獲得 ${playerPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+      outcome: `戰鬥勝利｜獲得 ${playerPhase.gold} Rns｜戰利品 ${battleLootName}`
     });
     player.battleState = null;
     player.eventChoices = [];
@@ -727,7 +735,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       .addFields(
         { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
-        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
+        { name: '🧰 戰利品', value: `${battleLootName}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     
     const row = new ActionRowBuilder().addComponents(
@@ -869,12 +877,13 @@ async function handleUseMove(interaction, user, moveIndex) {
       marketType: 'renaiss'
     });
     const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
+    const battleLootName = getBattleLootDisplayName(battleLoot, uiLang);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
       type: '戰鬥',
       content: `擊敗 ${enemy.name}`,
-      outcome: `獲得 ${enemyPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      outcome: `獲得 ${enemyPhase.gold} Rns 代幣，掉落 ${battleLootName}`,
       importance: 3,
       tags: ['battle', 'victory']
     });
@@ -886,7 +895,7 @@ async function handleUseMove(interaction, user, moveIndex) {
     );
     player.currentStory = composePostBattleStory(
       player,
-      `🏆 你擊敗了 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      `🏆 你擊敗了 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLootName}」。`,
       combinedMessage,
       `戰場餘波未散，你準備依據這次勝負帶來的新線索繼續推進。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
       sourceChoice,
@@ -897,7 +906,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       choice: sourceChoice || `與${enemy.name}交戰`,
       desc: `你在 ${enemy.name} 一戰中獲勝`,
       action: 'battle_result',
-      outcome: `戰鬥勝利｜獲得 ${enemyPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+      outcome: `戰鬥勝利｜獲得 ${enemyPhase.gold} Rns｜戰利品 ${battleLootName}`
     });
     player.battleState = null;
     player.eventChoices = [];
@@ -910,7 +919,7 @@ async function handleUseMove(interaction, user, moveIndex) {
       .addFields(
         { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
-        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
+        { name: '🧰 戰利品', value: `${battleLootName}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
@@ -1067,12 +1076,13 @@ async function handleBattleWait(interaction, user) {
       marketType: 'renaiss'
     });
     const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
+    const battleLootName = getBattleLootDisplayName(battleLoot, uiLang);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
       type: '戰鬥',
       content: `蓄能待機後反殺 ${enemy.name}`,
-      outcome: `獲得 ${playerPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      outcome: `獲得 ${playerPhase.gold} Rns 代幣，掉落 ${battleLootName}`,
       importance: 3,
       tags: ['battle', 'victory', 'wait_turn']
     });
@@ -1084,7 +1094,7 @@ async function handleBattleWait(interaction, user) {
     );
     player.currentStory = composePostBattleStory(
       player,
-      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${playerPhase.gold} Rns 代幣與戰利品「${battleLootName}」。`,
       playerPhase.message,
       `你把這段對戰節奏記下，準備把優勢延伸到下一段冒險。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
       sourceChoice,
@@ -1095,7 +1105,7 @@ async function handleBattleWait(interaction, user) {
       choice: sourceChoice || `與${enemy.name}交戰`,
       desc: `你在蓄能後反殺 ${enemy.name}`,
       action: 'battle_result',
-      outcome: `逆轉勝｜獲得 ${playerPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+      outcome: `逆轉勝｜獲得 ${playerPhase.gold} Rns｜戰利品 ${battleLootName}`
     });
     player.battleState = null;
     CORE.savePlayer(player);
@@ -1113,7 +1123,7 @@ async function handleBattleWait(interaction, user) {
       .addFields(
         { name: t('gold', uiLang), value: `${playerPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
-        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
+        { name: '🧰 戰利品', value: `${battleLootName}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)
@@ -1255,12 +1265,13 @@ async function handleBattleWait(interaction, user) {
       marketType: 'renaiss'
     });
     const battleLoot = await ECON.createCombatLoot(enemy, player.location, player.stats?.運氣 || 50, { lang: player?.language || 'zh-TW' });
+    const battleLootName = getBattleLootDisplayName(battleLoot, uiLang);
     ECON.addTradeGood(player, battleLoot);
     const kingProgressLine = applyMainStoryCombatProgress(player, enemy.name, true);
     rememberPlayer(player, {
       type: '戰鬥',
       content: `蓄能待機後反殺 ${enemy.name}`,
-      outcome: `獲得 ${enemyPhase.gold} Rns 代幣，掉落 ${battleLoot.name}`,
+      outcome: `獲得 ${enemyPhase.gold} Rns 代幣，掉落 ${battleLootName}`,
       importance: 3,
       tags: ['battle', 'victory', 'wait_turn']
     });
@@ -1272,7 +1283,7 @@ async function handleBattleWait(interaction, user) {
     );
     player.currentStory = composePostBattleStory(
       player,
-      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLoot.name}」。`,
+      `🏆 你在蓄能待機後逆轉擊敗 **${enemy.name}**，取得 ${enemyPhase.gold} Rns 代幣與戰利品「${battleLootName}」。`,
       combinedMessage,
       `你把這段對戰節奏記下，準備把優勢延伸到下一段冒險。${kingProgressLine ? `\n${kingProgressLine}` : ''}`,
       sourceChoice,
@@ -1283,7 +1294,7 @@ async function handleBattleWait(interaction, user) {
       choice: sourceChoice || `與${enemy.name}交戰`,
       desc: `你在蓄能後反殺 ${enemy.name}`,
       action: 'battle_result',
-      outcome: `逆轉勝｜獲得 ${enemyPhase.gold} Rns｜戰利品 ${battleLoot.name}`
+      outcome: `逆轉勝｜獲得 ${enemyPhase.gold} Rns｜戰利品 ${battleLootName}`
     });
     player.battleState = null;
     CORE.savePlayer(player);
@@ -1301,7 +1312,7 @@ async function handleBattleWait(interaction, user) {
       .addFields(
         { name: t('gold', uiLang), value: `${enemyPhase.gold}`, inline: true },
         { name: t('hp', uiLang), value: `${formatBattleHpValue(combatant?.hp, 0)}/${formatBattleHpValue(combatant?.maxHp, 1)}`, inline: true },
-        { name: '🧰 戰利品', value: `${battleLoot.name}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
+        { name: '🧰 戰利品', value: `${battleLootName}（${battleLoot.rarity}｜${battleLoot.value} Rns 代幣）`, inline: false }
       );
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('main_menu').setLabel(t('continue', uiLang)).setStyle(ButtonStyle.Success)

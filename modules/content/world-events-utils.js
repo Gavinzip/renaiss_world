@@ -1,5 +1,12 @@
 function createWorldEventsUtils(deps = {}) {
-  const { CORE = null, EVENTS = null } = deps;
+  const {
+    CORE = null,
+    EVENTS = null,
+    getLocationDisplayName = (value = '') => String(value || ''),
+    getNpcDisplayName = (value = '') => String(value || ''),
+    localizeDisplayText = (value = '') => String(value || ''),
+    formatWorldEventText = null
+  } = deps;
 
   function summarizeWorldEventMessage(message = '') {
     const source = String(message || '').replace(/\r/g, '').trim();
@@ -18,37 +25,62 @@ function createWorldEventsUtils(deps = {}) {
       .trim();
   }
 
-  function normalizeWorldEventEntry(entry, source) {
+  function normalizeWorldEventEntry(entry, source, lang = 'zh-TW') {
     if (!entry) return null;
+    const safeLang = String(lang || 'zh-TW').trim() || 'zh-TW';
     if (typeof entry === 'string') {
-      const summary = summarizeWorldEventMessage(entry);
+      const localized = localizeDisplayText(String(entry), safeLang);
+      const summary = summarizeWorldEventMessage(localized);
       return summary
         ? {
           message: summary,
           rawMessage: String(entry),
           dedupeKey: buildWorldEventSummaryKey(summary),
           timestamp: 0,
-          source
+          source,
+          type: '',
+          actor: '',
+          target: '',
+          location: '',
+          impact: ''
         }
         : null;
     }
     if (typeof entry !== 'object') return null;
     const rawMessage = String(entry.message || '').trim();
-    const summary = summarizeWorldEventMessage(rawMessage);
+    const payload = {
+      type: String(entry.type || '').trim(),
+      actor: String(entry.actor || '').trim(),
+      target: String(entry.target || '').trim(),
+      location: String(entry.location || '').trim(),
+      impact: String(entry.impact || '').trim(),
+      message: rawMessage,
+      rawMessage
+    };
+    const localizedMessage = typeof formatWorldEventText === 'function'
+      ? String(formatWorldEventText(payload, safeLang) || '').trim()
+      : '';
+    const summary = summarizeWorldEventMessage(localizedMessage || localizeDisplayText(rawMessage, safeLang));
     if (!summary) return null;
     return {
       message: summary,
       rawMessage,
       dedupeKey: buildWorldEventSummaryKey(summary),
       timestamp: Number.isFinite(Number(entry.timestamp)) ? Number(entry.timestamp) : 0,
-      source
+      source,
+      type: payload.type,
+      actor: payload.actor,
+      target: payload.target,
+      location: payload.location,
+      impact: payload.impact
     };
   }
 
-  function getMergedWorldEvents(limit = 5) {
+  function getMergedWorldEvents(limit = 5, lang = 'zh-TW') {
     const targetLimit = Math.max(1, Math.min(5, Number(limit) || 5));
+    const safeLang = String(lang || 'zh-TW').trim() || 'zh-TW';
     const coreEvents = (CORE?.getRecentWorldEvents?.(targetLimit * 2) || [])
-      .map((e) => normalizeWorldEventEntry(e, 'core'))
+      .map((e) => normalizeWorldEventEntry(e, 'core', safeLang))
       .filter((e) => e && e.message);
 
     let boardEvents = [];
@@ -56,7 +88,7 @@ function createWorldEventsUtils(deps = {}) {
       const raw = EVENTS?.getWorldEvents?.();
       boardEvents = (raw?.events || [])
         .slice(0, targetLimit * 2)
-        .map((e) => normalizeWorldEventEntry(e, 'board'))
+        .map((e) => normalizeWorldEventEntry(e, 'board', safeLang))
         .filter((e) => e && e.message);
     } catch {
       boardEvents = [];
@@ -78,13 +110,14 @@ function createWorldEventsUtils(deps = {}) {
   function publishWorldEvent(message, type = 'player_action', extra = null) {
     const text = String(message || '').trim();
     if (!text) return;
+    const payloadExtra = extra && typeof extra === 'object' ? extra : {};
     try {
-      if (typeof CORE?.recordWorldEvent === 'function') CORE.recordWorldEvent(text, type, extra || {});
+      if (typeof CORE?.recordWorldEvent === 'function') CORE.recordWorldEvent(text, type, payloadExtra);
     } catch (e) {
       console.log('[WorldEvent] core publish failed:', e?.message || e);
     }
     try {
-      if (typeof EVENTS?.addWorldEvent === 'function') EVENTS.addWorldEvent(text, type);
+      if (typeof EVENTS?.addWorldEvent === 'function') EVENTS.addWorldEvent(text, type, payloadExtra);
     } catch (e) {
       console.log('[WorldEvent] board publish failed:', e?.message || e);
     }
@@ -112,7 +145,15 @@ function createWorldEventsUtils(deps = {}) {
       message = `⚔️ ${actor} 在${location}與 ${target} 的衝突升級。`;
     }
     if (impactText) message += ` ${impactText.slice(0, 80)}`;
-    publishWorldEvent(message, kind, { actor, target, location, impact: impactText });
+    publishWorldEvent(message, kind, {
+      actor,
+      target,
+      location,
+      impact: impactText,
+      actorDisplay: localizeDisplayText(actor, 'zh-TW'),
+      targetDisplay: getNpcDisplayName(target, 'zh-TW') || getLocationDisplayName(target, 'zh-TW') || localizeDisplayText(target, 'zh-TW'),
+      locationDisplay: getLocationDisplayName(location, 'zh-TW') || localizeDisplayText(location, 'zh-TW')
+    });
   }
 
   return {

@@ -1200,6 +1200,7 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const uiLang = getPlayerUILang(player);
   if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
     await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
     return;
@@ -1241,6 +1242,7 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
     specs: built.specs.map((spec) => ({
       kind: 'item',
       itemName: String(spec?.itemName || '').trim(),
+      itemNames: spec?.itemNames || null,
       quantityMax: Math.max(1, Number(spec?.quantityMax || 1)),
       itemRef: { kind: 'item', source: String(spec?.itemRef?.source || 'inventory') }
     })),
@@ -1261,7 +1263,7 @@ async function showWorldShopHaggleAllOffer(interaction, user, marketType = 'rena
   const pitch = extractPitchFromHaggleMessage(offerResult.message);
   const detailLines = [];
   const itemSummary = built.specs
-    .map((spec) => `${spec.itemName} x${Math.max(1, Number(spec.quantityMax || 1))}`)
+    .map((spec) => `${getLocalizedItemName({ itemName: spec?.itemName, itemNames: spec?.itemNames || null }, uiLang) || spec.itemName} x${Math.max(1, Number(spec.quantityMax || 1))}`)
     .slice(0, 6)
     .join('、');
   detailLines.push(`範圍：已選 ${built.specs.length} 項商品`);
@@ -1412,6 +1414,7 @@ async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss
   }
   ECON.ensurePlayerEconomy(player);
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
+  const uiLang = getPlayerUILang(player);
   if (!player.shopSession?.open || String(player.shopSession.marketType || '') !== safeMarket) {
     await interaction.reply({ content: '⚠️ 請先在商店內操作議價。', ephemeral: true }).catch(() => {});
     return;
@@ -1442,9 +1445,11 @@ async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss
     marketType: safeMarket,
     createdAt: Date.now(),
     itemName: String(built.candidate?.itemName || spec.itemName || '').trim(),
+    itemNames: built.candidate?.itemNames || spec?.itemNames || null,
     spec: {
       kind: 'item',
       itemName: String(built.candidate?.itemName || spec.itemName || '').trim(),
+      itemNames: built.candidate?.itemNames || spec?.itemNames || null,
       itemRef: {
         kind: 'item',
         source: String(built.candidate?.source || spec?.itemRef?.source || 'inventory'),
@@ -1465,7 +1470,7 @@ async function showWorldShopHaggleOffer(interaction, user, marketType = 'renaiss
 
   const pitch = extractPitchFromHaggleMessage(offerResult.message);
   const detailLines = [];
-  detailLines.push(`商品：${pending.itemName}`);
+  detailLines.push(`商品：${getLocalizedItemName({ itemName: pending.itemName, itemNames: pending.itemNames || null }, uiLang) || pending.itemName}`);
   detailLines.push(`報價：**${pending.quotedTotal} Rns 代幣**`);
   detailLines.push(`鑑價員：${pending.npcName}`);
   if (pitch) detailLines.push(`\n💬 ${pitch}`);
@@ -1548,7 +1553,12 @@ async function showWorldShopSellPicker(interaction, user, marketType = 'renaiss'
 
 async function showWorldShopSellModal(interaction, marketType = 'renaiss', spec = null) {
   const safeMarket = marketType === 'digital' ? 'digital' : 'renaiss';
-  const itemName = String(spec?.itemName || '商品').slice(0, 36);
+  const itemName = String(
+    spec?.itemDisplayName ||
+    getLocalizedItemName({ itemName: spec?.itemName, itemNames: spec?.itemNames || null }, 'zh-TW') ||
+    spec?.itemName ||
+    '商品'
+  ).slice(0, 36);
   const rarity = normalizeListingRarity(spec?.rarity || '普通');
   const referencePrice = Math.max(1, Math.floor(Number(spec?.referencePrice || estimateStoryReferencePriceByName(itemName))));
   const modal = new ModalBuilder()
@@ -1619,6 +1629,7 @@ async function handleWorldShopSellModal(interaction, user, marketType = 'renaiss
 
   const result = ECON.createSellListing(player, safeMarket, {
     itemName: spec.itemName,
+    itemNames: spec.itemNames || null,
     quantity,
     unitPrice,
     note,
@@ -1715,7 +1726,7 @@ async function handleMarketPostModal(interaction, user, listingType = 'sell', ma
 
   CORE.savePlayer(player);
   const listing = result.listing || {};
-  const successText = `賣單已上架：${listing.itemName} x${listing.quantity}（單價 ${listing.unitPrice}）`;
+  const successText = `賣單已上架：${getLocalizedItemName(listing, getPlayerUILang(player)) || listing.itemName} x${listing.quantity}（單價 ${listing.unitPrice}）`;
   const updated = await interaction.deferUpdate()
     .then(async () => {
       await showWorldShopScene(interaction, user, marketType, successText);

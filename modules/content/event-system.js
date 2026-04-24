@@ -1065,13 +1065,20 @@ function getWorldEvents() {
   return WORLD_EVENTS_STORE.read();
 }
 
-function addWorldEvent(message, type = 'normal') {
+function addWorldEvent(message, type = 'normal', extra = null) {
   WORLD_EVENTS_STORE.update((data) => {
-    data.events.unshift({
+    const row = {
       message: sanitizeWorldText(message),
       type,
       timestamp: Date.now()
-    });
+    };
+    if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+      for (const key of ['location', 'actor', 'target', 'impact']) {
+        const value = String(extra[key] || '').trim();
+        if (value) row[key] = value.slice(0, 120);
+      }
+    }
+    data.events.unshift(row);
     data.events = data.events.slice(0, WORLD_EVENTS_MAX);
     return data;
   });

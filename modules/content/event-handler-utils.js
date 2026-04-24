@@ -1,7 +1,12 @@
 const { MAP_LOCATIONS, findLocationPath } = require('./world-map');
 const DYNAMIC_WORLD = require('./dynamic-world-utils');
 const { appendLootAudit } = require('../systems/data/loot-audit-log');
-const { getGenerationStatusText } = require('../systems/runtime/utils/global-language-resources');
+const {
+  getGenerationStatusText,
+  buildItemNamePack,
+  getLocalizedItemName,
+  normalizeLangCode
+} = require('../systems/runtime/utils/global-language-resources');
 const SHOW_DYNAMIC_WORLD_METERS = String(process.env.SHOW_DYNAMIC_WORLD_METERS || '').trim() === '1';
 const LOOT_PITY_GUARANTEE_STREAK = 5;
 
@@ -133,6 +138,8 @@ function createEventHandlerUtils(deps = {}) {
     getNearbyNpcMemoryContextAsync,
     finishGenerationState,
     getAdventureText,
+    getLocationDisplayName = (value = '') => String(value || ''),
+    localizeDisplayText = (value = '', _lang = 'zh-TW') => String(value || ''),
     buildMainStatusBar,
     buildMainStatusFields = null,
     buildMainlineProgressLine,
@@ -234,10 +241,14 @@ function normalizeLootName(text = '') {
 }
 
 function storyMentionsLoot(storyMarkerName = '', tradeGood = {}) {
-  const itemName = normalizeLootName(tradeGood?.name || '');
   const markedName = normalizeLootName(storyMarkerName);
-  if (!itemName || !markedName) return false;
-  return markedName === itemName || markedName.includes(itemName) || itemName.includes(markedName);
+  if (!markedName) return false;
+  const pack = buildItemNamePack(tradeGood) || buildItemNamePack(String(tradeGood?.name || '').trim()) || {};
+  const variants = Object.values(pack)
+    .map((value) => normalizeLootName(value))
+    .filter(Boolean);
+  if (variants.length <= 0) return false;
+  return variants.some((itemName) => markedName === itemName || markedName.includes(itemName) || itemName.includes(markedName));
 }
 
 function storyExplicitlyShowsLootAcquisition(storyText = '', lootName = '') {
@@ -261,6 +272,19 @@ function storyExplicitlyShowsLootAcquisition(storyText = '', lootName = '') {
     if (rejectPattern.test(sentence)) return false;
     return true;
   });
+}
+
+function applyDeclaredLootDisplayName(tradeGood = null, declaredName = '', lang = 'zh-TW') {
+  if (!tradeGood || typeof tradeGood !== 'object') return tradeGood;
+  const cleanName = sanitizeLootMarkerName(declaredName);
+  if (!cleanName) return tradeGood;
+  const normalizedLang = normalizeLangCode(lang);
+  const currentPack = buildItemNamePack(tradeGood) || buildItemNamePack(String(tradeGood?.name || '').trim()) || {};
+  const nextPack = { ...currentPack, [normalizedLang]: cleanName };
+  tradeGood.names = nextPack;
+  tradeGood.itemNames = nextPack;
+  tradeGood.name = String(nextPack['zh-TW'] || cleanName).trim();
+  return tradeGood;
 }
 
 function inferStoryLootSourceType(storyText = '', fallbackContext = '') {
@@ -1721,6 +1745,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
           pendingLoot: pendingStoryLoot
             ? {
               name: String(pendingStoryLoot.name || '').trim(),
+              names: pendingStoryLoot.names || pendingStoryLoot.itemNames || null,
+              itemNames: pendingStoryLoot.itemNames || pendingStoryLoot.names || null,
               rarity: String(pendingStoryLoot.rarity || '').trim(),
               value: Math.max(1, Math.floor(Number(pendingStoryLoot.value || 0))),
               category: String(pendingStoryLoot.category || '').trim()
@@ -1781,7 +1807,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
             ? await ECON.createTreasureLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' })
             : await ECON.createForageLoot(player.location || '未知地點', luck, { lang: player?.language || 'zh-TW' });
           if (grantedLoot && typeof grantedLoot === 'object') {
-            grantedLoot.name = declaredLootName;
+            applyDeclaredLootDisplayName(grantedLoot, declaredLootName, player?.language || 'zh-TW');
           }
         }
 
@@ -1852,19 +1878,62 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       });
       CORE.savePlayer(player);
 
+      const uiLang = player.language || 'zh-TW';
+      const rewardUiText = getAdventureText(uiLang);
       const rewardText = [];
       const movedFrom = String(result?.autoTravel?.fromLocation || '').trim();
       const movedTo = String(result?.autoTravel?.targetLocation || '').trim();
       const hasMovedThisTurn = movedFrom && movedTo && !Boolean(result?.autoTravel?.blocked);
       if (hasMovedThisTurn) {
-        rewardText.push(`🧭 本回合移動：${movedFrom} → ${movedTo}`);
+        const fromText = getLocationDisplayName(movedFrom, uiLang) || movedFrom;
+        const toText = getLocationDisplayName(movedTo, uiLang) || movedTo;
+        rewardText.push(
+          typeof rewardUiText.turnMoved === 'function'
+            ? rewardUiText.turnMoved(fromText, toText)
+            : `🧭 ${fromText} → ${toText}`
+        );
       }
-      if (result?.loot?.name) rewardText.push(`🧰 ${result.loot.name}（${result.loot.rarity || '普通'}）`);
-      if (result.gold) rewardText.push(`💰 +${result.gold} Rns 代幣`);
-      if (result.wantedLevel) rewardText.push(`⚠️ 通緝等级: ${result.wantedLevel}`);
-      if (result.soldCount > 0) rewardText.push(`🏪 已售出 ${result.soldCount} 件`);
-      if (result.item && result.success) rewardText.push(`📦 取得 ${result.item}`);
-      if (result.petRevived) rewardText.push(`🐾 ${pet.name} 復活完成（2回合制）`);
+      if (result?.loot?.name) {
+        const lootName = getLocalizedItemName(result.loot, uiLang) || localizeDisplayText(result.loot.name, uiLang);
+        const lootRarity = localizeDisplayText(result.loot.rarity || '普通', uiLang);
+        rewardText.push(`🧰 ${lootName}（${lootRarity}）`);
+      }
+      if (result.gold) {
+        rewardText.push(
+          typeof rewardUiText.rewardGoldDelta === 'function'
+            ? rewardUiText.rewardGoldDelta(result.gold)
+            : `💰 +${result.gold}`
+        );
+      }
+      if (result.wantedLevel) {
+        rewardText.push(
+          typeof rewardUiText.rewardWantedLevel === 'function'
+            ? rewardUiText.rewardWantedLevel(result.wantedLevel)
+            : `⚠️ ${result.wantedLevel}`
+        );
+      }
+      if (result.soldCount > 0) {
+        rewardText.push(
+          typeof rewardUiText.rewardSoldCount === 'function'
+            ? rewardUiText.rewardSoldCount(result.soldCount)
+            : `🏪 ${result.soldCount}`
+        );
+      }
+      if (result.item && result.success) {
+        const itemText = localizeDisplayText(result.item, uiLang);
+        rewardText.push(
+          typeof rewardUiText.rewardItemGain === 'function'
+            ? rewardUiText.rewardItemGain(itemText)
+            : `📦 ${itemText}`
+        );
+      }
+      if (result.petRevived) {
+        rewardText.push(
+          typeof rewardUiText.rewardPetRevived === 'function'
+            ? rewardUiText.rewardPetRevived(pet.name)
+            : `🐾 ${pet.name}`
+        );
+      }
       const passiveHealEntries = Array.isArray(result?.passivePetHealByPet)
         ? result.passivePetHealByPet
           .map((row) => ({
@@ -1876,15 +1945,30 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
       if (passiveHealEntries.length > 0) {
         if (passiveHealEntries.length === 1) {
           const only = passiveHealEntries[0];
-          rewardText.push(`🩹 ${only.name} 行進恢復 +${only.heal} HP`);
+          rewardText.push(
+            typeof rewardUiText.rewardPassiveHealSingle === 'function'
+              ? rewardUiText.rewardPassiveHealSingle(only.name, only.heal)
+              : `🩹 ${only.name} +${only.heal} HP`
+          );
         } else {
           const totalHeal = passiveHealEntries.reduce((sum, row) => sum + row.heal, 0);
+          const previewSeparator = uiLang === 'en' ? ', ' : (uiLang === 'ko' ? ', ' : '、');
           const preview = passiveHealEntries
             .slice(0, 4)
             .map((row) => `${row.name} +${row.heal}`)
-            .join('、');
+            .join(previewSeparator);
           const remainCount = Math.max(0, passiveHealEntries.length - 4);
-          rewardText.push(`🩹 全隊行進恢復 合計 +${totalHeal} HP（${preview}${remainCount > 0 ? ` 等${passiveHealEntries.length}隻` : ''}）`);
+          const remainSuffix = remainCount > 0
+            ? (uiLang === 'en'
+              ? ` and ${remainCount} more`
+              : (uiLang === 'ko' ? ` 외 ${remainCount}마리` : ` 等${remainCount}隻`))
+            : '';
+          const previewText = `${preview}${remainSuffix}`;
+          rewardText.push(
+            typeof rewardUiText.rewardPassiveHealSummary === 'function'
+              ? rewardUiText.rewardPassiveHealSummary(previewText, totalHeal)
+              : `🩹 ${previewText} +${totalHeal} HP`
+          );
         }
       }
       if (Number.isFinite(Number(result.digitalRiskScore))) {
@@ -1915,7 +1999,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
         }
       }
 
-      const worldEvents = getMergedWorldEvents(5);
+      const worldEvents = getMergedWorldEvents(5, player.language || 'zh-TW');
       let worldEventsText = '';
       if (worldEvents.length > 0) {
         worldEventsText = `\n\n**${uiText.sectionWorldEvents}：**\n` + worldEvents.map(e => e.message || e).join('\n');

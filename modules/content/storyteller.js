@@ -39,7 +39,8 @@ const {
   localizeChoiceTag,
   getChoiceTagPromptLines,
   isAggressiveChoiceTag,
-  normalizeLangCode
+  normalizeLangCode,
+  getLocalizedItemName
 } = require('../systems/runtime/utils/global-language-resources');
 
 const LANGUAGE_RESOURCES = createGlobalLanguageResources({
@@ -648,10 +649,11 @@ function normalizeOutputByLanguage(text, playerLang = 'zh-TW') {
   const source = typeof text === 'string' ? text : String(text || '');
   if (!source) return '';
   const sanitized = sanitizeNarrativeText(source);
+  const localized = LANGUAGE_RESOURCES.localizeDisplayText(sanitized, playerLang);
   const langCode = normalizeLangCode(playerLang || 'zh-TW');
-  if (langCode === 'zh-TW') return convertCNToTW(sanitized);
-  if (langCode === 'zh-CN') return convertTWToCN(sanitized);
-  return sanitized;
+  if (langCode === 'zh-TW') return convertCNToTW(localized);
+  if (langCode === 'zh-CN') return convertTWToCN(localized);
+  return localized;
 }
 
 function countRegexMatches(text = '', regex = null) {
@@ -661,15 +663,38 @@ function countRegexMatches(text = '', regex = null) {
   return Array.isArray(match) ? match.length : 0;
 }
 
+function getKoreanScriptStats(text = '') {
+  const source = String(text || '');
+  return {
+    hangulCount: countRegexMatches(source, /[가-힣]/g),
+    cjkCount: countRegexMatches(source, /[\u3400-\u4DBF\u4E00-\u9FFF]/g),
+    latinCount: countRegexMatches(source, /[A-Za-z]/g)
+  };
+}
+
 function getLanguageComplianceIssue(text = '', playerLang = 'zh-TW', mode = 'story') {
   const source = String(text || '');
   if (!source) return '';
   const langCode = normalizeLangCode(playerLang || 'zh-TW');
   if (langCode !== 'ko') return '';
-  const hangulCount = countRegexMatches(source, /[가-힣]/g);
+  const { hangulCount, cjkCount, latinCount } = getKoreanScriptStats(source);
   const minHangul = mode === 'story' ? 80 : 8;
-  if (hangulCount >= minHangul) return '';
-  return `語言違規：目前語言是韓文（ko），但輸出韓文字元不足（${hangulCount}/${minHangul}）`;
+  if (hangulCount < minHangul) {
+    return `語言違規：目前語言是韓文（ko），但輸出韓文字元不足（${hangulCount}/${minHangul}）`;
+  }
+  const maxCjk = mode === 'story'
+    ? Math.max(18, Math.floor(hangulCount * 0.12))
+    : Math.max(6, Math.floor(hangulCount * 0.12));
+  if (cjkCount > maxCjk) {
+    return `語言違規：目前語言是韓文（ko），但殘留過多中文/漢字（${cjkCount}/${maxCjk}）`;
+  }
+  const maxLatin = mode === 'story'
+    ? Math.max(42, Math.floor(hangulCount * 0.3))
+    : Math.max(16, Math.floor(hangulCount * 0.3));
+  if (latinCount > maxLatin) {
+    return `語言違規：目前語言是韓文（ko），但殘留過多英文/拉丁字母（${latinCount}/${maxLatin}）`;
+  }
+  return '';
 }
 
 function getStoryTruncatedSuffix(playerLang = 'zh-TW') {
@@ -751,7 +776,7 @@ function normalizeChoiceRouteForMap(choice = {}, player = null, location = '') {
     if (!descText.includes(finalTarget)) descText = `${descText.replace(/[.]\s*$/u, '')} | Final target: ${finalTarget}`;
     if (routePreview) descText = `${descText} | Route: ${routePreview}`;
     next.desc = descText;
-    return next;
+    return normalizeChoiceByLanguage(next, playerLang);
   }
   if (langCode === 'ko') {
     const originalName = String(choice.name || '').trim();
@@ -767,7 +792,7 @@ function normalizeChoiceRouteForMap(choice = {}, player = null, location = '') {
     if (!descText.includes(finalTarget)) descText = `${descText.replace(/[.。；;]\s*$/u, '')} | 최종 목표: ${finalTarget}`;
     if (routePreview) descText = `${descText} | 경로: ${routePreview}`;
     next.desc = descText;
-    return next;
+    return normalizeChoiceByLanguage(next, playerLang);
   }
 
   const originalName = String(choice.name || '').trim();
@@ -781,7 +806,7 @@ function normalizeChoiceRouteForMap(choice = {}, player = null, location = '') {
   if (!descText.includes(finalTarget)) descText = `${descText.replace(/[。；]\s*$/u, '')}｜最終目標：${finalTarget}`;
   if (routePreview) descText = `${descText}｜路線：${routePreview}`;
   next.desc = descText;
-  return next;
+  return normalizeChoiceByLanguage(next, playerLang);
 }
 
 function normalizeChoiceSemanticMeta(choice = {}, player = null, location = '') {
@@ -861,7 +886,7 @@ function sanitizeMainlineBridgeChoiceTone(choice = {}, {
       next.desc = `${safeProgress}｜先補齊本地證據鏈，避免跨區後線索斷裂`;
     }
   }
-  return next;
+  return normalizeChoiceByLanguage(next, playerLang);
 }
 
 function previewAIContent(content) {
@@ -2208,10 +2233,8 @@ function validateChoiceSet(choices = [], {
     }
     if (langCode === 'ko') {
       const coreText = [choice?.name || '', choice?.choice || '', choice?.desc || ''].join(' ');
-      const hangulCount = countRegexMatches(coreText, /[가-힣]/g);
-      if (hangulCount < 6) {
-        issues.push(`第 ${i + 1} 個選項不是韓文輸出（韓文字元不足）`);
-      }
+      const languageIssue = getLanguageComplianceIssue(coreText, playerLang, 'choice');
+      if (languageIssue) issues.push(`第 ${i + 1} 個選項語言不合格：${languageIssue}`);
     }
     if (WANTED_PSUIT_CHOICE_RE.test(text)) wantedCueCount += 1;
     if (pendingConflictActive) {
@@ -3073,8 +3096,9 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   const pendingLoot = previousChoice?.pendingLoot && typeof previousChoice.pendingLoot === 'object'
     ? previousChoice.pendingLoot
     : null;
+  const playerLang = player.language || 'zh-TW';
   const turnMoveSummary = String(previousChoice?.turnMoveSummary || '').trim();
-  const pendingLootName = String(pendingLoot?.name || '').trim();
+  const pendingLootName = getLocalizedItemName(pendingLoot, playerLang) || String(pendingLoot?.name || '').trim();
   const pendingLootRarity = String(pendingLoot?.rarity || '').trim() || '普通';
   const pendingLootValue = Math.max(1, Math.floor(Number(pendingLoot?.value || 0)));
   const pendingLootCategory = String(pendingLoot?.category || '').trim();
@@ -3103,7 +3127,6 @@ async function generateStory(event, player, pet, previousChoice, memoryContext =
   if (!safePlayerName) safePlayerName = '冒險者';
   
   // 根據玩家語言設定決定輸出語言
-  const playerLang = player.language || 'zh-TW';
   const langInstruction = getAiLanguageDirective(playerLang, 'narrate');
   const collectibleCulturePrompt = getCollectibleCulturePrompt(location, playerLang);
   const locationWeatherProfile = getLocationWeatherProfile(location);

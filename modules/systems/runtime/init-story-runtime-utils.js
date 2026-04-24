@@ -15,6 +15,10 @@ function initStoryRuntimeUtils(deps = {}) {
     getLocationPortalHub,
     normalizeLangCode,
     getLanguageSection,
+    getLocationDisplayName,
+    getNpcDisplayName,
+    localizeDisplayText,
+    formatWorldEventText,
     formatPetHpWithRecovery,
     getPetElementDisplayName,
     normalizeComparableStoryText,
@@ -40,12 +44,21 @@ function initStoryRuntimeUtils(deps = {}) {
   const ADVENTURE_STATUS_UTILS = createAdventureStatusUtils({
     normalizeLangCode,
     getLanguageSection,
+    getLocationDisplayName,
+    getNpcDisplayName,
     formatPetHpWithRecovery,
     getPetElementDisplayName,
     ISLAND_STORY,
     MAIN_STORY
   });
-  const WORLD_EVENTS_UTILS = createWorldEventsUtils({ CORE, EVENTS });
+  const WORLD_EVENTS_UTILS = createWorldEventsUtils({
+    CORE,
+    EVENTS,
+    getLocationDisplayName,
+    getNpcDisplayName,
+    localizeDisplayText,
+    formatWorldEventText
+  });
   const STORY_ANALYSIS_UTILS = createStoryAnalysisUtils();
   const STORY_MEMORY_PINS_UTILS = createStoryMemoryPinsUtils({
     CORE,

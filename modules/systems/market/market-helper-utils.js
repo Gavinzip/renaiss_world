@@ -276,6 +276,7 @@ const {
         kind: 'item',
         sources: [source],
         itemName: name,
+        itemNames: extra?.itemNames && typeof extra.itemNames === 'object' ? extra.itemNames : null,
         quantity: qty,
         rarity,
         referencePrice: refPrice
@@ -285,6 +286,7 @@ const {
     for (const good of Array.isArray(player.tradeGoods) ? player.tradeGoods : []) {
       const goodName = typeof good === 'string' ? good : (good?.name || '');
       addStack(goodName, 'tradeGoods', 1, {
+        itemNames: good?.names || good?.itemNames || null,
         rarity: good?.rarity || '普通',
         referencePrice: Number(good?.value || 0)
       });
@@ -308,20 +310,25 @@ const {
 
     const options = Array.from(stacked.values())
       .sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || '')))
-      .map((entry) => ({
-        kind: 'item',
-        itemName: String(entry.itemName || '').trim(),
-        itemDisplayName: getLocalizedItemName(String(entry.itemName || '').trim(), uiLang),
-        quantityMax: Math.max(1, Number(entry.quantity || 1)),
-        itemRef: { kind: 'item', source: Array.isArray(entry.sources) ? entry.sources[0] : 'inventory' },
-        rarity: normalizeListingRarity(entry.rarity || '普通'),
-        referencePrice: Math.max(1, Math.floor(Number(entry.referencePrice || estimateStoryReferencePriceByName(entry.itemName || '')))),
-        label: `[${normalizeListingRarity(entry.rarity || '普通')}] ${getLocalizedItemName(String(entry.itemName || '').trim(), uiLang) || String(entry.itemName || '')}`.slice(0, 100),
-        description: localizeScriptOnly(
-          `庫存 ${Math.max(1, Number(entry.quantity || 1))}｜參考價 ${Math.max(1, Math.floor(Number(entry.referencePrice || 1)))} Rns`,
-          uiLang
-        )
-      }));
+      .map((entry) => {
+        const normalizedName = String(entry.itemName || '').trim();
+        const localizedName = getLocalizedItemName({ itemName: normalizedName, itemNames: entry.itemNames || null }, uiLang) || normalizedName;
+        return {
+          kind: 'item',
+          itemName: normalizedName,
+          itemNames: entry.itemNames || null,
+          itemDisplayName: localizedName,
+          quantityMax: Math.max(1, Number(entry.quantity || 1)),
+          itemRef: { kind: 'item', source: Array.isArray(entry.sources) ? entry.sources[0] : 'inventory' },
+          rarity: normalizeListingRarity(entry.rarity || '普通'),
+          referencePrice: Math.max(1, Math.floor(Number(entry.referencePrice || estimateStoryReferencePriceByName(entry.itemName || '')))),
+          label: `[${normalizeListingRarity(entry.rarity || '普通')}] ${localizedName}`.slice(0, 100),
+          description: localizeScriptOnly(
+            `庫存 ${Math.max(1, Number(entry.quantity || 1))}｜參考價 ${Math.max(1, Math.floor(Number(entry.referencePrice || 1)))} Rns`,
+            uiLang
+          )
+        };
+      });
 
     let blockedActiveSkillCount = 0;
     const ownedPets = getPlayerOwnedPets(ownerId);
@@ -403,6 +410,7 @@ const {
         ? {
           source: 'tradeGoods',
           itemName,
+          itemNames: fromTrade?.names || fromTrade?.itemNames || null,
           tradeGoodId: String(fromTrade?.id || '').trim(),
           tradeGood: JSON.parse(JSON.stringify(fromTrade))
         }
@@ -487,6 +495,7 @@ const {
       normalizedSpecs.push({
         kind: 'item',
         itemName,
+        itemNames: raw?.itemNames && typeof raw.itemNames === 'object' ? raw.itemNames : null,
         quantityMax: matched,
         itemRef: { kind: 'item', source: String(raw?.itemRef?.source || 'inventory') }
       });

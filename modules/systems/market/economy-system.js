@@ -625,8 +625,14 @@ function createSellListing(player, marketType = 'renaiss', payload = {}) {
   const normalizedMarket = normalizeMarketType(marketType);
   const finalQty = Math.max(1, Math.floor(Number(reserve.quantity || qty || 1)));
   const finalItemName = normalizeText(reserve.targetName || payload.itemName || '', 120);
+  const reservedTradeGood = Array.isArray(reserve.reserved)
+    ? reserve.reserved.find((entry) => String(entry?.source || '') === 'tradeGoods' && entry?.item && typeof entry.item === 'object')
+    : null;
+  const reservedNamePack = reservedTradeGood?.item
+    ? (reservedTradeGood.item.names || reservedTradeGood.item.itemNames || null)
+    : null;
   const finalItemNames = sanitizeLocalizedTextMap(
-    buildItemNamePack(reserve.targetName || payload.itemName || ''),
+    payload?.itemNames || reservedNamePack || buildItemNamePack(reserve.targetName || payload.itemName || ''),
     buildItemNamePack(finalItemName)
   );
 
@@ -1364,8 +1370,9 @@ function sanitizeLocalizedTextMap(value = {}, fallback = {}) {
   const safeFallback = fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {};
   const zhTw = sanitizeLootName(source['zh-TW'] || safeFallback['zh-TW'] || '');
   const zhCn = sanitizeLootName(source['zh-CN'] || localizeScriptOnly(zhTw, 'zh-CN') || safeFallback['zh-CN'] || zhTw);
+  const ko = sanitizeLootName(source.ko || safeFallback.ko || buildItemNamePack({ name: zhTw })?.ko || '');
   const en = sanitizeLootName(source.en || safeFallback.en || zhTw);
-  return { 'zh-TW': zhTw, 'zh-CN': zhCn, en };
+  return { 'zh-TW': zhTw, 'zh-CN': zhCn, ko, en };
 }
 
 function sanitizeLocalizedDescMap(value = {}, fallback = {}) {
@@ -1373,8 +1380,9 @@ function sanitizeLocalizedDescMap(value = {}, fallback = {}) {
   const safeFallback = fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {};
   const zhTw = sanitizeLootDesc(source['zh-TW'] || safeFallback['zh-TW'] || '');
   const zhCn = sanitizeLootDesc(source['zh-CN'] || localizeScriptOnly(zhTw, 'zh-CN') || safeFallback['zh-CN'] || zhTw);
+  const ko = sanitizeLootDesc(source.ko || safeFallback.ko || buildItemDescPack({ desc: zhTw })?.ko || '');
   const en = sanitizeLootDesc(source.en || safeFallback.en || zhTw);
-  return { 'zh-TW': zhTw, 'zh-CN': zhCn, en };
+  return { 'zh-TW': zhTw, 'zh-CN': zhCn, ko, en };
 }
 
 function normalizeTradeGoodLocalization(good = null) {
