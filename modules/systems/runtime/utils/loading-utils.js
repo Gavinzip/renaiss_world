@@ -1,5 +1,8 @@
 const { getLoadingAnimationText } = require('./global-language-resources');
 
+const LOADING_ANIMATION_EDIT_INTERVAL_MS = 3000;
+const LOADING_TYPING_INTERVAL_MS = 9000;
+
 function createLoadingUtils() {
   function startLoadingAnimation(message, label = '', lang = 'zh-TW') {
     if (!message) return () => {};
@@ -22,12 +25,12 @@ function createLoadingUtils() {
       const elapsed = Math.floor((Date.now() - startAt) / 1000);
       const phase = phases[tick % phases.length];
       message.edit({ content: `${icon} ${displayLabel}${dots}（${phase}｜${elapsed}s）` }).catch(() => {});
-    }, 1500);
+    }, LOADING_ANIMATION_EDIT_INTERVAL_MS);
 
     return () => clearInterval(timer);
   }
 
-  function startTypingIndicator(channel, intervalMs = 6500) {
+  function startTypingIndicator(channel, intervalMs = LOADING_TYPING_INTERVAL_MS) {
     if (!channel || typeof channel.sendTyping !== 'function') return () => {};
     const ping = () => channel.sendTyping().catch(() => {});
     ping();
