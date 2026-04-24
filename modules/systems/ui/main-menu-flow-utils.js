@@ -106,6 +106,15 @@ function getWantedLevelForPlayer(CORE, player) {
   return Math.max(0, byCore, byPlayer);
 }
 
+function hasCorruptedStoryText(story = '') {
+  const source = String(story || '');
+  if (!source) return false;
+  if (/#\d{4,7};/u.test(source)) return true;
+  if (/(?:[)\-]\s*){18,}/u.test(source)) return true;
+  if (/[)\-_.#]{36,}/u.test(source)) return true;
+  return false;
+}
+
 function getMainMenuStaticText(lang = 'zh-TW') {
   const code = normalizeLangCode(lang || 'zh-TW');
   if (code === 'en') {
@@ -201,6 +210,19 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
     : '';
   const portalGuideBlock = player?.portalMenuOpen ? `\n\n${buildPortalUsageGuide(player)}` : '';
   let forceFreshStory = Boolean(getPendingStoryTrigger(player)?.forceFreshStory);
+  const corruptedCachedStory = hasCorruptedStoryText(player?.currentStory || '');
+  if (!forceFreshStory && corruptedCachedStory) {
+    queuePendingStoryTrigger(player, {
+      name: '文本污染自動重生',
+      choice: '重建當前回合敘事',
+      desc: '系統偵測到故事文本含亂碼，改為強制重生新篇章',
+      action: 'story_corruption_autofix',
+      outcome: '請基於上一回合有效上下文重建故事正文與新選項，排除亂碼符號污染'
+    });
+    player.eventChoices = [];
+    CORE.savePlayer(player);
+    forceFreshStory = true;
+  }
   const stitchedBattleStoryDetected =
     !forceFreshStory &&
     detectStitchedBattleStory(player.currentStory) &&

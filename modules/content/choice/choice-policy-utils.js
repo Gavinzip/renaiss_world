@@ -231,11 +231,9 @@ function createChoicePolicyUtils(deps = {}) {
       ? choices
         .filter(Boolean)
         .slice(0, CHOICE_POOL_COUNT)
-        .map((choice) => rewriteScratchChoiceToShop(choice, player))
       : [];
     // 傳送改由地圖按鈕（主傳送門/傳送裝置）處理，不再出現在劇情五選項中。
     let pool = mapped.filter((choice) => !isPortalChoice(choice));
-    pool = ensureStoryDirectedDestinationChoice(player, pool, CHOICE_DISPLAY_COUNT);
     if (pool.length <= CHOICE_DISPLAY_COUNT) return pool;
     const maxPick = Math.min(CHOICE_DISPLAY_COUNT, pool.length);
     const signals = buildChoiceContextSignals(player);
@@ -903,10 +901,8 @@ function createChoicePolicyUtils(deps = {}) {
   function applyChoicePolicy(player, choices = []) {
     let list = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
     if (!player || list.length === 0) return list;
-    // Prompt-first 選項策略：以 AI 選項為主，僅在必要時做保底修正。
-    list = ensurePendingConflictImmediateBattleChoice(player, list);
+    // AI-first：不再在這裡注入模板選項，僅保留顯示安全修正。
     list = applyStoryThreatGate(player, list);
-    list = ensureWantedPressurePursuitChoice(player, list);
     if (typeof markSystemChoiceExposureImpl === 'function') {
       markSystemChoiceExposureImpl(player, list);
     }

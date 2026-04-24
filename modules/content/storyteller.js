@@ -487,7 +487,65 @@ function sanitizeNarrativeText(text = '') {
   for (const [pattern, replacement] of NARRATIVE_TERM_REPLACEMENTS) {
     output = output.replace(pattern, replacement);
   }
+  output = output
+    .replace(/(?:#\d{4,7};\s*){2,}/gu, ' ')
+    .replace(/(?:[)\-]\s*){18,}/gu, ' ')
+    .replace(/[)\-_.#]{28,}/gu, ' ')
+    .replace(/[ \t]{3,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   return output;
+}
+
+function isLikelyCorruptedLine(line = '', mode = 'story') {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  const entityHits = countRegexMatches(text, /#\d{4,7};/g);
+  if (entityHits >= 2) return true;
+  if (/(?:[)\-]\s*){16,}/u.test(text)) return true;
+  if (/[)\-_.#]{28,}/u.test(text)) return true;
+
+  const meaningfulCount = countRegexMatches(text, /[A-Za-z0-9\u4E00-\u9FFF가-힣]/g);
+  const symbolCount = countRegexMatches(text, /[^A-Za-z0-9\u4E00-\u9FFF가-힣\s]/g);
+  const minLen = mode === 'choice' ? 18 : 30;
+  if (text.length >= minLen && symbolCount >= Math.max(12, meaningfulCount * 2.2) && /[)\-#_.]/u.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function getNarrativeCorruptionIssue(text = '', playerLang = 'zh-TW', options = {}) {
+  const source = String(text || '').trim();
+  if (!source) return '';
+  const mode = String(options?.mode || 'story').trim() || 'story';
+  const entityHits = countRegexMatches(source, /#\d{4,7};/g);
+  if (entityHits >= 3) {
+    return mode === 'choice'
+      ? '選項文本含異常數字實體符號（疑似模型亂碼）'
+      : '故事文本含異常數字實體符號（疑似模型亂碼）';
+  }
+  if (/(?:[)\-]\s*){18,}/u.test(source) || /[)\-_.#]{32,}/u.test(source)) {
+    return mode === 'choice'
+      ? '選項文本含連續符號污染（疑似模型亂碼）'
+      : '故事文本含連續符號污染（疑似模型亂碼）';
+  }
+  const lines = source.split(/\n+/);
+  if (lines.some((line) => isLikelyCorruptedLine(line, mode))) {
+    return mode === 'choice'
+      ? '選項文本含異常亂碼行（疑似模型污染）'
+      : '故事文本含異常亂碼行（疑似模型污染）';
+  }
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  if (langCode === 'ko') {
+    const hangulCount = countRegexMatches(source, /[가-힣]/g);
+    const punctCount = countRegexMatches(source, /[^A-Za-z0-9\u4E00-\u9FFF가-힣\s]/g);
+    if (hangulCount > 0 && punctCount > hangulCount * 1.35 && punctCount >= 36) {
+      return mode === 'choice'
+        ? '韓文選項含過量符號污染（疑似模型失真）'
+        : '韓文故事含過量符號污染（疑似模型失真）';
+    }
+  }
+  return '';
 }
 
 function sanitizeStoryTurnMarker(text = '') {
@@ -612,6 +670,14 @@ function getLanguageComplianceIssue(text = '', playerLang = 'zh-TW', mode = 'sto
   const minHangul = mode === 'story' ? 80 : 8;
   if (hangulCount >= minHangul) return '';
   return `語言違規：目前語言是韓文（ko），但輸出韓文字元不足（${hangulCount}/${minHangul}）`;
+}
+
+function getStoryTruncatedSuffix(playerLang = 'zh-TW') {
+  const langCode = normalizeLangCode(playerLang || 'zh-TW');
+  if (langCode === 'en') return '...[Story truncated due to length]';
+  if (langCode === 'ko') return '...[스토리가 너무 길어 일부가 잘렸습니다]';
+  if (langCode === 'zh-CN') return '...[故事过长已截断]';
+  return '...[故事過長已截斷]';
 }
 
 function normalizeChoiceByLanguage(choice, playerLang = 'zh-TW') {
@@ -1764,7 +1830,8 @@ function extractDirectedDestinationFromStoryTail(story = '', sourceChoice = '') 
 }
 
 const CHOICE_BANNED_PHRASES = [
-  /一鍵成交|立即變現|秒賺|躺賺|暴富|無風險套利/gu
+  /一鍵成交|立即變現|秒賺|躺賺|暴富|無風險套利/gu,
+  /刮刮樂|刮刮乐|scratch\s*(?:lottery|card)|스크래치/giu
 ];
 
 const CHOICE_VAGUE_PHRASES = [
@@ -1773,6 +1840,7 @@ const CHOICE_VAGUE_PHRASES = [
   /某個線索|不明線索|神秘線索(?!來源)/gu,
   /持續追查來源與流向|继续追查来源与流向/gu,
   /沿著.{0,18}(追查|追蹤).{0,20}(來源與流向|来源与流向)/gu,
+  /追查.{0,14}背後來源|追查.{0,14}背后来源/gu,
   /先處理本區關鍵|先处理本区关键/gu,
   /回到核心線索|回到核心线索/gu,
   /現場目擊者逐一確認出現時間|现场目击者逐一确认出现时间/gu,
@@ -2075,7 +2143,10 @@ function validateChoiceSet(choices = [], {
   location = '',
   previousStory = '',
   locationPlaystyle = null,
-  playerLang = 'zh-TW'
+  playerLang = 'zh-TW',
+  wantedPressure = 0,
+  pendingConflictActive = false,
+  pendingConflictName = ''
 } = {}) {
   const issues = [];
   const list = Array.isArray(choices) ? choices.filter(Boolean) : [];
@@ -2091,6 +2162,9 @@ function validateChoiceSet(choices = [], {
   let duplicateCount = 0;
   let anchorHitCount = 0;
   let aggressiveCount = 0;
+  let wantedCueCount = 0;
+  let pendingConflictCount = 0;
+  let pendingImmediateBattleCount = 0;
   const adjacentSet = new Set(
     location && typeof getConnectedLocations === 'function'
       ? getConnectedLocations(location)
@@ -2104,6 +2178,7 @@ function validateChoiceSet(choices = [], {
   for (let i = 0; i < list.length; i++) {
     const choice = list[i];
     const text = [choice?.name || '', choice?.choice || '', choice?.desc || '', choice?.tag || ''].join(' ');
+    const action = String(choice?.action || '').trim();
     const fp = normalizeComparableText([choice?.name || '', choice?.choice || '', choice?.desc || ''].join(' '));
     const moveTo = normalizeMoveToLocation(choice?.move_to || choice?.moveTo || '');
     const hasCityMoveIntent = /(?:前往|趕往|赶往|轉往|转往|去往|前去|啟程|启程|移動到|移动到)[^，。；\n]{0,24}(?:城|市|鎮|站|港|島|都|關|谷|原|渡口|山莊|山城)/u.test(text);
@@ -2117,6 +2192,13 @@ function validateChoiceSet(choices = [], {
     if (hasAnyRegex(text, CHOICE_BANNED_PHRASES)) issues.push(`第 ${i + 1} 個含跳 tone 詞彙`);
     if (hasAnyRegex(text, CHOICE_VAGUE_PHRASES)) issues.push(`第 ${i + 1} 個語意空泛或暴露過早`);
     if (hasAnyRegex(text, CHOICE_PORTAL_PATTERNS)) issues.push(`第 ${i + 1} 個包含傳送類選項（已改由地圖按鈕）`);
+    if (action === 'scratch_lottery') issues.push(`第 ${i + 1} 個包含刮刮樂 action（主選項禁止）`);
+    const corruptionIssue = getNarrativeCorruptionIssue(
+      [choice?.name || '', choice?.choice || '', choice?.desc || ''].join('\n'),
+      playerLang,
+      { mode: 'choice' }
+    );
+    if (corruptionIssue) issues.push(`第 ${i + 1} 個含亂碼或符號污染`);
     if (hasUnanchoredEntityToken(text, anchorList)) issues.push(`第 ${i + 1} 個引入了前文未鋪陳的可疑角色稱呼`);
     if (locationRegex && locationRegex.test(text)) issues.push(`第 ${i + 1} 個把地名當作物件`);
     if (moveTo && !text.includes(moveTo)) issues.push(`第 ${i + 1} 個 move_to=${moveTo} 但文案未提到該地點`);
@@ -2129,6 +2211,15 @@ function validateChoiceSet(choices = [], {
       const hangulCount = countRegexMatches(coreText, /[가-힣]/g);
       if (hangulCount < 6) {
         issues.push(`第 ${i + 1} 個選項不是韓文輸出（韓文字元不足）`);
+      }
+    }
+    if (WANTED_PSUIT_CHOICE_RE.test(text)) wantedCueCount += 1;
+    if (pendingConflictActive) {
+      const nameHit = pendingConflictName ? text.includes(pendingConflictName) : false;
+      const actionHit = PENDING_CONFLICT_ACTION_RE.test(text);
+      if (nameHit || actionHit) {
+        pendingConflictCount += 1;
+        if (isImmediateBattleChoice(choice)) pendingImmediateBattleCount += 1;
       }
     }
 
@@ -2147,6 +2238,16 @@ function validateChoiceSet(choices = [], {
     const keywordHits = countChoiceKeywordHits(list, locationPlaystyle.keywords);
     if (keywordHits < minKeywordHits) {
       issues.push(`至少需要 ${minKeywordHits} 個選項符合地區玩法口味（目前 ${keywordHits} 個）`);
+    }
+  }
+  if (Number(wantedPressure || 0) >= WANTED_AMBUSH_MIN_LEVEL && wantedCueCount < 1) {
+    issues.push(`通緝熱度偏高（${wantedPressure}）時，至少 1 個選項需明確表現追兵/尾隨/主動接近`);
+  }
+  if (pendingConflictActive) {
+    if (pendingConflictCount < 1) {
+      issues.push('上一輪衝突尚未收束：至少 1 個選項需直接承接衝突對手');
+    } else if (pendingImmediateBattleCount < 1) {
+      issues.push('上一輪衝突尚未收束：承接衝突的選項需包含可即時進入戰鬥路徑');
     }
   }
   // 「是否命中過往元素」改為提示詞引導，不作為硬性失敗條件，
@@ -2201,6 +2302,8 @@ const THREAT_RESOLVED_KEYWORDS = [
   '停戰', '通過試煉', '危機解除', '擊退', '擊敗', '化解', '撤離成功', '脫離',
   '遠去', '離去', '收兵', '結束戰鬥'
 ];
+const WANTED_PSUIT_CHOICE_RE = /(通緝|通缉|追兵|尾隨|尾随|盯上|主動接近|主动接近|bounty|wanted|hunter|tailing|tracked|현상금|추적|추격|매복)/iu;
+const PENDING_CONFLICT_ACTION_RE = /(攔截|拦截|逼問|逼问|先發制人|先发制人|即時戰鬥|即时战斗|전투|요격|추적|intercept|confront|engage)/iu;
 
 function hasThreatKeyword(text = '') {
   const source = String(text || '');
@@ -2420,6 +2523,7 @@ function buildDeterministicFallbackChoices({
   connectedLocations = [],
   directedDestination = '',
   stageGoal = '',
+  pendingConflictName = '',
   playerLang = 'zh-TW'
 } = {}) {
   const langCode = normalizeLangCode(playerLang || 'zh-TW');
@@ -2436,6 +2540,7 @@ function buildDeterministicFallbackChoices({
     ? '（전투 진입）'
     : (langCode === 'en' ? '(Immediate battle)' : (langCode === 'zh-CN' ? '（会进入战斗）' : '（會進入戰鬥）'));
   const stageHint = String(stageGoal || '').trim();
+  const conflictName = String(pendingConflictName || '').trim();
 
   const baseMeta = {
     explore: { law: 1, harm: -1, trust: 1, selfInterest: 0, targetFaction: 'none', witnessRisk: 0.12 },
@@ -2494,7 +2599,9 @@ function buildDeterministicFallbackChoices({
       {
         action: 'fight',
         name: '즉시 요격',
-        choice: `근처 미행 인원을 먼저 차단해 정면으로 충돌한다${immediateBattleMarker}`,
+        choice: conflictName
+          ? `${conflictName}의 움직임을 먼저 차단해 정면으로 충돌한다${immediateBattleMarker}`
+          : `근처 미행 인원을 먼저 차단해 정면으로 충돌한다${immediateBattleMarker}`,
         desc: '고위험 선택: 즉시 교전으로 전환될 수 있다',
         tag: getChoiceTag('combat', playerLang),
         styleTag: '強奪',
@@ -2553,7 +2660,9 @@ function buildDeterministicFallbackChoices({
       {
         action: 'fight',
         name: 'Preemptive intercept',
-        choice: `Intercept the nearby tailing unit before they regroup ${immediateBattleMarker}`,
+        choice: conflictName
+          ? `Intercept ${conflictName} before they regroup ${immediateBattleMarker}`
+          : `Intercept the nearby tailing unit before they regroup ${immediateBattleMarker}`,
         desc: 'High-risk line: likely to trigger immediate combat',
         tag: getChoiceTag('combat', playerLang),
         styleTag: '強奪',
@@ -2612,7 +2721,9 @@ function buildDeterministicFallbackChoices({
       {
         action: 'fight',
         name: '先发拦截',
-        choice: `对附近可疑尾随者发动先手拦截${immediateBattleMarker}`,
+        choice: conflictName
+          ? `对${conflictName}发动先手拦截${immediateBattleMarker}`
+          : `对附近可疑尾随者发动先手拦截${immediateBattleMarker}`,
         desc: '高风险行动：可能立刻进入正面交锋',
         tag: getChoiceTag('combat', playerLang),
         styleTag: '強奪',
@@ -2670,7 +2781,9 @@ function buildDeterministicFallbackChoices({
     {
       action: 'fight',
       name: '先發攔截',
-      choice: `對附近可疑尾隨者發動先手攔截${immediateBattleMarker}`,
+      choice: conflictName
+        ? `對${conflictName}發動先手攔截${immediateBattleMarker}`
+        : `對附近可疑尾隨者發動先手攔截${immediateBattleMarker}`,
       desc: '高風險行動：可能立刻進入正面交鋒',
       tag: getChoiceTag('combat', playerLang),
       styleTag: '強奪',
@@ -3225,10 +3338,17 @@ ${langInstruction}，講述玩家「${safePlayerName}」執行「${previousActio
           if (pass < 1) continue;
           throw new Error(languageIssue);
         }
+        const corruptionIssue = getNarrativeCorruptionIssue(normalizedStory, playerLang, { mode: 'story' });
+        if (corruptionIssue) {
+          repairIssues = [corruptionIssue];
+          console.warn(`[Storyteller] generateStory corruption retry: ${corruptionIssue}`);
+          if (pass < 1) continue;
+          throw new Error(corruptionIssue);
+        }
 
         if (normalizedStory.length > 2600) {
           recordAIPerf('story', Date.now() - startedAt);
-          return normalizedStory.substring(0, 2600) + '...[故事過長已截斷]';
+          return normalizedStory.substring(0, 2600) + getStoryTruncatedSuffix(playerLang);
         }
         recordAIPerf('story', Date.now() - startedAt);
         console.log(`[AI][generateStory] total ${Date.now() - startedAt}ms`);
@@ -3646,7 +3766,10 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
         location,
         previousStory: fullStoryText,
         locationPlaystyle,
-        playerLang
+        playerLang,
+        wantedPressure,
+        pendingConflictActive,
+        pendingConflictName
       });
       if (issues.length === 0) {
         validatedChoices = candidateChoices.slice(0, CHOICE_OUTPUT_COUNT);
@@ -3669,32 +3792,16 @@ ${langInstruction}只輸出 JSON 陣列，不可輸出任何額外說明。`;
         location,
         previousStory: fullStoryText,
         locationPlaystyle,
-        playerLang
+        playerLang,
+        wantedPressure,
+        pendingConflictActive,
+        pendingConflictName
       });
       if (mergedChoices.length === CHOICE_OUTPUT_COUNT && mergedIssues.length === 0) {
         console.warn(`[AI][choices] use merged pool fallback, issues=${lastIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
         validatedChoices = mergedChoices;
       } else {
-        const deterministicFallback = buildDeterministicFallbackChoices({
-          location,
-          connectedLocations,
-          directedDestination,
-          stageGoal,
-          playerLang
-        }).slice(0, CHOICE_OUTPUT_COUNT);
-        const fallbackIssues = validateChoiceSet(deterministicFallback, {
-          anchors: storyAnchors,
-          location,
-          previousStory: fullStoryText,
-          locationPlaystyle,
-          playerLang
-        });
-        if (deterministicFallback.length === CHOICE_OUTPUT_COUNT && fallbackIssues.length === 0) {
-          console.warn(`[AI][choices] use deterministic fallback, mergedIssues=${mergedIssues.join(' | ') || 'none'} pool=${choicePool.length}`);
-          validatedChoices = deterministicFallback;
-        } else {
-          throw new Error(`choice validation failed: ${lastIssues.join(' | ') || mergedIssues.join(' | ') || fallbackIssues.join(' | ') || 'unknown issue'}`);
-        }
+        throw new Error(`choice validation failed: ${lastIssues.join(' | ') || mergedIssues.join(' | ') || 'unknown issue'}`);
       }
     }
 
