@@ -2992,7 +2992,7 @@ function recordWorldEvent(message, type = 'player_action', extra = {}) {
     timestamp: Date.now()
   };
   if (extra && typeof extra === 'object') {
-    const allowed = ['location', 'actor', 'target', 'impact'];
+    const allowed = ['location', 'actor', 'target', 'impact', 'actionText', 'wish', 'rumor', 'verdict', 'evidenceName', 'petName', 'reviveTurns', 'fleeAttempt', 'forcedContinue', 'day'];
     for (const key of allowed) {
       const value = extra[key];
       if (value === undefined || value === null) continue;

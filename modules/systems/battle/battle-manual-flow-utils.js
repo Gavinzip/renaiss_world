@@ -1489,7 +1489,10 @@ async function handleFlee(interaction, user, attemptNum) {
       player,
       enemy.name,
       'battle_flee_fail',
-      `第${currentAttempt}次逃跑失敗（被迫續戰）`
+      {
+        fleeAttempt: currentAttempt,
+        forcedContinue: 1
+      }
     );
     CORE.savePlayer(player);
     await renderManualBattle(interaction, player, pet, result.message);
@@ -1518,7 +1521,9 @@ async function handleFlee(interaction, user, attemptNum) {
     player,
     enemy.name,
     'battle_flee_fail',
-    `第${currentAttempt}次逃跑失敗`
+    {
+      fleeAttempt: currentAttempt
+    }
   );
   CORE.savePlayer(player);
 

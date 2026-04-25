@@ -184,7 +184,8 @@ function createEventHandlerUtils(deps = {}) {
     addWorldEvent,
     canPetFight,
     executeEvent,
-    negotiationPrompt
+    negotiationPrompt,
+    getLanguageSection = null
   } = deps;
   const buildStatusFields = typeof buildMainStatusFields === 'function'
     ? buildMainStatusFields
@@ -200,6 +201,67 @@ function createEventHandlerUtils(deps = {}) {
       { name: '🌟 幸運', value: String(player?.stats?.運氣 || 0), inline: true },
       { name: '🚨 通緝級', value: String(Math.max(0, Number(options?.wantedLevel || 0))), inline: true }
     ];
+
+  function getUiTextMap(lang = 'zh-TW') {
+    const code = normalizeLangCode(lang || 'zh-TW');
+    const fallbackMap = {
+      'zh-TW': {
+        customInputModalTitle: '✍️ 自訂行動',
+        customInputModalLabel: '你接下來想做什麼？',
+        customInputModalPlaceholder: '例如：我去跟茶師談判，要求先合作再分成',
+        customInputModalOpenFailed: '⚠️ 無法開啟自訂輸入框，請再點一次。',
+        customInputSelectedChoice: (text) => `自訂行動：「${text}」`,
+        wishPoolModalTitle: '🪙 許願池',
+        wishPoolModalLabel: '你想許下什麼願望？',
+        wishPoolModalPlaceholder: '例如：希望賺很多錢、希望變強、希望遇到貴人...',
+        wishPoolModalOpenFailed: '⚠️ 無法開啟許願輸入框，請再點一次。',
+        wishPoolSelectedChoice: (text) => `在許願池許願：「${text}」`
+      },
+      'zh-CN': {
+        customInputModalTitle: '✍️ 自定义行动',
+        customInputModalLabel: '你接下来想做什么？',
+        customInputModalPlaceholder: '例如：我去跟茶师谈判，要求先合作再分成',
+        customInputModalOpenFailed: '⚠️ 无法打开自定义输入框，请再点一次。',
+        customInputSelectedChoice: (text) => `自定义行动：“${text}”`,
+        wishPoolModalTitle: '🪙 许愿池',
+        wishPoolModalLabel: '你想许下什么愿望？',
+        wishPoolModalPlaceholder: '例如：希望赚很多钱、希望变强、希望遇到贵人...',
+        wishPoolModalOpenFailed: '⚠️ 无法打开许愿输入框，请再点一次。',
+        wishPoolSelectedChoice: (text) => `在许愿池许愿：“${text}”`
+      },
+      en: {
+        customInputModalTitle: '✍️ Custom Action',
+        customInputModalLabel: 'What do you want to do next?',
+        customInputModalPlaceholder: 'For example: negotiate with the tea master first, then split the profits later',
+        customInputModalOpenFailed: '⚠️ Unable to open the custom input box. Please tap again.',
+        customInputSelectedChoice: (text) => `Custom action: "${text}"`,
+        wishPoolModalTitle: '🪙 Wish Pool',
+        wishPoolModalLabel: 'What do you want to wish for?',
+        wishPoolModalPlaceholder: 'For example: make more money, become stronger, meet a benefactor...',
+        wishPoolModalOpenFailed: '⚠️ Unable to open the wish input box. Please tap again.',
+        wishPoolSelectedChoice: (text) => `Make a wish: "${text}"`
+      },
+      ko: {
+        customInputModalTitle: '✍️ 사용자 행동',
+        customInputModalLabel: '다음에 무엇을 하고 싶나요?',
+        customInputModalPlaceholder: '예: 차 사범과 먼저 협상하고 이후 수익을 나눈다',
+        customInputModalOpenFailed: '⚠️ 사용자 입력창을 열 수 없습니다. 다시 눌러 주세요.',
+        customInputSelectedChoice: (text) => `사용자 행동: "${text}"`,
+        wishPoolModalTitle: '🪙 소원 연못',
+        wishPoolModalLabel: '어떤 소원을 빌고 싶나요?',
+        wishPoolModalPlaceholder: '예: 돈을 많이 벌고 싶다, 강해지고 싶다, 귀인을 만나고 싶다...',
+        wishPoolModalOpenFailed: '⚠️ 소원 입력창을 열 수 없습니다. 다시 눌러 주세요.',
+        wishPoolSelectedChoice: (text) => `소원 빌기: "${text}"`
+      }
+    };
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('uiText', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return fallbackMap[code] || fallbackMap['zh-TW'];
+  }
 
 function isStorageLootContext(event = {}, result = {}, selectedChoice = '') {
   const text = [
@@ -509,37 +571,39 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
 
   // Modal 類事件先快速回應，避免先做重操作導致 3 秒超時
   if (event.action === 'wish_pool' && !wishTextFromModal) {
+    const uiText = getUiTextMap(player?.language || 'zh-TW');
     const modal = new ModalBuilder()
       .setCustomId(`wish_pool_submit_${eventIndex}`)
-      .setTitle('🪙 許願池');
+      .setTitle(uiText.wishPoolModalTitle);
     const wishInput = new TextInputBuilder()
       .setCustomId('wish_text')
-      .setLabel('你想許下什麼願望？')
+      .setLabel(uiText.wishPoolModalLabel)
       .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('例如：希望賺很多錢、希望變強、希望遇到貴人...')
+      .setPlaceholder(uiText.wishPoolModalPlaceholder)
       .setRequired(true)
       .setMaxLength(120);
     modal.addComponents(new ActionRowBuilder().addComponents(wishInput));
     await interaction.showModal(modal).catch(async () => {
-      await interaction.reply({ content: '⚠️ 無法開啟許願輸入框，請再點一次。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: uiText.wishPoolModalOpenFailed, ephemeral: true }).catch(() => {});
     });
     return;
   }
 
   if (event.action === 'custom_input' && !customActionTextFromModal) {
+    const uiText = getUiTextMap(player?.language || 'zh-TW');
     const modal = new ModalBuilder()
       .setCustomId(`custom_action_submit_${eventIndex}`)
-      .setTitle('✍️ 自訂行動');
+      .setTitle(uiText.customInputModalTitle);
     const actionInput = new TextInputBuilder()
       .setCustomId('custom_action_text')
-      .setLabel('你接下來想做什麼？')
+      .setLabel(uiText.customInputModalLabel)
       .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('例如：我去跟茶師談判，要求先合作再分成')
+      .setPlaceholder(uiText.customInputModalPlaceholder)
       .setRequired(true)
       .setMaxLength(CUSTOM_INPUT_MAX_LENGTH);
     modal.addComponents(new ActionRowBuilder().addComponents(actionInput));
     await interaction.showModal(modal).catch(async () => {
-      await interaction.reply({ content: '⚠️ 無法開啟自訂輸入框，請再點一次。', ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: uiText.customInputModalOpenFailed, ephemeral: true }).catch(() => {});
     });
     return;
   }
@@ -770,7 +834,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     }
   } else if (event.action === 'wish_pool') {
     const safeWishText = wishTextFromModal.slice(0, 120);
-    selectedChoice = `在許願池許願：「${safeWishText}」`;
+    const uiText = getUiTextMap(player?.language || 'zh-TW');
+    selectedChoice = uiText.wishPoolSelectedChoice(safeWishText);
 
     const outcome = await WISH.judgeWishWithAI({
       wishText: safeWishText,
@@ -811,7 +876,8 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     });
   } else if (event.action === 'custom_input') {
     const safeCustomAction = customActionTextFromModal.slice(0, CUSTOM_INPUT_MAX_LENGTH);
-    selectedChoice = `自訂行動：「${safeCustomAction}」`;
+    const uiText = getUiTextMap(player?.language || 'zh-TW');
+    selectedChoice = uiText.customInputSelectedChoice(safeCustomAction);
 
     const outcome = await WISH.judgeCustomActionWithAI({
       actionText: safeCustomAction,
@@ -1189,7 +1255,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
     result.message = `${result.message || ''}\n\n${actionEvidence.appendText}`.trim();
   }
   if (actionEvidence?.announcement) {
-    EVENTS.addWorldEvent(actionEvidence.announcement, 'main_story');
+    EVENTS.addWorldEvent(actionEvidence.announcement, 'main_story', actionEvidence.announcementExtra || null);
   }
   if (actionEvidence?.memory) {
     queueMemory({
@@ -2058,7 +2124,7 @@ async function handleEvent(interaction, user, eventIndex, options = {}) {
 
       player.eventChoices = applyChoicePolicy(
         player,
-        maybeInjectRareCustomInputChoice(normalizeEventChoices(player, aiChoices))
+        maybeInjectRareCustomInputChoice(normalizeEventChoices(player, aiChoices), { player, pet })
       );
       updateGenerationState(player, {
         phase: 'choices_ready',

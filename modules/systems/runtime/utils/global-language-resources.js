@@ -150,7 +150,21 @@ function createGlobalLanguageResources(deps = {}) {
         petList: '寵物列表',
         petManagement: '寵物管理',
         petNamed: '寵物已命名',
-        petNaming: '寵物命名'
+        petNaming: '寵物命名',
+        customInputName: '✍️ 自訂行動',
+        customInputChoice: '＿＿＿＿（自行輸入接下來要做的事）',
+        customInputDesc: '你可自行輸入接下來想進行的行動',
+        customInputModalTitle: '✍️ 自訂行動',
+        customInputModalLabel: '你接下來想做什麼？',
+        customInputModalPlaceholder: '例如：我去跟茶師談判，要求先合作再分成',
+        customInputModalOpenFailed: '⚠️ 無法開啟自訂輸入框，請再點一次。',
+        customInputSelectedChoice: (text) => `自訂行動：「${text}」`,
+        wishPoolModalTitle: '🪙 許願池',
+        wishPoolModalLabel: '你想許下什麼願望？',
+        wishPoolModalPlaceholder: '例如：希望賺很多錢、希望變強、希望遇到貴人...',
+        wishPoolModalOpenFailed: '⚠️ 無法開啟許願輸入框，請再點一次。',
+        wishPoolSelectedChoice: (text) => `在許願池許願：「${text}」`,
+        choiceFallbackLabel: (index) => `選項${index}`
       },
       'zh-CN': {
         welcome: '欢迎来到 Renaiss 星球！',
@@ -186,7 +200,21 @@ function createGlobalLanguageResources(deps = {}) {
         petList: '宠物列表',
         petManagement: '宠物管理',
         petNamed: '宠物已命名',
-        petNaming: '宠物命名'
+        petNaming: '宠物命名',
+        customInputName: '✍️ 自定义行动',
+        customInputChoice: '＿＿＿＿（自行输入接下来要做的事）',
+        customInputDesc: '你可以自行输入接下来想进行的行动',
+        customInputModalTitle: '✍️ 自定义行动',
+        customInputModalLabel: '你接下来想做什么？',
+        customInputModalPlaceholder: '例如：我去跟茶师谈判，要求先合作再分成',
+        customInputModalOpenFailed: '⚠️ 无法打开自定义输入框，请再点一次。',
+        customInputSelectedChoice: (text) => `自定义行动：“${text}”`,
+        wishPoolModalTitle: '🪙 许愿池',
+        wishPoolModalLabel: '你想许下什么愿望？',
+        wishPoolModalPlaceholder: '例如：希望赚很多钱、希望变强、希望遇到贵人...',
+        wishPoolModalOpenFailed: '⚠️ 无法打开许愿输入框，请再点一次。',
+        wishPoolSelectedChoice: (text) => `在许愿池许愿：“${text}”`,
+        choiceFallbackLabel: (index) => `选项${index}`
       },
       en: {
         welcome: 'Welcome to Renaiss Planet!',
@@ -222,7 +250,37 @@ function createGlobalLanguageResources(deps = {}) {
         petList: 'Pet List',
         petManagement: 'Pet Management',
         petNamed: 'Pet Named',
-        petNaming: 'Pet Naming'
+        petNaming: 'Pet Naming',
+        customInputName: '✍️ Custom Action',
+        customInputChoice: '＿＿＿＿(Enter your next action)',
+        customInputDesc: 'Write the next action you want to take.',
+        customInputModalTitle: '✍️ Custom Action',
+        customInputModalLabel: 'What do you want to do next?',
+        customInputModalPlaceholder: 'For example: negotiate with the tea master first, then split the profits later',
+        customInputModalOpenFailed: '⚠️ Unable to open the custom input box. Please tap again.',
+        customInputSelectedChoice: (text) => `Custom action: "${text}"`,
+        wishPoolModalTitle: '🪙 Wish Pool',
+        wishPoolModalLabel: 'What do you want to wish for?',
+        wishPoolModalPlaceholder: 'For example: make more money, become stronger, meet a benefactor...',
+        wishPoolModalOpenFailed: '⚠️ Unable to open the wish input box. Please tap again.',
+        wishPoolSelectedChoice: (text) => `Make a wish: "${text}"`,
+        choiceFallbackLabel: (index) => `Option ${index}`
+      },
+      ko: {
+        customInputName: '✍️ 사용자 행동',
+        customInputChoice: '＿＿＿＿(다음 행동을 직접 입력)',
+        customInputDesc: '다음에 하고 싶은 행동을 직접 입력할 수 있습니다.',
+        customInputModalTitle: '✍️ 사용자 행동',
+        customInputModalLabel: '다음에 무엇을 하고 싶나요?',
+        customInputModalPlaceholder: '예: 차 사범과 먼저 협상하고 이후 수익을 나눈다',
+        customInputModalOpenFailed: '⚠️ 사용자 입력창을 열 수 없습니다. 다시 눌러 주세요.',
+        customInputSelectedChoice: (text) => `사용자 행동: "${text}"`,
+        wishPoolModalTitle: '🪙 소원 연못',
+        wishPoolModalLabel: '어떤 소원을 빌고 싶나요?',
+        wishPoolModalPlaceholder: '예: 돈을 많이 벌고 싶다, 강해지고 싶다, 귀인을 만나고 싶다...',
+        wishPoolModalOpenFailed: '⚠️ 소원 입력창을 열 수 없습니다. 다시 눌러 주세요.',
+        wishPoolSelectedChoice: (text) => `소원 빌기: "${text}"`,
+        choiceFallbackLabel: (index) => `선택 ${index}`
       }
     },
 
@@ -723,7 +781,17 @@ function createGlobalLanguageResources(deps = {}) {
       '修復台': { 'zh-TW': '修復臺', 'zh-CN': '修复台', en: 'repair bench', ko: '수복대' },
       '鑑價站': { 'zh-TW': '鑑價站', 'zh-CN': '鉴价站', en: 'appraisal counter', ko: '감정소' },
       '神秘鑑價站': { 'zh-TW': '神秘鑑價站', 'zh-CN': '神秘鉴价站', en: 'mysterious appraisal counter', ko: '신비 감정소' },
-      'Renaiss鑑價站': { 'zh-TW': 'Renaiss鑑價站', 'zh-CN': 'Renaiss鉴价站', en: 'Renaiss appraisal counter', ko: '르네이스 감정소' }
+      'Renaiss鑑價站': { 'zh-TW': 'Renaiss鑑價站', 'zh-CN': 'Renaiss鉴价站', en: 'Renaiss appraisal counter', ko: '르네이스 감정소' },
+      '冒險者': { 'zh-TW': '冒險者', 'zh-CN': '冒险者', en: 'Adventurer', ko: '모험가' },
+      '未知敵人': { 'zh-TW': '未知敵人', 'zh-CN': '未知敌人', en: 'Unknown hostile', ko: '정체불명의 적' },
+      '未知地點': { 'zh-TW': '未知地點', 'zh-CN': '未知地点', en: 'Unknown location', ko: '알 수 없는 장소' },
+      '主動脫離當前戰線': { 'zh-TW': '主動脫離當前戰線', 'zh-CN': '主动脱离当前战线', en: 'voluntarily withdrew from the current frontline', ko: '현재 전선에서 자발적으로 이탈했다' },
+      '洛陽城能源塔': { 'zh-TW': '洛陽城能源塔', 'zh-CN': '洛阳城能源塔', en: 'Luoyang City Energy Tower', ko: '낙양성 에너지 타워' },
+      '雙鑑衝突原始單': { 'zh-TW': '雙鑑衝突原始單', 'zh-CN': '双鉴冲突原始单', en: 'dual-appraisal conflict original sheet', ko: '이중 감정 충돌 원본 전표' },
+      '轉運站時間紀錄表（含異常批次流向）': { 'zh-TW': '轉運站時間紀錄表（含異常批次流向）', 'zh-CN': '转运站时间记录表（含异常批次流向）', en: 'transit station time log with abnormal batch routes', ko: '환적장 시간 기록표(이상 배치 흐름 포함)' },
+      '偽造樣本與製程片段': { 'zh-TW': '偽造樣本與製程片段', 'zh-CN': '伪造样本与制程片段', en: 'forged sample and process fragments', ko: '위조 샘플과 공정 파편' },
+      '夜冕主宰鏈路密鑰': { 'zh-TW': '夜冕主宰鏈路密鑰', 'zh-CN': '夜冕主宰链路密钥', en: 'Nightcrown Overlord link key', ko: '야관 주재자 링크 키' },
+      '核心憑證（四巨頭鏈）': { 'zh-TW': '核心憑證（四巨頭鏈）', 'zh-CN': '核心凭证（四巨头链）', en: 'core credential (Four Commanders chain)', ko: '핵심 증표(사대 거두 체인)' }
     },
 
     worldEventTemplates: {
@@ -732,48 +800,64 @@ function createGlobalLanguageResources(deps = {}) {
         battle_win: ({ actor, location, target, impact }) => `🏆 ${actor} 在${location}擊敗了 ${target}。${impact ? ` ${impact}` : ''}`,
         battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor} 在${location}成功脫離 ${target} 的追擊。${impact ? ` ${impact}` : ''}`,
         battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor} 在${location}嘗試逃離 ${target} 失敗，局勢惡化。${impact ? ` ${impact}` : ''}`,
-        pet_down: ({ actor, location, target, impact }) => `💥 ${actor} 的夥伴在${location}被 ${target} 重創倒下。${impact ? ` ${impact}` : ''}`,
+        pet_down: ({ actor, location, target, impact, petName, reviveTurns }) => `💥 ${actor} 的夥伴在${location}被 ${target} 重創倒下。${petName && reviveTurns ? ` ${petName}復活倒數 ${reviveTurns}回合` : (impact ? ` ${impact}` : '')}`,
         player_down: ({ actor, location, target, impact }) => `☠️ ${actor} 在${location}與 ${target} 一戰中敗亡。${impact ? ` ${impact}` : ''}`,
         npc_respawn: ({ target }) => `✨ ${target} 康復歸來！`,
         npc_death: ({ target, actor, impact }) => `💀 NPC ${target} 已被 ${actor} 擊殺！${impact ? ` ${impact}` : ''}`,
         monster_death: ({ target, actor, impact }) => `💀 怪物 ${target} 已被 ${actor} 擊殺！${impact ? ` ${impact}` : ''}`,
-        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} 被 ${actor} 擊退，已撤離現場。${impact ? ` ${impact}` : ''}`
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} 被 ${actor} 擊退，已撤離現場。${impact ? ` ${impact}` : ''}`,
+        custom_input: ({ actor, location, actionText, rumor }) => `✍️ ${actor}在${location}採取自訂行動「${actionText}」。${rumor ? ` 後續傳聞：${rumor}` : ''}`,
+        wish_pool: ({ actor, location, wish, rumor }) => `🪙 ${actor}在${location}的許願池許願「${wish}」。${rumor ? ` 結果：${rumor}` : ''}`,
+        main_story: ({ actor, evidenceName, impact }) => `🧭 ${actor || '在地線人'}交出關鍵證據「${evidenceName || impact || '關鍵證據'}」。`,
+        faction_skirmish: ({ day, location }) => `⚔️ 第${day || '?'}日：${location || '前線節點'}週邊對峙爆發拉鋸`
       },
       'zh-CN': {
         battle_start: ({ actor, location, target, impact }) => `⚔️ ${actor} 在${location}与 ${target} 爆发交锋。${impact ? ` ${impact}` : ''}`,
         battle_win: ({ actor, location, target, impact }) => `🏆 ${actor} 在${location}击败了 ${target}。${impact ? ` ${impact}` : ''}`,
         battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor} 在${location}成功脱离 ${target} 的追击。${impact ? ` ${impact}` : ''}`,
         battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor} 在${location}尝试逃离 ${target} 失败，局势恶化。${impact ? ` ${impact}` : ''}`,
-        pet_down: ({ actor, location, target, impact }) => `💥 ${actor} 的伙伴在${location}被 ${target} 重创倒下。${impact ? ` ${impact}` : ''}`,
+        pet_down: ({ actor, location, target, impact, petName, reviveTurns }) => `💥 ${actor} 的伙伴在${location}被 ${target} 重创倒下。${petName && reviveTurns ? ` ${petName}复活倒数 ${reviveTurns}回合` : (impact ? ` ${impact}` : '')}`,
         player_down: ({ actor, location, target, impact }) => `☠️ ${actor} 在${location}与 ${target} 一战中败亡。${impact ? ` ${impact}` : ''}`,
         npc_respawn: ({ target }) => `✨ ${target} 康复归来！`,
         npc_death: ({ target, actor, impact }) => `💀 NPC ${target} 已被 ${actor} 击杀！${impact ? ` ${impact}` : ''}`,
         monster_death: ({ target, actor, impact }) => `💀 怪物 ${target} 已被 ${actor} 击杀！${impact ? ` ${impact}` : ''}`,
-        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} 被 ${actor} 击退，已撤离现场。${impact ? ` ${impact}` : ''}`
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} 被 ${actor} 击退，已撤离现场。${impact ? ` ${impact}` : ''}`,
+        custom_input: ({ actor, location, actionText, rumor }) => `✍️ ${actor}在${location}采取自定义行动“${actionText}”。${rumor ? ` 后续传闻：${rumor}` : ''}`,
+        wish_pool: ({ actor, location, wish, rumor }) => `🪙 ${actor}在${location}的许愿池许愿“${wish}”。${rumor ? ` 结果：${rumor}` : ''}`,
+        main_story: ({ actor, evidenceName, impact }) => `🧭 ${actor || '在地线人'}交出关键证据“${evidenceName || impact || '关键证据'}”。`,
+        faction_skirmish: ({ day, location }) => `⚔️ 第${day || '?'}日：${location || '前线节点'}周边对峙爆发拉锯`
       },
       en: {
         battle_start: ({ actor, location, target, impact }) => `⚔️ ${actor} clashed with ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
         battle_win: ({ actor, location, target, impact }) => `🏆 ${actor} defeated ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
         battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor} escaped ${target}'s pursuit at ${location}.${impact ? ` ${impact}` : ''}`,
-        battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor} failed to escape ${target} at ${location}, and the situation worsened.${impact ? ` ${impact}` : ''}`,
-        pet_down: ({ actor, location, target, impact }) => `💥 ${actor}'s partner was knocked down by ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
+        battle_flee_fail: ({ actor, location, target, impact, fleeAttempt, forcedContinue }) => `🩸 ${actor} failed to escape ${target} at ${location}, and the situation worsened.${fleeAttempt ? ` Escape attempt ${fleeAttempt} failed` : ''}${forcedContinue ? ' and the fight continued by force.' : (impact ? ` ${impact}` : '')}`,
+        pet_down: ({ actor, location, target, impact, petName, reviveTurns }) => `💥 ${actor}'s partner was knocked down by ${target} at ${location}.${petName && reviveTurns ? ` ${petName} revives in ${reviveTurns} turns.` : (impact ? ` ${impact}` : '')}`,
         player_down: ({ actor, location, target, impact }) => `☠️ ${actor} was defeated by ${target} at ${location}.${impact ? ` ${impact}` : ''}`,
         npc_respawn: ({ target }) => `✨ ${target} has recovered and returned!`,
         npc_death: ({ target, actor, impact }) => `💀 NPC ${target} was killed by ${actor}.${impact ? ` ${impact}` : ''}`,
         monster_death: ({ target, actor, impact }) => `💀 Monster ${target} was killed by ${actor}.${impact ? ` ${impact}` : ''}`,
-        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} was driven off by ${actor}.${impact ? ` ${impact}` : ''}`
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target} was driven off by ${actor}.${impact ? ` ${impact}` : ''}`,
+        custom_input: ({ actor, location, actionText, rumor }) => `✍️ ${actor} took ${actionText ? `the custom action "${actionText}"` : 'a custom action'} at ${location}.${rumor ? ' Rumors started to spread afterward.' : ''}`,
+        wish_pool: ({ actor, location, wish, rumor }) => `🪙 ${actor} made ${wish ? `the wish "${wish}"` : 'a wish'} at the Wish Pool in ${location}.${rumor ? ' The aftermath quickly turned into rumor.' : ''}`,
+        main_story: ({ actor, evidenceName, impact }) => `🧭 ${actor || 'Local informant'} handed over the key evidence "${evidenceName || impact || 'key evidence'}".`,
+        faction_skirmish: ({ day, location }) => `⚔️ Day ${day || '?'}: the standoff around ${location || 'the frontline node'} escalated into a deadlock.`
       },
       ko: {
         battle_start: ({ actor, location, target, impact }) => `⚔️ ${actor}이(가) ${location}에서 ${target}와 충돌했다.${impact ? ` ${impact}` : ''}`,
         battle_win: ({ actor, location, target, impact }) => `🏆 ${actor}이(가) ${location}에서 ${target}을(를) 쓰러뜨렸다.${impact ? ` ${impact}` : ''}`,
         battle_flee: ({ actor, location, target, impact }) => `🏃 ${actor}이(가) ${location}에서 ${target}의 추격을 따돌렸다.${impact ? ` ${impact}` : ''}`,
-        battle_flee_fail: ({ actor, location, target, impact }) => `🩸 ${actor}이(가) ${location}에서 ${target}에게서 벗어나지 못했고 국면이 악화됐다.${impact ? ` ${impact}` : ''}`,
-        pet_down: ({ actor, location, target, impact }) => `💥 ${actor}의 동료가 ${location}에서 ${target}에게 크게 당해 쓰러졌다.${impact ? ` ${impact}` : ''}`,
+        battle_flee_fail: ({ actor, location, target, impact, fleeAttempt, forcedContinue }) => `🩸 ${actor}이(가) ${location}에서 ${target}에게서 벗어나지 못했고 국면이 악화됐다.${fleeAttempt ? ` 도주 ${fleeAttempt}회차 실패.` : ''}${forcedContinue ? ' 전투가 강제로 이어진다.' : (impact ? ` ${impact}` : '')}`,
+        pet_down: ({ actor, location, target, impact, petName, reviveTurns }) => `💥 ${actor}의 동료가 ${location}에서 ${target}에게 크게 당해 쓰러졌다.${petName && reviveTurns ? ` ${petName}은(는) ${reviveTurns}턴 후 부활한다.` : (impact ? ` ${impact}` : '')}`,
         player_down: ({ actor, location, target, impact }) => `☠️ ${actor}이(가) ${location}에서 ${target}에게 패배했다.${impact ? ` ${impact}` : ''}`,
         npc_respawn: ({ target }) => `✨ ${target}이(가) 회복되어 돌아왔다!`,
         npc_death: ({ target, actor, impact }) => `💀 NPC ${target}이(가) ${actor}에게 쓰러졌다.${impact ? ` ${impact}` : ''}`,
         monster_death: ({ target, actor, impact }) => `💀 몬스터 ${target}이(가) ${actor}에게 쓰러졌다.${impact ? ` ${impact}` : ''}`,
-        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target}이(가) ${actor}에게 밀려 현장에서 이탈했다.${impact ? ` ${impact}` : ''}`
+        npc_defeat: ({ target, actor, impact }) => `⚔️ NPC ${target}이(가) ${actor}에게 밀려 현장에서 이탈했다.${impact ? ` ${impact}` : ''}`,
+        custom_input: ({ actor, location, actionText, rumor }) => `✍️ ${actor}이(가) ${location}에서 ${actionText ? `사용자 행동 "${actionText}"을(를) 선택했다.` : '사용자 행동을 선택했다.'}${rumor ? ' 이후 소문이 퍼지기 시작했다.' : ''}`,
+        wish_pool: ({ actor, location, wish, rumor }) => `🪙 ${actor}이(가) ${location}의 소원 연못에서 ${wish ? `"${wish}" 소원을 빌었다.` : '소원을 빌었다.'}${rumor ? ' 그 여파가 곧 소문으로 번졌다.' : ''}`,
+        main_story: ({ actor, evidenceName, impact }) => `🧭 ${actor || '현지 정보원'}이(가) 핵심 증거 "${evidenceName || impact || '핵심 증거'}"를 넘겼다.`,
+        faction_skirmish: ({ day, location }) => `⚔️ 제${day || '?'}일: ${location || '전선 거점'} 주변 대치가 교착으로 번졌다.`
       }
     },
 
@@ -2329,13 +2413,51 @@ function createGlobalLanguageResources(deps = {}) {
     const code = normalizeLang(lang);
     const type = String(entry?.type || '').trim();
     const templates = RESOURCES.worldEventTemplates?.[code] || RESOURCES.worldEventTemplates?.['zh-TW'] || {};
+    const freeformOkay = (text = '') => {
+      const source = String(text || '').trim();
+      if (!source) return '';
+      if (code === 'zh-TW' || code === 'zh-CN') return localizeDisplayText(source, code);
+      if ((code === 'en' || code === 'ko') && /[\u3400-\u9FFF]/u.test(source)) return '';
+      return localizeDisplayText(source, code);
+    };
+    const normalizeOwnedTarget = (text = '') => {
+      const source = String(text || '').trim();
+      if (!source) return '';
+      const owned = source.match(/^(.+?)\s+的\s+(.+)$/u);
+      if (!owned) return source;
+      const owner = localizeDisplayText(String(owned[1] || '').trim(), code);
+      const pet = getEnemyName(String(owned[2] || '').trim(), code) || localizeDisplayText(String(owned[2] || '').trim(), code);
+      if (code === 'en') return `${owner}'s ${pet}`;
+      if (code === 'ko') return `${owner}의 ${pet}`;
+      return `${owner} 的 ${pet}`;
+    };
+    const resolveNamed = (resolver, value = '') => {
+      const source = String(value || '').trim();
+      if (!source || typeof resolver !== 'function') return '';
+      const localized = String(resolver(source, code) || '').trim();
+      return localized && localized !== source ? localized : '';
+    };
     const actor = localizeDisplayText(String(entry?.actor || '').trim(), code) || localizeDisplayText('冒險者', code);
-    const location = getLocationName(String(entry?.location || '').trim(), code) || localizeDisplayText(String(entry?.location || '').trim(), code);
+    const location = resolveNamed(getLocationName, String(entry?.location || '').trim()) || localizeDisplayText(String(entry?.location || '').trim(), code);
     const rawTarget = String(entry?.target || '').trim();
-    const target = getEnemyName(rawTarget, code) || getNpcName(rawTarget, code) || getLocationName(rawTarget, code) || localizeDisplayText(rawTarget, code);
-    const impact = localizeDisplayText(String(entry?.impact || '').trim(), code).slice(0, 80);
-    if (type && typeof templates[type] === 'function' && (actor || target || location)) {
-      return String(templates[type]({ actor, location, target, impact }) || '').trim();
+    const target = normalizeOwnedTarget(
+      resolveNamed(getEnemyName, rawTarget)
+      || resolveNamed(getNpcName, rawTarget)
+      || resolveNamed(getLocationName, rawTarget)
+      || localizeDisplayText(rawTarget, code)
+    );
+    const impact = freeformOkay(String(entry?.impact || '').trim()).slice(0, 80);
+    const actionText = freeformOkay(String(entry?.actionText || '').trim()).slice(0, 80);
+    const wish = freeformOkay(String(entry?.wish || '').trim()).slice(0, 80);
+    const rumor = freeformOkay(String(entry?.rumor || '').trim()).slice(0, 120);
+    const evidenceName = localizeDisplayText(String(entry?.evidenceName || '').trim(), code).slice(0, 120);
+    const petName = localizeDisplayText(String(entry?.petName || '').trim(), code).slice(0, 60);
+    const reviveTurns = String(entry?.reviveTurns || '').trim();
+    const fleeAttempt = String(entry?.fleeAttempt || '').trim();
+    const forcedContinue = String(entry?.forcedContinue || '').trim();
+    const day = String(entry?.day || '').trim();
+    if (type && typeof templates[type] === 'function' && (actor || target || location || actionText || wish || evidenceName || day)) {
+      return String(templates[type]({ actor, location, target, impact, actionText, wish, rumor, evidenceName, petName, reviveTurns, fleeAttempt, forcedContinue, day }) || '').trim();
     }
     const rawMessage = String(entry?.message || entry?.rawMessage || '').trim();
     return localizeDisplayText(rawMessage, code);

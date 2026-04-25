@@ -582,7 +582,7 @@ async function sendMainMenuToThread(thread, player, pet, interaction = null) {
 
       const normalizedNewChoices = applyChoicePolicy(
         player,
-        maybeInjectRareCustomInputChoice(normalizeEventChoices(player, newChoices))
+        maybeInjectRareCustomInputChoice(normalizeEventChoices(player, newChoices), { player, pet })
       );
       player.eventChoices = normalizedNewChoices;
       updateGenerationState(player, {

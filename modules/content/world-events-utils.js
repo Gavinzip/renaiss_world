@@ -25,6 +25,134 @@ function createWorldEventsUtils(deps = {}) {
       .trim();
   }
 
+  function sanitizeEventTargetName(target = '') {
+    const source = String(target || '').trim();
+    if (!source) return '';
+    if (source.length > 36) return '';
+    if (/[，。！？]/u.test(source)) return '';
+    if (/(然後|壓低聲音|说了一句|說了一句|心頭一沉|心头一沉|看著你|看着你)/u.test(source)) return '';
+    return source;
+  }
+
+  function inferEventFieldsFromMessage(type = '', rawMessage = '') {
+    const source = String(rawMessage || '').trim();
+    const kind = String(type || '').trim();
+    if (!source) return {};
+
+    if (kind === 'custom_input') {
+      const match = source.match(/^✍️\s*(.+?)在(.+?)採取自訂行動「(.+?)」，後續傳聞[:：]\s*(.+)$/u);
+      if (match) {
+        return {
+          actor: String(match[1] || '').trim(),
+          location: String(match[2] || '').trim(),
+          actionText: String(match[3] || '').trim(),
+          rumor: String(match[4] || '').trim()
+        };
+      }
+    }
+
+    if (kind === 'wish_pool') {
+      const match = source.match(/^🪙\s*(.+?)在(.+?)的許願池許願「(.+?)」，結果[:：]\s*(.+)$/u);
+      if (match) {
+        return {
+          actor: String(match[1] || '').trim(),
+          location: String(match[2] || '').trim(),
+          wish: String(match[3] || '').trim(),
+          rumor: String(match[4] || '').trim()
+        };
+      }
+    }
+
+    if (kind === 'main_story') {
+      const evidenceMatch = source.match(/^🧭\s*(.+?)交出關鍵證據[「"](.+?)[」"]。?$/u);
+      if (evidenceMatch) {
+        return {
+          actor: String(evidenceMatch[1] || '').trim(),
+          evidenceName: String(evidenceMatch[2] || '').trim()
+        };
+      }
+    }
+
+    if (kind === 'faction_skirmish') {
+      const match = source.match(/^⚔️\s*第\s*(\d+)\s*日[:：]\s*(.+?)週邊對峙爆發拉鋸/u);
+      if (match) {
+        return {
+          day: String(match[1] || '').trim(),
+          location: String(match[2] || '').trim()
+        };
+      }
+    }
+
+    if (kind === 'battle_start') {
+      const match = source.match(/^⚔️\s*(.+?)\s*在(.+?)與\s*(.+?)\s*爆發交鋒/u);
+      if (match) {
+        return {
+          actor: String(match[1] || '').trim(),
+          location: String(match[2] || '').trim(),
+          target: sanitizeEventTargetName(match[3])
+        };
+      }
+    }
+
+    if (kind === 'battle_flee') {
+      const match = source.match(/^🏃\s*(.+?)\s*在(.+?)成功脫離\s*(.+?)\s*的追擊/u);
+      if (match) {
+        return {
+          actor: String(match[1] || '').trim(),
+          location: String(match[2] || '').trim(),
+          target: sanitizeEventTargetName(match[3])
+        };
+      }
+    }
+
+    if (kind === 'battle_flee_fail') {
+      const match = source.match(/^🩸\s*(.+?)\s*在(.+?)嘗試逃離\s*(.+?)\s*失敗，局勢惡化/u);
+      const attemptMatch = source.match(/第\s*(\d+)\s*次逃跑失敗/u);
+      return {
+        actor: match ? String(match[1] || '').trim() : '',
+        location: match ? String(match[2] || '').trim() : '',
+        target: match ? sanitizeEventTargetName(match[3]) : '',
+        fleeAttempt: attemptMatch ? String(attemptMatch[1] || '').trim() : '',
+        forcedContinue: /被迫續戰/u.test(source) ? '1' : ''
+      };
+    }
+
+    if (kind === 'pet_down') {
+      const match = source.match(/^💥\s*(.+?)\s*的夥伴在(.+?)被\s*(.+?)\s*重創倒下/u);
+      const reviveMatch = source.match(/([^\s]+)復活倒數\s*(\d+)\s*回合/u);
+      return {
+        actor: match ? String(match[1] || '').trim() : '',
+        location: match ? String(match[2] || '').trim() : '',
+        target: match ? sanitizeEventTargetName(match[3]) : '',
+        petName: reviveMatch ? String(reviveMatch[1] || '').trim() : '',
+        reviveTurns: reviveMatch ? String(reviveMatch[2] || '').trim() : ''
+      };
+    }
+
+    return {};
+  }
+
+  function mergeWorldEventPayload(entry = {}) {
+    const rawMessage = String(entry?.message || '').trim();
+    const type = String(entry?.type || '').trim();
+    const inferred = inferEventFieldsFromMessage(type, rawMessage);
+    const out = { ...inferred };
+    for (const key of ['actor', 'target', 'location', 'impact', 'actionText', 'wish', 'rumor', 'verdict', 'evidenceName', 'petName', 'reviveTurns', 'fleeAttempt', 'forcedContinue', 'day']) {
+      const rawValue = String(entry?.[key] || '').trim();
+      if (!rawValue) continue;
+      if (key === 'target') {
+        const safeTarget = sanitizeEventTargetName(rawValue);
+        if (safeTarget) out[key] = safeTarget;
+        continue;
+      }
+      out[key] = rawValue;
+    }
+    if (!out.target && /^(battle_start|battle_flee|battle_flee_fail|pet_down|player_down)$/u.test(type)) {
+      out.target = '未知敵人';
+    }
+    return out;
+  }
+
   function normalizeWorldEventEntry(entry, source, lang = 'zh-TW') {
     if (!entry) return null;
     const safeLang = String(lang || 'zh-TW').trim() || 'zh-TW';
@@ -48,12 +176,23 @@ function createWorldEventsUtils(deps = {}) {
     }
     if (typeof entry !== 'object') return null;
     const rawMessage = String(entry.message || '').trim();
+    const merged = mergeWorldEventPayload(entry);
     const payload = {
       type: String(entry.type || '').trim(),
-      actor: String(entry.actor || '').trim(),
-      target: String(entry.target || '').trim(),
-      location: String(entry.location || '').trim(),
-      impact: String(entry.impact || '').trim(),
+      actor: String(merged.actor || '').trim(),
+      target: String(merged.target || '').trim(),
+      location: String(merged.location || '').trim(),
+      impact: String(merged.impact || '').trim(),
+      actionText: String(merged.actionText || '').trim(),
+      wish: String(merged.wish || '').trim(),
+      rumor: String(merged.rumor || '').trim(),
+      verdict: String(merged.verdict || '').trim(),
+      evidenceName: String(merged.evidenceName || '').trim(),
+      petName: String(merged.petName || '').trim(),
+      reviveTurns: String(merged.reviveTurns || '').trim(),
+      fleeAttempt: String(merged.fleeAttempt || '').trim(),
+      forcedContinue: String(merged.forcedContinue || '').trim(),
+      day: String(merged.day || entry.day || entry?.meta?.day || '').trim(),
       message: rawMessage,
       rawMessage
     };
@@ -72,7 +211,17 @@ function createWorldEventsUtils(deps = {}) {
       actor: payload.actor,
       target: payload.target,
       location: payload.location,
-      impact: payload.impact
+      impact: payload.impact,
+      actionText: payload.actionText,
+      wish: payload.wish,
+      rumor: payload.rumor,
+      verdict: payload.verdict,
+      evidenceName: payload.evidenceName,
+      petName: payload.petName,
+      reviveTurns: payload.reviveTurns,
+      fleeAttempt: payload.fleeAttempt,
+      forcedContinue: payload.forcedContinue,
+      day: payload.day
     };
   }
 
@@ -127,7 +276,8 @@ function createWorldEventsUtils(deps = {}) {
     const actor = String(player?.name || '冒險者').trim() || '冒險者';
     const location = String(player?.location || '未知地點').trim() || '未知地點';
     const target = String(enemyName || '未知敵人').trim() || '未知敵人';
-    const impactText = String(impact || '').trim();
+    const impactObj = impact && typeof impact === 'object' && !Array.isArray(impact) ? impact : null;
+    const impactText = impactObj ? String(impactObj.impact || '').trim() : String(impact || '').trim();
     let message = '';
     if (kind === 'battle_start') {
       message = `⚔️ ${actor} 在${location}與 ${target} 爆發交鋒。`;
@@ -150,6 +300,10 @@ function createWorldEventsUtils(deps = {}) {
       target,
       location,
       impact: impactText,
+      petName: impactObj ? String(impactObj.petName || '').trim() : '',
+      reviveTurns: impactObj ? String(impactObj.reviveTurns || '').trim() : '',
+      fleeAttempt: impactObj ? String(impactObj.fleeAttempt || '').trim() : '',
+      forcedContinue: impactObj ? String(impactObj.forcedContinue || '').trim() : '',
       actorDisplay: localizeDisplayText(actor, 'zh-TW'),
       targetDisplay: getNpcDisplayName(target, 'zh-TW') || getLocationDisplayName(target, 'zh-TW') || localizeDisplayText(target, 'zh-TW'),
       locationDisplay: getLocationDisplayName(location, 'zh-TW') || localizeDisplayText(location, 'zh-TW')

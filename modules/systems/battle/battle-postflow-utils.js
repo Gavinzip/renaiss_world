@@ -280,9 +280,10 @@ function createBattlePostflowUtils(deps = {}) {
       player,
       enemyName,
       'pet_down',
-      typeof tx.petDownEvent === 'function'
-        ? tx.petDownEvent(pet?.name || '夥伴', remainTurns)
-        : `${pet?.name || '夥伴'}復活倒數 ${formatRecoveryTurnsShort(remainTurns)}`
+      {
+        petName: pet?.name || '夥伴',
+        reviveTurns: remainTurns
+      }
     );
     player.battleState.fighter = 'player';
     player.battleState.mode = null;

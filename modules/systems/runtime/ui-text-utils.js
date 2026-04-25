@@ -41,7 +41,21 @@ function createUiTextUtils(deps = {}) {
       petList: '寵物列表',
       petManagement: '寵物管理',
       petNamed: '寵物已命名',
-      petNaming: '寵物命名'
+      petNaming: '寵物命名',
+      customInputName: '✍️ 自訂行動',
+      customInputChoice: '＿＿＿＿（自行輸入接下來要做的事）',
+      customInputDesc: '你可自行輸入接下來想進行的行動',
+      customInputModalTitle: '✍️ 自訂行動',
+      customInputModalLabel: '你接下來想做什麼？',
+      customInputModalPlaceholder: '例如：我去跟茶師談判，要求先合作再分成',
+      customInputModalOpenFailed: '⚠️ 無法開啟自訂輸入框，請再點一次。',
+      customInputSelectedChoice: (text) => `自訂行動：「${text}」`,
+      wishPoolModalTitle: '🪙 許願池',
+      wishPoolModalLabel: '你想許下什麼願望？',
+      wishPoolModalPlaceholder: '例如：希望賺很多錢、希望變強、希望遇到貴人...',
+      wishPoolModalOpenFailed: '⚠️ 無法開啟許願輸入框，請再點一次。',
+      wishPoolSelectedChoice: (text) => `在許願池許願：「${text}」`,
+      choiceFallbackLabel: (index) => `選項${index}`
     },
     'zh-CN': {
       welcome: '欢迎来到 Renaiss 星球！',
@@ -77,7 +91,21 @@ function createUiTextUtils(deps = {}) {
       petList: '宠物列表',
       petManagement: '宠物管理',
       petNamed: '宠物已命名',
-      petNaming: '宠物命名'
+      petNaming: '宠物命名',
+      customInputName: '✍️ 自定义行动',
+      customInputChoice: '＿＿＿＿（自行输入接下来要做的事）',
+      customInputDesc: '你可以自行输入接下来想进行的行动',
+      customInputModalTitle: '✍️ 自定义行动',
+      customInputModalLabel: '你接下来想做什么？',
+      customInputModalPlaceholder: '例如：我去跟茶师谈判，要求先合作再分成',
+      customInputModalOpenFailed: '⚠️ 无法打开自定义输入框，请再点一次。',
+      customInputSelectedChoice: (text) => `自定义行动：“${text}”`,
+      wishPoolModalTitle: '🪙 许愿池',
+      wishPoolModalLabel: '你想许下什么愿望？',
+      wishPoolModalPlaceholder: '例如：希望赚很多钱、希望变强、希望遇到贵人...',
+      wishPoolModalOpenFailed: '⚠️ 无法打开许愿输入框，请再点一次。',
+      wishPoolSelectedChoice: (text) => `在许愿池许愿：“${text}”`,
+      choiceFallbackLabel: (index) => `选项${index}`
     },
     en: {
       welcome: 'Welcome to Renaiss Planet!',
@@ -113,7 +141,21 @@ function createUiTextUtils(deps = {}) {
       petList: 'Pet List',
       petManagement: 'Pet Management',
       petNamed: 'Pet Named',
-      petNaming: 'Pet Naming'
+      petNaming: 'Pet Naming',
+      customInputName: '✍️ Custom Action',
+      customInputChoice: '＿＿＿＿(Enter your next action)',
+      customInputDesc: 'Write the next action you want to take.',
+      customInputModalTitle: '✍️ Custom Action',
+      customInputModalLabel: 'What do you want to do next?',
+      customInputModalPlaceholder: 'For example: negotiate with the tea master first, then split the profits later',
+      customInputModalOpenFailed: '⚠️ Unable to open the custom input box. Please tap again.',
+      customInputSelectedChoice: (text) => `Custom action: "${text}"`,
+      wishPoolModalTitle: '🪙 Wish Pool',
+      wishPoolModalLabel: 'What do you want to wish for?',
+      wishPoolModalPlaceholder: 'For example: make more money, become stronger, meet a benefactor...',
+      wishPoolModalOpenFailed: '⚠️ Unable to open the wish input box. Please tap again.',
+      wishPoolSelectedChoice: (text) => `Make a wish: "${text}"`,
+      choiceFallbackLabel: (index) => `Option ${index}`
     }
   };
 

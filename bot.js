@@ -833,6 +833,8 @@ const CHOICE_RUNTIME_SYSTEMS = initChoiceRuntimeSystems({
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  normalizeLangCode: (...args) => normalizeLangCode(...args),
+  getLanguageSection: (...args) => getLanguageSection(...args),
   getLocationProfile,
   getPortalDestinations,
   getRouteNextHop,

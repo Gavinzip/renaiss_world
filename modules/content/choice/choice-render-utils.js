@@ -4,6 +4,8 @@ function createChoiceRenderUtils(deps = {}) {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
+    normalizeLangCode = (v) => String(v || 'zh-TW'),
+    getLanguageSection = null,
     appendMainMenuUtilityButtons,
     CHOICE_DISPLAY_COUNT = 5,
     CUSTOM_INPUT_OPTION_RATE = 0.01,
@@ -35,6 +37,44 @@ function createChoiceRenderUtils(deps = {}) {
       '佈局': 'Setup'
     })
   });
+
+  const CHOICE_UI_FALLBACK = Object.freeze({
+    'zh-TW': Object.freeze({
+      customInputName: '✍️ 自訂行動',
+      customInputChoice: '＿＿＿＿（自行輸入接下來要做的事）',
+      customInputDesc: '你可自行輸入接下來想進行的行動',
+      choiceFallbackLabel: (index) => `選項${index}`
+    }),
+    'zh-CN': Object.freeze({
+      customInputName: '✍️ 自定义行动',
+      customInputChoice: '＿＿＿＿（自行输入接下来要做的事）',
+      customInputDesc: '你可以自行输入接下来想进行的行动',
+      choiceFallbackLabel: (index) => `选项${index}`
+    }),
+    en: Object.freeze({
+      customInputName: '✍️ Custom Action',
+      customInputChoice: '＿＿＿＿(Enter your next action)',
+      customInputDesc: 'Write the next action you want to take.',
+      choiceFallbackLabel: (index) => `Option ${index}`
+    }),
+    ko: Object.freeze({
+      customInputName: '✍️ 사용자 행동',
+      customInputChoice: '＿＿＿＿(다음 행동을 직접 입력)',
+      customInputDesc: '다음에 하고 싶은 행동을 직접 입력할 수 있습니다.',
+      choiceFallbackLabel: (index) => `선택 ${index}`
+    })
+  });
+
+  function getChoiceUiText(lang = 'zh-TW') {
+    const code = normalizeLangCode(lang || 'zh-TW');
+    if (typeof getLanguageSection === 'function') {
+      const fromGlobal = getLanguageSection('uiText', code);
+      if (fromGlobal && typeof fromGlobal === 'object' && Object.keys(fromGlobal).length > 0) {
+        return fromGlobal;
+      }
+    }
+    return CHOICE_UI_FALLBACK[code] || CHOICE_UI_FALLBACK['zh-TW'];
+  }
 
   function detectTextLang(text = '') {
     const source = String(text || '');
@@ -265,18 +305,19 @@ function createChoiceRenderUtils(deps = {}) {
     return `【${styleTag}】${base}`;
   }
 
-  function createCustomInputChoice() {
+  function createCustomInputChoice(context = {}) {
+    const uiText = getChoiceUiText(context?.player?.language || context?.lang || 'zh-TW');
     return {
       id: `custom_input_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      name: '✍️ 自訂行動',
-      choice: '＿＿＿＿（自行輸入接下來要做的事）',
-      desc: '你可自行輸入接下來想進行的行動',
+      name: uiText.customInputName,
+      choice: uiText.customInputChoice,
+      desc: uiText.customInputDesc,
       action: 'custom_input',
       type: 'custom'
     };
   }
 
-  function maybeInjectRareCustomInputChoice(choices = []) {
+  function maybeInjectRareCustomInputChoice(choices = [], context = {}) {
     const base = Array.isArray(choices) ? choices.filter(Boolean).slice(0, CHOICE_DISPLAY_COUNT) : [];
     if (base.length === 0) return base;
     if (base.some(choice => String(choice?.action || '') === 'custom_input')) return base;
@@ -284,7 +325,7 @@ function createChoiceRenderUtils(deps = {}) {
 
     const injected = [...base];
     const replaceIndex = Math.max(0, injected.length - 1);
-    injected[replaceIndex] = createCustomInputChoice();
+    injected[replaceIndex] = createCustomInputChoice(context);
     return injected;
   }
 
@@ -345,7 +386,9 @@ function createChoiceRenderUtils(deps = {}) {
   function buildEventChoiceButtons(choices = [], ownerId = '') {
     const safeOwnerId = String(ownerId || '').trim();
     return choices.slice(0, CHOICE_DISPLAY_COUNT).map((choice, i) => {
-      const label = (formatChoiceText(choice) || `選項${i + 1}`).substring(0, 20).trim();
+      const lang = choice?.language || detectTextLang([choice?.choice || '', choice?.name || '', choice?.desc || ''].join(' '));
+      const uiText = getChoiceUiText(lang);
+      const label = (formatChoiceText(choice) || uiText.choiceFallbackLabel(i + 1)).substring(0, 20).trim();
       return new ButtonBuilder()
         .setCustomId(safeOwnerId ? `event_${i}_${safeOwnerId}` : `event_${i}`)
         .setLabel(label || `${i + 1}`)

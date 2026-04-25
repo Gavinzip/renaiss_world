@@ -338,6 +338,10 @@ function buildMissionEvidenceUnlock(state, regionId, method = 'investigate', sou
   return {
     appendText: `📌 **關鍵證據取得**：${row.evidenceName}${npcText}\n你已拿到本區可驗證核心，主線可往下一島推進。${hunterLine}`,
     announcement: `🧭 ${row.npcName || '在地線人'}交出關鍵證據「${row.evidenceName}」。`,
+    announcementExtra: {
+      actor: row.npcName || '在地線人',
+      evidenceName: row.evidenceName
+    },
     memory: `你取得本區關鍵證據：${row.evidenceName}${npcText}。`
   };
 }

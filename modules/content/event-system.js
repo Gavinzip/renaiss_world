@@ -1073,7 +1073,7 @@ function addWorldEvent(message, type = 'normal', extra = null) {
       timestamp: Date.now()
     };
     if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
-      for (const key of ['location', 'actor', 'target', 'impact']) {
+      for (const key of ['location', 'actor', 'target', 'impact', 'actionText', 'wish', 'rumor', 'verdict', 'evidenceName', 'petName', 'reviveTurns', 'fleeAttempt', 'forcedContinue', 'day']) {
         const value = String(extra[key] || '').trim();
         if (value) row[key] = value.slice(0, 120);
       }
