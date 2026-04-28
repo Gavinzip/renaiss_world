@@ -2321,9 +2321,9 @@ function validateChoiceSet(choices = [], {
   }
   if (pendingConflictActive) {
     if (pendingConflictCount < 1) {
-      issues.push('上一輪衝突尚未收束：至少 1 個選項需直接承接衝突對手');
+      advisoryNotes.push('上一輪衝突尚未明確續接（可保留鋪陳，但建議至少 1 個選項承接該人物/勢力）');
     } else if (pendingImmediateBattleCount < 1) {
-      issues.push('上一輪衝突尚未收束：承接衝突的選項需包含可即時進入戰鬥路徑');
+      advisoryNotes.push('上一輪衝突已有續接，但尚未提供可即時進入戰鬥的分支');
     }
   }
   // 「是否命中過往元素」改為提示詞引導，不作為硬性失敗條件，
@@ -3641,7 +3641,7 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
   );
   const pendingConflictName = String(pendingConflict?.displayName || '').trim();
   const pendingConflictRule = pendingConflictActive
-    ? `你在上一輪採取了激進行動，衝突必須延續：本回合 5 個選項中，至少 1 個要直接對上「${pendingConflictName || '剛才出現的人'}」並可立刻進入戰鬥；不可改寫成匿名敵人或系統詞。`
+    ? `最高優先提醒：上一輪與「${pendingConflictName || '剛才出現的人'}」的張力尚未完全消散。請優先考慮在本回合 5 個選項中，安排 1 個能直接承接該人物/勢力的選項；若故事節奏仍在鋪陳，可改寫成監視、試探、繞線、佈局、等待破綻，不必強迫立刻進入戰鬥。若你選擇提供可即時戰鬥的分支，對手名稱必須明確，不可改寫成匿名敵人或系統詞。`
     : '';
   const dynamicPlan = DYNAMIC_WORLD.chooseDynamicEventPlan(player, location, {
     storyTurn: Math.max(0, Number(player?.storyTurns || 0)),
@@ -3695,8 +3695,17 @@ async function generateChoicesWithAI(player, pet, previousStory, memoryContext =
     focusedMemory ? `記憶摘要：${focusedMemory}` : '',
     islandGuidePrompt ? `島內引導：${islandGuidePrompt}` : ''
   ].filter(Boolean).join('\n');
+  const highestPriorityChoiceRule = [
+    '【最高優先輸出規則】',
+    'A. 只要 choice 文案是跨城移動，就必須填 move_to，且 name/choice/desc 至少一處逐字提到同一座城市名。',
+    'B. 若拿不準 move_to，請把該筆改寫成城內準備、調查、打聽、監視、佈局，不要輸出半套移動選項。',
+    'C. 禁止輸出任何傳送門、主傳送門、傳送裝置、跨區傳送、瞬間位移類選項；這些改由地圖按鈕處理。',
+    'D. 請先自檢 A-C，再輸出 JSON。'
+  ].join('\n');
   const prompt = `你是 Renaiss 世界的冒險策劃師，設計的選項要有創意、刺激。
 風格限制：原創「科技收藏×真偽鑑識」敘事，禁止武俠語氣，禁止既有 IP 名詞（寶可夢、數碼寶貝、斗羅大陸等）。
+
+${highestPriorityChoiceRule}
 
 【當前情境】
 位置：${location} - ${locDesc}
@@ -3728,9 +3737,9 @@ ${memorySection}
 ${islandGuidePrompt ? `\n${islandGuidePrompt}` : ''}
 ${islandKnowledgePrompt ? `\n${islandKnowledgePrompt}` : ''}
 ${truthGatePrompt ? `\n${truthGatePrompt}` : ''}
+${pendingConflictRule ? `\n【優先情境提醒】\n${pendingConflictRule}` : ''}
 ${routeConstraintRule ? `\n【地圖路線硬規則】\n${routeConstraintRule}` : ''}
 ${missionChoiceRule ? `\n【關鍵任務選項規則】\n${missionChoiceRule}` : ''}
-${pendingConflictRule ? `\n【衝突延續硬規則】\n${pendingConflictRule}` : ''}
 ${islandRoadmapPrompt ? `\n${islandRoadmapPrompt}` : ''}
 ${navigationPacingRule ? `\n【導航約束】\n${navigationPacingRule}` : ''}
 
